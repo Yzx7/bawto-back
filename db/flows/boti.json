@@ -1,0 +1,57 @@
+{
+  "id": "flow_boti",
+  "name": "BOTI — Atención ISP",
+  "trigger": { "type": "message", "match": "any" },
+  "nodes": [
+    { "id": "n_tiene_factura", "kind": "condition", "pos": { "x": 20, "y": 40 }, "expression": "data_facturas_numero" },
+    { "id": "n_resumen_factura", "kind": "send", "pos": { "x": 290, "y": -80 }, "body": "📄 Tienes la factura *{data_facturas_numero}* del período {data_facturas_periodo}.\nImporte: *{data_facturas_importe} {data_facturas_moneda}*\nVence: *{data_facturas_vencimiento}*\nEstado: *{data_facturas_estado}*." },
+    { "id": "n_clasifica", "kind": "agent", "pos": { "x": 570, "y": 40 }, "instruction": "Clasifica el mensaje actual del cliente: \"{input}\". Elige pago si responde 1 o menciona pago, comprobante, recibo o voucher. Elige soporte si responde 2 o menciona falla, lentitud, sin internet, router o que no funciona. Elige asesor si responde 3 o pide humano, persona o asesor. Elige menu si solo saluda, no expresa una intención clara o la opción no es válida. Responde solo una confirmación breve; si eliges menu, invita a escoger una opción.", "outputs": ["pago", "soporte", "asesor", "menu"] },
+    { "id": "n_menu", "kind": "send", "pos": { "x": 870, "y": 260 }, "body": "👋 Soy *BOTI*, el asistente de Sistemuino.\n\n¿Con qué te ayudo?\n1️⃣ Reportar un *pago*\n2️⃣ *Soporte* técnico\n3️⃣ Hablar con un *asesor*" },
+    { "id": "n_espera_opcion", "kind": "wait", "pos": { "x": 1160, "y": 260 }, "expect": "text", "saveAs": "opcion", "timeoutHours": 24 },
+
+    { "id": "n_pide_comprobante", "kind": "send", "pos": { "x": 870, "y": -300 }, "body": "Perfecto 📄 Envíame ahora la *foto o captura del comprobante*. Debe verse el importe y la fecha." },
+    { "id": "n_espera_comprobante", "kind": "wait", "pos": { "x": 1160, "y": -300 }, "expect": "image", "saveAs": "comprobante", "timeoutHours": 24 },
+    { "id": "n_registra_comprobante", "kind": "tool", "pos": { "x": 1450, "y": -300 }, "toolRef": "record_payment_receipt", "args": {}, "saveAs": "factura_id" },
+    { "id": "n_gracias_pago", "kind": "send", "pos": { "x": 1740, "y": -390 }, "body": "¡Gracias! 🙌 Guardé el comprobante en tu factura y quedó *pendiente de validación*. Te confirmaremos por aquí cuando sea revisado." },
+    { "id": "n_pago_error", "kind": "send", "pos": { "x": 1740, "y": -210 }, "body": "Recibí la imagen, pero no pude asociarla a una factura pendiente. Te comunicaré con un asesor para revisarlo sin perder el comprobante." },
+    { "id": "n_fin_pago", "kind": "action", "pos": { "x": 2030, "y": -390 }, "action": "end" },
+
+    { "id": "n_soporte", "kind": "agent", "pos": { "x": 870, "y": 20 }, "instruction": "Eres soporte técnico de un proveedor de internet. El problema actual del cliente es: \"{input}\". Da máximo tres pasos seguros, concretos y simples. Nunca pidas manipular cables eléctricos ni equipos abiertos. Elige verificar si los pasos pueden resolverlo por chat; elige escalar si reporta cable roto, equipo quemado, ausencia total prolongada, riesgo eléctrico o si hace falta visita técnica.", "outputs": ["verificar", "escalar"] },
+    { "id": "n_pregunta_soporte", "kind": "send", "pos": { "x": 1160, "y": 20 }, "body": "¿Te funcionó? Responde *sí* si recuperaste el servicio o *no* si el problema continúa." },
+    { "id": "n_espera_soporte", "kind": "wait", "pos": { "x": 1450, "y": 20 }, "expect": "text", "saveAs": "resultado_soporte", "timeoutHours": 24 },
+    { "id": "n_confirma_soporte", "kind": "agent", "pos": { "x": 1740, "y": 20 }, "instruction": "Clasifica la respuesta del cliente a si el soporte funcionó: \"{input}\". Elige resuelto para sí, ya funciona, solucionado o equivalentes. Elige escalar para no, sigue igual, no funciona, duda o cualquier respuesta ambigua.", "outputs": ["resuelto", "escalar"] },
+    { "id": "n_cierre_soporte", "kind": "send", "pos": { "x": 2030, "y": -20 }, "body": "¡Excelente! ✅ Me alegra que el servicio haya vuelto. Si necesitas algo más, escríbeme cuando quieras." },
+    { "id": "n_fin_soporte", "kind": "action", "pos": { "x": 2320, "y": -20 }, "action": "end" },
+
+    { "id": "n_handoff", "kind": "action", "pos": { "x": 2030, "y": 210 }, "action": "handoff", "params": { "motivo": "solicitud del cliente, comprobante no asociado o soporte no resuelto" } },
+    { "id": "n_aviso_humano", "kind": "send", "pos": { "x": 2320, "y": 210 }, "body": "Te paso con un *asesor* 👤. El bot quedará en pausa para no interrumpir la atención." },
+    { "id": "n_fin_humano", "kind": "action", "pos": { "x": 2610, "y": 210 }, "action": "end" }
+  ],
+  "edges": [
+    { "id": "e_trigger", "source": "trigger", "target": "n_tiene_factura" },
+    { "id": "e_invoice_yes", "source": "n_tiene_factura", "sourceHandle": "true", "target": "n_resumen_factura" },
+    { "id": "e_invoice_no", "source": "n_tiene_factura", "sourceHandle": "false", "target": "n_clasifica" },
+    { "id": "e_invoice_next", "source": "n_resumen_factura", "target": "n_clasifica" },
+    { "id": "e_class_payment", "source": "n_clasifica", "sourceHandle": "pago", "target": "n_pide_comprobante" },
+    { "id": "e_class_support", "source": "n_clasifica", "sourceHandle": "soporte", "target": "n_soporte" },
+    { "id": "e_class_human", "source": "n_clasifica", "sourceHandle": "asesor", "target": "n_handoff" },
+    { "id": "e_class_menu", "source": "n_clasifica", "sourceHandle": "menu", "target": "n_menu" },
+    { "id": "e_menu_wait", "source": "n_menu", "target": "n_espera_opcion" },
+    { "id": "e_menu_loop", "source": "n_espera_opcion", "target": "n_clasifica" },
+    { "id": "e_payment_wait", "source": "n_pide_comprobante", "target": "n_espera_comprobante" },
+    { "id": "e_payment_tool", "source": "n_espera_comprobante", "target": "n_registra_comprobante" },
+    { "id": "e_payment_ok", "source": "n_registra_comprobante", "sourceHandle": "ok", "target": "n_gracias_pago" },
+    { "id": "e_payment_error", "source": "n_registra_comprobante", "sourceHandle": "error", "target": "n_pago_error" },
+    { "id": "e_payment_end", "source": "n_gracias_pago", "target": "n_fin_pago" },
+    { "id": "e_payment_human", "source": "n_pago_error", "target": "n_handoff" },
+    { "id": "e_support_verify", "source": "n_soporte", "sourceHandle": "verificar", "target": "n_pregunta_soporte" },
+    { "id": "e_support_escalate", "source": "n_soporte", "sourceHandle": "escalar", "target": "n_handoff" },
+    { "id": "e_support_wait", "source": "n_pregunta_soporte", "target": "n_espera_soporte" },
+    { "id": "e_support_check", "source": "n_espera_soporte", "target": "n_confirma_soporte" },
+    { "id": "e_support_done", "source": "n_confirma_soporte", "sourceHandle": "resuelto", "target": "n_cierre_soporte" },
+    { "id": "e_support_human", "source": "n_confirma_soporte", "sourceHandle": "escalar", "target": "n_handoff" },
+    { "id": "e_support_end", "source": "n_cierre_soporte", "target": "n_fin_soporte" },
+    { "id": "e_handoff_notice", "source": "n_handoff", "target": "n_aviso_humano" },
+    { "id": "e_handoff_end", "source": "n_aviso_humano", "target": "n_fin_humano" }
+  ]
+}

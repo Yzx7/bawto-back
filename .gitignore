@@ -1,0 +1,15 @@
+# Env / secretos
+.env
+*.env.local
+
+# Binarios
+/sacs-chatbots
+/sacs-chatbots.exe
+*.exe
+*.out
+
+# Go
+/vendor/
+
+# Logs
+*.log
