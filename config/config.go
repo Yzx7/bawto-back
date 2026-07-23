@@ -74,8 +74,8 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("config: DATABASE_URL es obligatorio")
 	}
 
-	// Normaliza el puerto: acepta "3009" o ":3009".
-	if !strings.HasPrefix(cfg.ServerPort, ":") {
+	// Normaliza el puerto: acepta "3009", ":3009" o "host:3009".
+	if !strings.Contains(cfg.ServerPort, ":") {
 		cfg.ServerPort = ":" + cfg.ServerPort
 	}
 
