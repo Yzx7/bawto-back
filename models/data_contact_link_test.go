@@ -15,9 +15,16 @@ import (
 //     de las dos había fallado antes porque en producción no había un solo
 //     vínculo registro→contacto ni una audiencia manual.
 //
-//  2. `LinkRecordContact` usaba `ON CONFLICT DO NOTHING` y luego trataba
+//  2. El vínculo usaba `ON CONFLICT DO NOTHING` y luego trataba
 //     `RowsAffected() == 0` como error de propiedad: volver a vincular el mismo
 //     par decía "registro o contacto no pertenece al bot".
+//
+//  3. `LinkRecordContactByOrg` —la versión que sobrevivió— se había quedado con
+//     un `ON CONFLICT` de dos columnas cuando la clave primaria de
+//     `data_record_contacts` es de tres. Postgres rechazaba la sentencia con
+//     42P10 ("there is no unique or exclusion constraint matching the ON
+//     CONFLICT specification"), así que vincular fallaba desde el primer intento,
+//     no solo al repetir.
 //
 //     DATABASE_URL=... go test ./models -run VinculoRegistroContacto -v
 func TestVinculoRegistroContactoResuelveDestinatario(t *testing.T) {
@@ -25,33 +32,33 @@ func TestVinculoRegistroContactoResuelveDestinatario(t *testing.T) {
 	bot := botDePrueba(t, ctx, pool, "link_")
 	otro := botDePrueba(t, ctx, pool, "link_otro_")
 
-	object, err := CreateDataObject(ctx, pool, bot.ID, "pedidos_link", "Pedido", "Pedidos")
+	object, err := CreateDataObjectByOrg(ctx, pool, bot.OrgID, "pedidos_link", "Pedido", "Pedidos")
 	if err != nil {
 		t.Fatalf("CreateDataObject: %v", err)
 	}
-	if _, err = UpsertDataField(ctx, pool, bot.ID, object.ID, "total", "Total", "text", false); err != nil {
+	if _, err = UpsertDataFieldByOrg(ctx, pool, bot.OrgID, object.ID, "total", "Total", "text", false); err != nil {
 		t.Fatalf("UpsertDataField: %v", err)
 	}
-	record, err := CreateDataRecord(ctx, pool, bot.ID, object.ID, json.RawMessage(`{"total":"120"}`))
+	record, err := CreateDataRecordByOrg(ctx, pool, bot.OrgID, object.ID, json.RawMessage(`{"total":"120"}`))
 	if err != nil {
 		t.Fatalf("CreateDataRecord: %v", err)
 	}
-	contact, err := UpsertContact(ctx, pool, bot.ID, "51900111222", "Destinatario", "active", nil)
+	contact, err := SaveContactByOrg(ctx, pool, bot.OrgID, "", "51900111222", "Destinatario", "active", nil)
 	if err != nil {
 		t.Fatalf("UpsertContact: %v", err)
 	}
 
 	// Vincular dos veces es una operación normal: el operador reabre la ficha y
 	// vuelve a guardar. La segunda vez no puede ser un error.
-	if err := LinkRecordContact(ctx, pool, bot.ID, record.ID, contact.ID, "primary"); err != nil {
+	if err := LinkRecordContactByOrg(ctx, pool, bot.OrgID, record.ID, contact.ID, "primary"); err != nil {
 		t.Fatalf("primer vínculo: %v", err)
 	}
-	if err := LinkRecordContact(ctx, pool, bot.ID, record.ID, contact.ID, "primary"); err != nil {
+	if err := LinkRecordContactByOrg(ctx, pool, bot.OrgID, record.ID, contact.ID, "primary"); err != nil {
 		t.Fatalf("revincular debería ser idempotente: %v", err)
 	}
 	// Un registro ajeno sí tiene que fallar: es el aislamiento entre orgs.
-	if err := LinkRecordContact(ctx, pool, otro.ID, record.ID, contact.ID, "primary"); err == nil {
-		t.Error("vincular desde otro bot debería fallar")
+	if err := LinkRecordContactByOrg(ctx, pool, otro.OrgID, record.ID, contact.ID, "primary"); err == nil {
+		t.Error("vincular desde otra organización debería fallar")
 	}
 
 	got, err := PrimaryContactForRecord(ctx, pool, bot.ID, record.ID)
@@ -75,7 +82,7 @@ func TestAudienciaManualResuelveContactos(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAudience: %v", err)
 	}
-	contact, err := UpsertContact(ctx, pool, bot.ID, "51900333444", "Miembro", "active", nil)
+	contact, err := SaveContactByOrg(ctx, pool, bot.OrgID, "", "51900333444", "Miembro", "active", nil)
 	if err != nil {
 		t.Fatalf("UpsertContact: %v", err)
 	}

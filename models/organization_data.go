@@ -136,8 +136,13 @@ func SaveContactByOrg(ctx context.Context, p *pgxpool.Pool, orgID, contactID, ph
 	}
 	return &v, nil
 }
+
+// Gemela de LinkRecordContact, resolviendo la organización directa en vez de a
+// través del bot. El `ON CONFLICT` nombra las tres columnas de la clave primaria
+// de `data_record_contacts`: con menos, Postgres rechaza la sentencia entera con
+// 42P10 porque ningún índice único coincide con la especificación.
 func LinkRecordContactByOrg(ctx context.Context, p *pgxpool.Pool, orgID, recordID, contactID, role string) error {
-	cmd, e := p.Exec(ctx, `INSERT INTO data_record_contacts(record_id,contact_id,role) SELECT r.id,c.id,$4 FROM data_records r JOIN data_objects o ON o.id=r.object_id JOIN contacts c ON c.org_id=o.org_id WHERE r.id=$2::uuid AND c.id=$3::uuid AND o.org_id=$1::uuid ON CONFLICT(record_id,contact_id) DO UPDATE SET role=EXCLUDED.role`, orgID, recordID, contactID, role)
+	cmd, e := p.Exec(ctx, `INSERT INTO data_record_contacts(record_id,contact_id,role) SELECT r.id,c.id,$4 FROM data_records r JOIN data_objects o ON o.id=r.object_id JOIN contacts c ON c.org_id=o.org_id WHERE r.id=$2::uuid AND c.id=$3::uuid AND o.org_id=$1::uuid ON CONFLICT (record_id,contact_id,role) DO UPDATE SET role=EXCLUDED.role`, orgID, recordID, contactID, role)
 	if e != nil {
 		return e
 	}

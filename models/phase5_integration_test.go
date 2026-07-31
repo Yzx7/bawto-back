@@ -24,18 +24,18 @@ func TestPhase5HistorialDeRuns(t *testing.T) {
 	}
 	version := publica(t, ctx, pool, bot.ID, flow.ID, raw)
 
-	object, err := CreateDataObject(ctx, pool, bot.ID, "cobros5", "Cobro", "Cobros")
+	object, err := CreateDataObjectByOrg(ctx, pool, bot.OrgID, "cobros5", "Cobro", "Cobros")
 	if err != nil {
 		t.Fatalf("CreateDataObject: %v", err)
 	}
-	if _, err = UpsertDataField(ctx, pool, bot.ID, object.ID, "monto", "Monto", "text", false); err != nil {
+	if _, err = UpsertDataFieldByOrg(ctx, pool, bot.OrgID, object.ID, "monto", "Monto", "text", false); err != nil {
 		t.Fatalf("UpsertDataField: %v", err)
 	}
-	record, err := CreateDataRecord(ctx, pool, bot.ID, object.ID, json.RawMessage(`{"monto":"90"}`))
+	record, err := CreateDataRecordByOrg(ctx, pool, bot.OrgID, object.ID, json.RawMessage(`{"monto":"90"}`))
 	if err != nil {
 		t.Fatalf("CreateDataRecord: %v", err)
 	}
-	contact, err := UpsertContact(ctx, pool, bot.ID, "51999888777", "Cliente Cinco", "active", nil)
+	contact, err := SaveContactByOrg(ctx, pool, bot.OrgID, "", "51999888777", "Cliente Cinco", "active", nil)
 	if err != nil {
 		t.Fatalf("UpsertContact: %v", err)
 	}
@@ -195,11 +195,11 @@ func TestPhase5FechasInvalidasSalenALaLuz(t *testing.T) {
 	pool, ctx := flowTestPool(t)
 	bot := botDePrueba(t, ctx, pool, "ph5f_")
 
-	object, err := CreateDataObject(ctx, pool, bot.ID, "recibos5", "Recibo", "Recibos")
+	object, err := CreateDataObjectByOrg(ctx, pool, bot.OrgID, "recibos5", "Recibo", "Recibos")
 	if err != nil {
 		t.Fatalf("CreateDataObject: %v", err)
 	}
-	if _, err = UpsertDataField(ctx, pool, bot.ID, object.ID, "vence", "Vence", "date", false); err != nil {
+	if _, err = UpsertDataFieldByOrg(ctx, pool, bot.OrgID, object.ID, "vence", "Vence", "date", false); err != nil {
 		t.Fatalf("UpsertDataField: %v", err)
 	}
 	for _, raw := range []string{
@@ -217,7 +217,7 @@ func TestPhase5FechasInvalidasSalenALaLuz(t *testing.T) {
 	filter, _ := json.Marshal(DataFilter{Where: []DataFilterRule{{
 		Field: "vence", Op: "date_eq_relative", FromDays: &days,
 	}}})
-	view, err := CreateDataView(ctx, pool, bot.ID, object.ID, "Vence D+3", filter)
+	view, err := CreateDataViewByOrg(ctx, pool, bot.OrgID, object.ID, "Vence D+3", filter)
 	if err != nil {
 		t.Fatalf("CreateDataView: %v", err)
 	}

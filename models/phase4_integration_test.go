@@ -20,14 +20,14 @@ func TestPhase4CatalogoYFechasSeguras(t *testing.T) {
 		t.Fatalf("asociar WABA: %v", err)
 	}
 
-	object, err := CreateDataObject(ctx, pool, bot.ID, "ordenes", "Orden", "Órdenes")
+	object, err := CreateDataObjectByOrg(ctx, pool, bot.OrgID, "ordenes", "Orden", "Órdenes")
 	if err != nil {
 		t.Fatalf("CreateDataObject: %v", err)
 	}
-	if _, err = UpsertDataField(ctx, pool, bot.ID, object.ID, "vence", "Vence", "date", true); err != nil {
+	if _, err = UpsertDataFieldByOrg(ctx, pool, bot.OrgID, object.ID, "vence", "Vence", "date", true); err != nil {
 		t.Fatalf("UpsertDataField: %v", err)
 	}
-	valid, err := CreateDataRecord(ctx, pool, bot.ID, object.ID, json.RawMessage(`{"vence":"2026-07-31"}`))
+	valid, err := CreateDataRecordByOrg(ctx, pool, bot.OrgID, object.ID, json.RawMessage(`{"vence":"2026-07-31"}`))
 	if err != nil {
 		t.Fatalf("registro válido: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestPhase4CatalogoYFechasSeguras(t *testing.T) {
 	filter, _ := json.Marshal(DataFilter{Where: []DataFilterRule{{
 		Field: "vence", Op: "date_eq_relative", FromDays: &days,
 	}}})
-	view, err := CreateDataView(ctx, pool, bot.ID, object.ID, "Vence D+3", filter)
+	view, err := CreateDataViewByOrg(ctx, pool, bot.OrgID, object.ID, "Vence D+3", filter)
 	if err != nil {
 		t.Fatalf("CreateDataView: %v", err)
 	}

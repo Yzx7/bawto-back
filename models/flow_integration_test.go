@@ -284,7 +284,6 @@ func TestFlowAislamientoEntreOrganizaciones(t *testing.T) {
 	}
 }
 
-
 // Pausar deja de resolver el flujo sin perder la versión publicada (§17).
 func TestFlowPausarYReactivar(t *testing.T) {
 	pool, ctx := flowTestPool(t)

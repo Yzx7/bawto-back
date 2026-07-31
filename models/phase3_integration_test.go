@@ -10,19 +10,19 @@ func TestPhase3StatusDurableYCorrelacionSegura(t *testing.T) {
 	pool, ctx := flowTestPool(t)
 	bot := botDePrueba(t, ctx, pool, "p3_")
 
-	contact, err := UpsertContact(ctx, pool, bot.ID, "51999111222", "Ana", "active", json.RawMessage(`{}`))
+	contact, err := SaveContactByOrg(ctx, pool, bot.OrgID, "", "51999111222", "Ana", "active", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	object, err := CreateDataObject(ctx, pool, bot.ID, "ordenes", "Orden", "Órdenes")
+	object, err := CreateDataObjectByOrg(ctx, pool, bot.OrgID, "ordenes", "Orden", "Órdenes")
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := CreateDataRecord(ctx, pool, bot.ID, object.ID, json.RawMessage(`{"numero":"O-1","estado":"pendiente"}`))
+	record, err := CreateDataRecordByOrg(ctx, pool, bot.OrgID, object.ID, json.RawMessage(`{"numero":"O-1","estado":"pendiente"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := LinkRecordContact(ctx, pool, bot.ID, record.ID, contact.ID, "primary"); err != nil {
+	if err := LinkRecordContactByOrg(ctx, pool, bot.OrgID, record.ID, contact.ID, "primary"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -116,12 +116,12 @@ func TestPhase3StatusDurableYCorrelacionSegura(t *testing.T) {
 		t.Fatalf("fallback único incorrecto: %+v err=%v", inferred, err)
 	}
 
-	secondRecord, err := CreateDataRecord(ctx, pool, bot.ID, object.ID,
+	secondRecord, err := CreateDataRecordByOrg(ctx, pool, bot.OrgID, object.ID,
 		json.RawMessage(`{"numero":"O-2","estado":"pendiente"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := LinkRecordContact(ctx, pool, bot.ID, secondRecord.ID, contact.ID, "primary"); err != nil {
+	if err := LinkRecordContactByOrg(ctx, pool, bot.OrgID, secondRecord.ID, contact.ID, "primary"); err != nil {
 		t.Fatal(err)
 	}
 	secondRun, created, err := CreateFlowRun(ctx, pool, bot.ID, flow.ID, published.Version.ID,

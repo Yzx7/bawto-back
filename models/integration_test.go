@@ -12,7 +12,8 @@ import (
 )
 
 // Test de integración: requiere DATABASE_URL (se omite si no está).
-//   DATABASE_URL=... go test ./models -run OrgMembership -v
+//
+//	DATABASE_URL=... go test ./models -run OrgMembership -v
 func TestOrgMembershipIntegration(t *testing.T) {
 	url := os.Getenv("DATABASE_URL")
 	if url == "" {

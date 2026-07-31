@@ -91,16 +91,16 @@ func DeleteBot(ctx context.Context, pool *pgxpool.Pool, botID string) error {
 // BotChannel incluye el secreto del canal (para el webhook). El grafo se
 // resuelve aparte con PublishedFlowDefinition.
 type BotChannel struct {
-	ID                 string          `db:"id"`
-	OrgID              string          `db:"org_id"`
-	Channel            string          `db:"channel"`
-	ChannelID          *string         `db:"channel_id"`
-	Phone              *string         `db:"phone"`
-	WabaID             *string         `db:"waba_id"`
-	BusinessID         *string         `db:"business_id"`
-	ChannelConnectedAt *time.Time      `db:"channel_connected_at"`
-	TemplatesSyncedAt  *time.Time      `db:"templates_synced_at"`
-	TokenEnc           []byte          `db:"token_enc"`
+	ID                 string     `db:"id"`
+	OrgID              string     `db:"org_id"`
+	Channel            string     `db:"channel"`
+	ChannelID          *string    `db:"channel_id"`
+	Phone              *string    `db:"phone"`
+	WabaID             *string    `db:"waba_id"`
+	BusinessID         *string    `db:"business_id"`
+	ChannelConnectedAt *time.Time `db:"channel_connected_at"`
+	TemplatesSyncedAt  *time.Time `db:"templates_synced_at"`
+	TokenEnc           []byte     `db:"token_enc"`
 }
 
 // UpdateBotChannel conecta un bot a un canal (phone_number_id + phone + token cifrado).

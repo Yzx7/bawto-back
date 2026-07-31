@@ -70,8 +70,15 @@ func main() {
 	vence := time.Date(hoy.Year(), hoy.Month(), hoy.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, 3)
 	venceISO := vence.Format("2006-01-02")
 
+	// El catálogo de datos es de la organización, no del bot: se resuelve una vez
+	// y sirve para todo lo que sigue.
+	orgID := ""
+	if err := pool.QueryRow(ctx, `SELECT org_id::text FROM bots WHERE id=$1::uuid`, *botID).Scan(&orgID); err != nil {
+		fail("bot %s: %v", *botID, err)
+	}
+
 	// 1 · objeto
-	objects, err := models.ListDataObjects(ctx, pool, *botID)
+	objects, err := models.ListDataObjectsByOrg(ctx, pool, orgID)
 	if err != nil {
 		fail("objetos: %v", err)
 	}
@@ -97,7 +104,7 @@ func main() {
 	fmt.Printf("contacto %s <%s> (%s)\n", contactName, *phone, contactID)
 
 	// 3 · factura de prueba con vencimiento a tres días
-	records, err := models.ListDataRecords(ctx, pool, *botID, object.ID)
+	records, err := models.ListDataRecordsByOrg(ctx, pool, orgID, object.ID)
 	if err != nil {
 		fail("registros: %v", err)
 	}
@@ -114,7 +121,7 @@ func main() {
 	})
 	switch {
 	case recordID == "" && *apply:
-		record, err := models.CreateDataRecord(ctx, pool, *botID, object.ID, payload)
+		record, err := models.CreateDataRecordByOrg(ctx, pool, orgID, object.ID, payload)
 		if err != nil {
 			fail("crear factura: %v", err)
 		}
@@ -136,14 +143,14 @@ func main() {
 
 	// 4 · vínculo factura → contacto
 	if recordID != "" && *apply {
-		if err := models.LinkRecordContact(ctx, pool, *botID, recordID, contactID, "primary"); err != nil {
+		if err := models.LinkRecordContactByOrg(ctx, pool, orgID, recordID, contactID, "primary"); err != nil {
 			fail("vincular contacto: %v", err)
 		}
 		fmt.Println("vínculo primary asegurado")
 	}
 
 	// 5 · vistas
-	views, err := models.ListDataViews(ctx, pool, *botID, object.ID)
+	views, err := models.ListDataViewsByOrg(ctx, pool, orgID, object.ID)
 	if err != nil {
 		fail("vistas: %v", err)
 	}
@@ -159,8 +166,8 @@ func main() {
 		{Field: "estado", Op: "eq", Value: "pendiente"},
 		{Field: "vencimiento", Op: "date_eq_relative", FromDays: &tres},
 	}})
-	viewPend := asegurarVista(ctx, pool, *botID, object.ID, vistaPend, filtroPend, existentes, *apply)
-	viewD3 := asegurarVista(ctx, pool, *botID, object.ID, vistaD3, filtroD3, existentes, *apply)
+	viewPend := asegurarVista(ctx, pool, orgID, object.ID, vistaPend, filtroPend, existentes, *apply)
+	viewD3 := asegurarVista(ctx, pool, orgID, object.ID, vistaD3, filtroD3, existentes, *apply)
 	_ = viewPend
 
 	if viewD3 == "" {
@@ -250,7 +257,7 @@ func main() {
 	fmt.Printf("\n=== PREVIEW ===\n%s\n", out)
 }
 
-func asegurarVista(ctx context.Context, pool *pgxpool.Pool, botID, objectID, name string,
+func asegurarVista(ctx context.Context, pool *pgxpool.Pool, orgID, objectID, name string,
 	filter json.RawMessage, existentes map[string]string, apply bool) string {
 	if id := existentes[name]; id != "" {
 		fmt.Printf("vista %q ya existe (%s)\n", name, id)
@@ -260,7 +267,7 @@ func asegurarVista(ctx context.Context, pool *pgxpool.Pool, botID, objectID, nam
 		fmt.Printf("vista %q: se crearía\n", name)
 		return ""
 	}
-	v, err := models.CreateDataView(ctx, pool, botID, objectID, name, filter)
+	v, err := models.CreateDataViewByOrg(ctx, pool, orgID, objectID, name, filter)
 	if err != nil {
 		fail("crear vista %q: %v", name, err)
 	}

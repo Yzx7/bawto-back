@@ -9,37 +9,8 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-func (con *Controller) ListContactFields(c *fiber.Ctx) error {
-	bot, err := con.botWithRole(c, c.Params("botId"))
-	if err != nil {
-		return con.failErr(c, err)
-	}
-	v, err := models.ListContactFields(c.Context(), con.Env.Postgres, bot.ID)
-	if err != nil {
-		return con.fail(c, 500, "error obteniendo campos")
-	}
-	return con.ok(c, "ok", v)
-}
-
-func (con *Controller) UpsertContactField(c *fiber.Ctx) error {
-	bot, err := con.botWithRole(c, c.Params("botId"), "owner", "admin", "member")
-	if err != nil {
-		return con.failErr(c, err)
-	}
-	var in struct {
-		Key, Label, Type string
-		Required         bool
-	}
-	if err := c.BodyParser(&in); err != nil || strings.TrimSpace(in.Key) == "" || strings.TrimSpace(in.Label) == "" {
-		return con.fail(c, 400, "campo inválido")
-	}
-	v, err := models.UpsertContactField(c.Context(), con.Env.Postgres, bot.ID, strings.TrimSpace(in.Key), strings.TrimSpace(in.Label), strings.TrimSpace(in.Type), in.Required)
-	if err != nil {
-		return con.fail(c, 400, "no se pudo guardar el campo")
-	}
-	return c.Status(fiber.StatusCreated).JSON(types.OK("campo guardado", v))
-}
-
+// Audiencias. Los campos de contacto se administran por organización, en
+// `organization_data.controller.go`.
 func (con *Controller) ListAudiences(c *fiber.Ctx) error {
 	bot, err := con.botWithRole(c, c.Params("botId"))
 	if err != nil {

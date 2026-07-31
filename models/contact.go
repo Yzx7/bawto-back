@@ -62,45 +62,6 @@ func NormalizePhone(phone string) string {
 	}, phone)
 }
 
-func ListContactsByBot(ctx context.Context, pool *pgxpool.Pool, botID string) ([]Contact, error) {
-	rows, err := pool.Query(ctx, `SELECT `+contactCols+` FROM contacts WHERE org_id = (SELECT org_id FROM bots WHERE id=$1::uuid) ORDER BY created_at DESC`, botID)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, pgx.RowToStructByName[Contact])
-}
-
-func UpsertContact(ctx context.Context, pool *pgxpool.Pool, botID, phone, name, status string, data json.RawMessage) (*Contact, error) {
-	phone = NormalizePhone(phone)
-	if status == "" {
-		status = "active"
-	}
-	if len(data) == 0 {
-		data = json.RawMessage(`{}`)
-	}
-	fields, err := ListContactFields(ctx, pool, botID)
-	if err != nil {
-		return nil, err
-	}
-	if err := ValidateContactData(fields, data); err != nil {
-		return nil, err
-	}
-	rows, err := pool.Query(ctx, `INSERT INTO contacts (org_id, phone_normalized, name, status, data)
-        SELECT org_id, $2, NULLIF($3,''), $4, $5::jsonb FROM bots WHERE id=$1::uuid
-        ON CONFLICT (org_id, phone_normalized) DO UPDATE SET
-          name = COALESCE(NULLIF(EXCLUDED.name,''), contacts.name),
-          status = EXCLUDED.status, data = EXCLUDED.data
-        RETURNING `+contactCols, botID, phone, name, status, data)
-	if err != nil {
-		return nil, err
-	}
-	c, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[Contact])
-	if err != nil {
-		return nil, err
-	}
-	return &c, nil
-}
-
 // EnsureInboundContact registra la identidad observada por el canal sin borrar
 // atributos CRM que ya hubiera configurado la organización.
 func EnsureInboundContact(ctx context.Context, pool *pgxpool.Pool, botID, phone, name string) (*Contact, error) {

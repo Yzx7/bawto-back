@@ -42,21 +42,6 @@ func ListContactFields(ctx context.Context, pool *pgxpool.Pool, botID string) ([
 	return pgx.CollectRows(rows, pgx.RowToStructByName[ContactField])
 }
 
-func UpsertContactField(ctx context.Context, pool *pgxpool.Pool, botID, key, label, typ string, required bool) (*ContactField, error) {
-	rows, err := pool.Query(ctx, `INSERT INTO contact_fields (org_id, key, label, type, required)
-        SELECT org_id,$2,$3,$4,$5 FROM bots WHERE id=$1::uuid
-        ON CONFLICT (org_id, key) DO UPDATE SET label = EXCLUDED.label, type = EXCLUDED.type, required = EXCLUDED.required
-        RETURNING `+fieldCols, botID, key, label, typ, required)
-	if err != nil {
-		return nil, err
-	}
-	v, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[ContactField])
-	if err != nil {
-		return nil, err
-	}
-	return &v, nil
-}
-
 func ListAudiences(ctx context.Context, pool *pgxpool.Pool, botID string) ([]Audience, error) {
 	rows, err := pool.Query(ctx, `SELECT `+audienceCols+` FROM audiences WHERE org_id=(SELECT org_id FROM bots WHERE id=$1::uuid) ORDER BY created_at DESC`, botID)
 	if err != nil {

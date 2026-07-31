@@ -63,38 +63,15 @@ const dataFieldCols = `id::text AS id, object_id::text AS object_id, key, label,
 const dataRecordCols = `id::text AS id, object_id::text AS object_id, data, created_at, updated_at`
 const dataViewCols = `id::text AS id, object_id::text AS object_id, name, filter, created_at, updated_at`
 
-func ListDataObjects(ctx context.Context, p *pgxpool.Pool, botID string) ([]DataObject, error) {
-	rows, e := p.Query(ctx, `SELECT `+dataObjectCols+` FROM data_objects WHERE org_id=(SELECT org_id FROM bots WHERE id=$1::uuid) ORDER BY created_at`, botID)
-	if e != nil {
-		return nil, e
-	}
-	return pgx.CollectRows(rows, pgx.RowToStructByName[DataObject])
-}
-func CreateDataObject(ctx context.Context, p *pgxpool.Pool, botID, key, name, plural string) (*DataObject, error) {
-	rows, e := p.Query(ctx, `INSERT INTO data_objects(org_id,key,name,plural_name) SELECT org_id,$2,$3,$4 FROM bots WHERE id=$1::uuid RETURNING `+dataObjectCols, botID, key, name, plural)
-	if e != nil {
-		return nil, e
-	}
-	v, e := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[DataObject])
-	return &v, e
-}
+// El catálogo se administra por organización (`organization_data.go`). Lo que
+// queda aquí es lo que el motor necesita resolver a partir del bot dueño del
+// flujo: los campos de un objeto, las vistas y el destinatario de un registro.
 func ListDataFields(ctx context.Context, p *pgxpool.Pool, botID, objectID string) ([]DataField, error) {
 	rows, e := p.Query(ctx, `SELECT f.id::text AS id,f.object_id::text AS object_id,f.key,f.label,f.type,f.required,f.created_at,f.updated_at FROM data_fields f JOIN data_objects o ON o.id=f.object_id WHERE o.org_id=(SELECT org_id FROM bots WHERE id=$1::uuid) AND f.object_id=$2::uuid ORDER BY f.created_at`, botID, objectID)
 	if e != nil {
 		return nil, e
 	}
 	return pgx.CollectRows(rows, pgx.RowToStructByName[DataField])
-}
-func UpsertDataField(ctx context.Context, p *pgxpool.Pool, botID, objectID, key, label, typ string, required bool) (*DataField, error) {
-	if err := ValidateDataFieldDefinition(key, label, typ); err != nil {
-		return nil, err
-	}
-	rows, e := p.Query(ctx, `INSERT INTO data_fields(object_id,key,label,type,required) SELECT o.id,$3,$4,$5,$6 FROM data_objects o WHERE o.id=$2::uuid AND o.org_id=(SELECT org_id FROM bots WHERE id=$1::uuid) ON CONFLICT(object_id,key) DO UPDATE SET label=EXCLUDED.label,type=EXCLUDED.type,required=EXCLUDED.required RETURNING `+dataFieldCols, botID, objectID, key, label, typ, required)
-	if e != nil {
-		return nil, e
-	}
-	v, e := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[DataField])
-	return &v, e
 }
 
 func ValidateDataFieldDefinition(key, label, typ string) error {
@@ -141,68 +118,6 @@ func ValidateDataRecord(fields []DataField, data json.RawMessage) error {
 	}
 	return nil
 }
-func ListDataRecords(ctx context.Context, p *pgxpool.Pool, botID, objectID string) ([]DataRecord, error) {
-	rows, e := p.Query(ctx, `SELECT r.id::text AS id,r.object_id::text AS object_id,r.data,r.created_at,r.updated_at FROM data_records r JOIN data_objects o ON o.id=r.object_id WHERE o.org_id=(SELECT org_id FROM bots WHERE id=$1::uuid) AND r.object_id=$2::uuid ORDER BY r.created_at DESC`, botID, objectID)
-	if e != nil {
-		return nil, e
-	}
-	return pgx.CollectRows(rows, pgx.RowToStructByName[DataRecord])
-}
-func CreateDataRecord(ctx context.Context, p *pgxpool.Pool, botID, objectID string, data json.RawMessage) (*DataRecord, error) {
-	fields, e := ListDataFields(ctx, p, botID, objectID)
-	if e != nil {
-		return nil, e
-	}
-	if e = ValidateDataRecord(fields, data); e != nil {
-		return nil, e
-	}
-	rows, e := p.Query(ctx, `INSERT INTO data_records(object_id,data) SELECT o.id,$3::jsonb FROM data_objects o WHERE o.id=$2::uuid AND o.org_id=(SELECT org_id FROM bots WHERE id=$1::uuid) RETURNING `+dataRecordCols, botID, objectID, data)
-	if e != nil {
-		return nil, e
-	}
-	v, e := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[DataRecord])
-	return &v, e
-}
-func LinkRecordContact(ctx context.Context, p *pgxpool.Pool, botID, recordID, contactID, role string) error {
-	// El `DO UPDATE` es lo que hace idempotente al vínculo. Con `DO NOTHING`, un
-	// segundo intento sobre el mismo par no afecta filas y la comprobación de
-	// abajo lo denunciaba como "no pertenece al bot": el error de propiedad y el
-	// de repetición son indistinguibles desde `RowsAffected`.
-	cmd, e := p.Exec(ctx, `INSERT INTO data_record_contacts(record_id,contact_id,role) SELECT r.id,c.id,$4 FROM data_records r JOIN data_objects o ON o.id=r.object_id JOIN contacts c ON c.org_id=o.org_id WHERE r.id=$2::uuid AND c.id=$3::uuid AND o.org_id=(SELECT org_id FROM bots WHERE id=$1::uuid) ON CONFLICT (record_id,contact_id,role) DO UPDATE SET role=EXCLUDED.role`, botID, recordID, contactID, role)
-	if e != nil {
-		return e
-	}
-	if cmd.RowsAffected() == 0 {
-		return errors.New("registro o contacto no pertenece al bot")
-	}
-	return nil
-}
-func ListDataViews(ctx context.Context, p *pgxpool.Pool, botID, objectID string) ([]DataView, error) {
-	rows, e := p.Query(ctx, `SELECT v.id::text AS id,v.object_id::text AS object_id,v.name,v.filter,v.created_at,v.updated_at FROM data_views v JOIN data_objects o ON o.id=v.object_id WHERE o.org_id=(SELECT org_id FROM bots WHERE id=$1::uuid) AND v.object_id=$2::uuid ORDER BY v.created_at`, botID, objectID)
-	if e != nil {
-		return nil, e
-	}
-	return pgx.CollectRows(rows, pgx.RowToStructByName[DataView])
-}
-func CreateDataView(ctx context.Context, p *pgxpool.Pool, botID, objectID, name string, filter json.RawMessage) (*DataView, error) {
-	if len(filter) == 0 {
-		filter = json.RawMessage(`{}`)
-	}
-	fields, err := ListDataFields(ctx, p, botID, objectID)
-	if err != nil {
-		return nil, err
-	}
-	if err = ValidateDataFilter(fields, filter); err != nil {
-		return nil, err
-	}
-	rows, e := p.Query(ctx, `INSERT INTO data_views(object_id,name,filter) SELECT o.id,$3,$4::jsonb FROM data_objects o WHERE o.id=$2::uuid AND o.org_id=(SELECT org_id FROM bots WHERE id=$1::uuid) RETURNING `+dataViewCols, botID, objectID, name, filter)
-	if e != nil {
-		return nil, e
-	}
-	v, e := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[DataView])
-	return &v, e
-}
-
 func intValue(value *int) int {
 	if value == nil {
 		return 0
