@@ -1,0 +1,608 @@
+{
+  "id": "flow_sistemuino_services",
+  "name": "Sistemuino — Servicios tecnológicos",
+  "trigger": {
+    "type": "message",
+    "match": "any"
+  },
+  "nodes": [
+    {
+      "id": "n_route",
+      "kind": "agent",
+      "pos": {
+        "x": 276.22226125662655,
+        "y": -160.76719430100135
+      },
+      "instruction": "Actúa como orientador comercial de Energy Company y redacta el único mensaje que el cliente recibirá en este turno. Apóyate en el historial reciente y no repitas preguntas ya respondidas.\n\nElige la rama según lo que necesita: web para páginas, landing pages, sitios corporativos, rediseños o aplicaciones web que no sean tiendas; iot para sensores, dispositivos, telemetría, monitoreo, ESP32 o automatización física; bawto para bots, atención y automatización por WhatsApp, conversaciones desordenadas, seguimiento, recordatorios, CRM o derivación a asesores; ecommerce para vender por internet, Meudim BaaS, API headless, catálogo, checkout, pedidos, desarrollar un ecommerce propio o encargarnos la tienda; tarjetas para un enlace público de medios de cobro, QR, Yape, Plin, CCI, cuentas o wallets; tecnico para servidores, Linux, nube, despliegues, dominios, SSL, redes, arquitectura, errores o asesoría tecnológica; asesor si pide una persona, está frustrado o tras varios intentos aún no hay información suficiente; menu si saluda sin plantear una necesidad, pide las opciones o quiere volver al inicio; conversar cuando la necesidad todavía sea ambigua o pueda encajar en varios servicios. Si responde solo con un número después del menú, 1 es web, 2 es iot, 3 es bawto, 4 es ecommerce, 5 es tarjetas, 6 es tecnico y 7 es asesor.\n\nCuando elijas un servicio (web, iot, bawto, ecommerce, tarjetas o tecnico) tu mensaje es la única presentación que verá el cliente: en dos o tres frases di qué entendiste, describe brevemente ese servicio y cierra con una sola pregunta abierta para que cuente su caso; después el bot esperará su respuesta y la atenderá un consultor especializado. Guíate de este catálogo y no agregues nada fuera de él: web son landing pages, sitios corporativos, rediseños y aplicaciones web a medida; iot son prototipos con sensores y microcontroladores, monitoreo remoto, automatización, paneles de control e integraciones; bawto es nuestra plataforma de bots y automatización por WhatsApp, con flujos, derivación a asesores, datos de clientes, seguimientos y recordatorios; ecommerce es Meudim, ya sea consumiendo nuestra API BaaS multitienda o encargándonos el desarrollo de la tienda; tarjetas es Meudim Tarjetas, un enlace público corto que reúne QR, Yape, Plin, CCI, cuentas bancarias y wallets; tecnico son servidores, Linux, despliegues, dominios y SSL, nube, redes, revisión de arquitectura y acompañamiento técnico.\n\nSi eliges asesor, confirma en una frase que lo derivarás con una persona del equipo. Si eliges menu, responde solo con un saludo breve de una línea y sin listar opciones, porque el menú se envía enseguida. Si eliges conversar, responde de forma empática y haz exactamente una pregunta breve y útil basada en todo lo ya dicho.\n\nNo inventes precios, plazos ni capacidades, nunca pidas contraseñas, PIN, CVV, códigos, tokens ni claves privadas, y no conviertas la conversación en un interrogatorio.",
+      "outputs": [
+        "web",
+        "iot",
+        "bawto",
+        "tarjetas",
+        "tecnico",
+        "ecommerce",
+        "menu",
+        "conversar",
+        "asesor"
+      ],
+      "contextMode": "recent",
+      "silent": false
+    },
+    {
+      "id": "n_discovery_wait",
+      "kind": "wait",
+      "pos": {
+        "x": 926.913599979244,
+        "y": 377.58680342800994
+      },
+      "expect": "text",
+      "saveAs": "discovery_turn",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_menu",
+      "kind": "send",
+      "pos": {
+        "x": 2337.351601712837,
+        "y": 108.11863024744017
+      },
+      "body": "👋 ¡Hola *{contact_name}*!.\n\nPodemos ayudarte con:\n1️⃣ Páginas y aplicaciones web\n2️⃣ Proyectos *IoT*\n3️⃣ *BAWTO*: bots y automatización para WhatsApp\n4️⃣ *Meudim Ecommerce*: usa nuestra API o encárganos tu tienda\n5️⃣ *Meudim Tarjetas*: enlace público para compartir medios de cobro\n6️⃣ Servidores y asesoría tecnológica\n7️⃣ Hablar con un asesor\n\nEscribe el número de una opción o cuéntame brevemente qué necesitas."
+    },
+    {
+      "id": "n_wait_menu",
+      "kind": "wait",
+      "pos": {
+        "x": 2704.2827181885045,
+        "y": 349.19183157063117
+      },
+      "expect": "text",
+      "saveAs": "menu_option",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_web_wait",
+      "kind": "wait",
+      "pos": {
+        "x": 1370.8729067541526,
+        "y": -1391.462149372948
+      },
+      "expect": "text",
+      "saveAs": "web_requirement",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_web_agent",
+      "kind": "agent",
+      "pos": {
+        "x": 1781.9622931369722,
+        "y": -1481.6188065919398
+      },
+      "instruction": "Eres el consultor web de Energy Company y ya estás dentro de la conversación de páginas y aplicaciones web a medida. Usa el historial reciente y redacta un solo mensaje.\n\nElige seguir mientras el cliente siga describiendo o preguntando por su proyecto: en dos o tres frases resume lo que entendiste, aporta una consideración inicial útil sobre objetivo, público, contenido, funciones o fecha de lanzamiento y cierra con una sola pregunta pendiente; si ya tienes lo esencial, indica que un especialista preparará el alcance y pregunta si desea agregar algo.\n\nElige asesor si pide hablar con una persona, quiere una cotización formal, está frustrado o acepta continuar con el equipo; anúncialo en una frase, porque ese mensaje es el último antes de la derivación.\n\nElige menu si pide volver al inicio, ver las opciones, cambiar de servicio o esta hablando de un servicio distinto; dilo en una línea breve.\n\nNo inventes precios, plazos ni capacidades.",
+      "outputs": [
+        "seguir",
+        "asesor",
+        "menu"
+      ],
+      "contextMode": "recent",
+      "silent": false
+    },
+    {
+      "id": "n_iot_wait",
+      "kind": "wait",
+      "pos": {
+        "x": 1368.7161408347242,
+        "y": -1149.0512530236515
+      },
+      "expect": "text",
+      "saveAs": "iot_requirement",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_iot_agent",
+      "kind": "agent",
+      "pos": {
+        "x": 1791.559406301532,
+        "y": -1183.2575695401858
+      },
+      "instruction": "Eres el consultor IoT de Energy Company y ya estás dentro de la conversación de sensores, monitoreo y automatización. Usa el historial reciente y redacta un solo mensaje.\n\nElige seguir mientras el cliente siga describiendo o preguntando por su proyecto: en dos o tres frases resume el objetivo, aporta una consideración inicial útil sobre sensores, entorno, energía, conectividad o monitoreo y cierra con una sola pregunta pendiente; si ya tienes lo esencial, indica que un especialista evaluará la arquitectura y pregunta si desea agregar algo.\n\nElige asesor si pide hablar con una persona, quiere una cotización formal, está frustrado o acepta continuar con el equipo; anúncialo en una frase, porque ese mensaje es el último antes de la derivación.\n\nElige menu si pide volver al inicio, ver las opciones o cambiar de servicio; dilo en una línea breve.\n\nNo des instrucciones eléctricas riesgosas y no inventes precios, plazos ni capacidades.",
+      "outputs": [
+        "seguir",
+        "asesor",
+        "menu"
+      ],
+      "contextMode": "recent",
+      "silent": false
+    },
+    {
+      "id": "n_bawto_wait",
+      "kind": "wait",
+      "pos": {
+        "x": 1369.4135047302775,
+        "y": -896.1879840573731
+      },
+      "expect": "text",
+      "saveAs": "bawto_requirement",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_bawto_agent",
+      "kind": "agent",
+      "pos": {
+        "x": 1771.2574086296531,
+        "y": -930.3766482052449
+      },
+      "instruction": "Eres el consultor de automatización de BAWTO, la plataforma de atención y automatización por WhatsApp de Energy Company, y ya estás dentro de esa conversación. Usa el historial reciente y redacta un solo mensaje.\n\nElige seguir mientras el cliente siga describiendo o preguntando: en dos o tres frases resume el proceso que conviene automatizar, aporta una consideración inicial útil sobre volumen de conversaciones, derivación humana, datos o integraciones y cierra con una sola pregunta pendiente; si ya tienes lo esencial, indica que un especialista continuará el diseño del flujo y pregunta si desea agregar algo.\n\nElige asesor si pide hablar con una persona, quiere una cotización formal, está frustrado o acepta continuar con el equipo; anúncialo en una frase, porque ese mensaje es el último antes de la derivación.\n\nElige menu si pide volver al inicio, ver las opciones o cambiar de servicio; dilo en una línea breve.\n\nNo inventes funcionalidades, precios ni plazos.",
+      "outputs": [
+        "seguir",
+        "asesor",
+        "menu"
+      ],
+      "contextMode": "recent",
+      "silent": false
+    },
+    {
+      "id": "n_ecommerce_wait",
+      "kind": "wait",
+      "pos": {
+        "x": 1463.9318181025446,
+        "y": -49.54599767259962
+      },
+      "expect": "text",
+      "saveAs": "meudim_ecommerce_mode",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_ecommerce_agent",
+      "kind": "agent",
+      "pos": {
+        "x": 1823.6133763249422,
+        "y": -162.8307416496987
+      },
+      "instruction": "Eres el consultor de Meudim Ecommerce y ya estás dentro de esa conversación. Usa el historial reciente y redacta un solo mensaje. Hay dos modalidades: que el cliente desarrolle su propio ecommerce consumiendo nuestra API BaaS multitienda (catálogo, compradores, checkout calculado en servidor, pedidos y pagos manuales, con clave publicable pk_ en el navegador y clave secreta sk_ solo en servidor), o que nosotros desarrollemos su tienda sobre Meudim (storefront, catálogo, experiencia de compra, checkout, gestión de pedidos y configuración inicial de pagos manuales).\n\nElige api si responde 1, quiere desarrollar por su cuenta, ya tiene equipo técnico o frontend, o pide API, BaaS, headless, documentación o integración; presenta esa modalidad en dos o tres frases y cierra con una sola pregunta sobre su tecnología, las partes que necesita o su fecha objetivo, porque el bot esperará su respuesta.\n\nElige tienda si responde 2 o quiere que nosotros diseñemos y desarrollemos su tienda; preséntalo igual y cierra con una sola pregunta sobre qué vende, su catálogo, su marca, los medios de pago, los envíos o la fecha de lanzamiento.\n\nElige seguir si todavía no está claro qué modalidad le conviene: explica brevemente la diferencia entre integrar por su cuenta y encargarnos el desarrollo, y haz una sola pregunta para distinguirlas.\n\nElige asesor si pide una persona o una cotización formal; anúncialo en una frase. Elige menu si pide volver al inicio o ver las opciones.\n\nNo pidas ni compartas claves API u otros secretos por este chat, y no inventes endpoints, precios ni plazos.",
+      "outputs": [
+        "api",
+        "tienda",
+        "asesor",
+        "menu",
+        "seguir"
+      ],
+      "contextMode": "recent",
+      "silent": false
+    },
+    {
+      "id": "n_meudim_api_wait",
+      "kind": "wait",
+      "pos": {
+        "x": 2689.022979843149,
+        "y": -173.57610753985475
+      },
+      "expect": "text",
+      "saveAs": "meudim_api_requirement",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_meudim_api_agent",
+      "kind": "agent",
+      "pos": {
+        "x": 3077.115598780097,
+        "y": -279.78004514356576
+      },
+      "instruction": "Eres el consultor técnico de Meudim BaaS y ya estás dentro de la conversación de integración por API. Usa el historial reciente y redacta un solo mensaje. La API es multitienda y ofrece catálogo, compradores, checkout calculado en servidor, pedidos y pagos manuales, con clave publicable pk_ en el navegador, clave secreta sk_ solo en servidor, CORS por tienda, límites de uso y documentación OpenAPI.\n\nElige seguir mientras el cliente siga describiendo o preguntando: en dos o tres frases resume el escenario de integración, aporta una consideración inicial útil sobre frontend, recursos de la API, autenticación o la separación entre pk_ y sk_ y cierra con una sola pregunta pendiente; si ya tienes lo esencial, indica que un especialista revisará el alcance técnico y pregunta si desea agregar algo.\n\nElige asesor si pide hablar con una persona, quiere una cotización formal, está frustrado o acepta continuar con el equipo; anúncialo en una frase, porque ese mensaje es el último antes de la derivación.\n\nElige menu si pide volver al inicio, ver las opciones o cambiar de servicio; dilo en una línea breve.\n\nNunca pidas ni repitas claves secretas y no inventes endpoints, precios ni plazos.",
+      "outputs": [
+        "seguir",
+        "asesor",
+        "menu"
+      ],
+      "contextMode": "recent",
+      "silent": false
+    },
+    {
+      "id": "n_meudim_store_wait",
+      "kind": "wait",
+      "pos": {
+        "x": 2692.803914915924,
+        "y": 48.750060721135945
+      },
+      "expect": "text",
+      "saveAs": "meudim_store_requirement",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_meudim_store_agent",
+      "kind": "agent",
+      "pos": {
+        "x": 3097.2849562546576,
+        "y": 30.877887699037807
+      },
+      "instruction": "Eres el consultor de ecommerce de Energy Company y ya estás dentro de la conversación de una tienda desarrollada por nosotros sobre Meudim. Usa el historial reciente y redacta un solo mensaje.\n\nElige seguir mientras el cliente siga describiendo o preguntando: en dos o tres frases resume lo que entendiste, aporta una consideración inicial útil sobre catálogo, experiencia de compra, pagos, envíos o lanzamiento y cierra con una sola pregunta pendiente; si ya tienes lo esencial, indica que un especialista preparará el alcance y pregunta si desea agregar algo.\n\nElige asesor si pide hablar con una persona, quiere una cotización formal, está frustrado o acepta continuar con el equipo; anúncialo en una frase, porque ese mensaje es el último antes de la derivación.\n\nElige menu si pide volver al inicio, ver las opciones o cambiar de servicio; dilo en una línea breve.\n\nNo inventes precios, plazos ni integraciones.",
+      "outputs": [
+        "seguir",
+        "asesor",
+        "menu"
+      ],
+      "contextMode": "recent",
+      "silent": false
+    },
+    {
+      "id": "n_cards_wait",
+      "kind": "wait",
+      "pos": {
+        "x": 1369.6219600508539,
+        "y": -646.5352419620049
+      },
+      "expect": "text",
+      "saveAs": "meudim_cards_requirement",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_cards_agent",
+      "kind": "agent",
+      "pos": {
+        "x": 1763.6001267142524,
+        "y": -682.1606131042172
+      },
+      "instruction": "Eres el consultor de Meudim Tarjetas y ya estás dentro de esa conversación. El producto es un enlace público corto que reúne los medios de cobro que el cliente decida mostrar: QR, Yape, Plin, CCI, cuentas bancarias y wallets. Usa el historial reciente y redacta un solo mensaje.\n\nElige seguir mientras el cliente siga describiendo o preguntando: en dos o tres frases resume el uso que le dará al enlace, aporta una consideración inicial útil sobre el alias, si es personal o de negocio y qué medios conviene publicar, y cierra con una sola pregunta pendiente; si ya tienes lo esencial, indica que un asesor ayudará con la configuración y pregunta si desea agregar algo. Recuerda de forma natural que no debe publicar PIN, CVV, contraseñas, códigos ni claves privadas.\n\nElige asesor si pide hablar con una persona, quiere una cotización formal, está frustrado o acepta continuar con el equipo; anúncialo en una frase, porque ese mensaje es el último antes de la derivación.\n\nElige menu si pide volver al inicio, ver las opciones o cambiar de servicio; dilo en una línea breve.\n\nNo pidas datos bancarios concretos por este chat y no inventes precios ni plazos.",
+      "outputs": [
+        "seguir",
+        "asesor",
+        "menu"
+      ],
+      "contextMode": "recent",
+      "silent": false
+    },
+    {
+      "id": "n_tech_wait",
+      "kind": "wait",
+      "pos": {
+        "x": 1378.5040956950647,
+        "y": -350.8608029988741
+      },
+      "expect": "text",
+      "saveAs": "tech_requirement",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_tech_agent",
+      "kind": "agent",
+      "pos": {
+        "x": 1770.9153116081643,
+        "y": -388.2907690575047
+      },
+      "instruction": "Eres el consultor técnico de Energy Company y ya estás dentro de la conversación de servidores, nube, redes y asesoría tecnológica. Usa el historial reciente y redacta un solo mensaje.\n\nElige seguir mientras el cliente siga describiendo o preguntando: en dos o tres frases resume el contexto, ofrece una observación inicial prudente sobre diagnóstico, entorno o prioridad y cierra con una sola pregunta pendiente; si ya tienes lo esencial, indica que un especialista revisará los siguientes pasos y pregunta si desea agregar algo.\n\nElige asesor si pide hablar con una persona, quiere una cotización formal, está frustrado o acepta continuar con el equipo; anúncialo en una frase, porque ese mensaje es el último antes de la derivación.\n\nElige menu si pide volver al inicio, ver las opciones o cambiar de servicio; dilo en una línea breve.\n\nNo solicites contraseñas, tokens, llaves privadas ni acceso remoto, no des comandos destructivos, no afirmes una causa sin evidencia y no inventes precios ni plazos.",
+      "outputs": [
+        "seguir",
+        "asesor",
+        "menu"
+      ],
+      "contextMode": "recent",
+      "silent": false
+    },
+    {
+      "id": "n_handoff",
+      "kind": "action",
+      "pos": {
+        "x": 2305.021564747979,
+        "y": -1532.4269411068624
+      },
+      "action": "handoff",
+      "params": {
+        "motivo": "solicitud comercial o técnica para Energy Company"
+      }
+    },
+    {
+      "id": "n_end",
+      "kind": "action",
+      "pos": {
+        "x": 2987.5243316433484,
+        "y": -1519.2940908904345
+      },
+      "action": "end"
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_trigger",
+      "source": "trigger",
+      "target": "n_route"
+    },
+    {
+      "id": "e_route_web",
+      "source": "n_route",
+      "sourceHandle": "web",
+      "target": "n_web_wait"
+    },
+    {
+      "id": "e_route_iot",
+      "source": "n_route",
+      "sourceHandle": "iot",
+      "target": "n_iot_wait"
+    },
+    {
+      "id": "e_route_bawto",
+      "source": "n_route",
+      "sourceHandle": "bawto",
+      "target": "n_bawto_wait"
+    },
+    {
+      "id": "e_route_ecommerce",
+      "source": "n_route",
+      "sourceHandle": "ecommerce",
+      "target": "n_ecommerce_wait"
+    },
+    {
+      "id": "e_route_cards",
+      "source": "n_route",
+      "sourceHandle": "tarjetas",
+      "target": "n_cards_wait"
+    },
+    {
+      "id": "e_route_tech",
+      "source": "n_route",
+      "sourceHandle": "tecnico",
+      "target": "n_tech_wait"
+    },
+    {
+      "id": "e_route_advisor",
+      "source": "n_route",
+      "sourceHandle": "asesor",
+      "target": "n_handoff",
+      "tag": "HANDOFF"
+    },
+    {
+      "id": "e_route_menu",
+      "source": "n_route",
+      "sourceHandle": "menu",
+      "target": "n_menu"
+    },
+    {
+      "id": "e_route_continue",
+      "source": "n_route",
+      "sourceHandle": "conversar",
+      "target": "n_discovery_wait"
+    },
+    {
+      "id": "e_discovery_loopback",
+      "source": "n_discovery_wait",
+      "target": "n_route",
+      "role": "loopback",
+      "tag": "ROUTE"
+    },
+    {
+      "id": "e_menu_wait",
+      "source": "n_menu",
+      "target": "n_wait_menu"
+    },
+    {
+      "id": "e_menu_loop",
+      "source": "n_wait_menu",
+      "target": "n_route",
+      "role": "loopback",
+      "tag": "ROUTE"
+    },
+    {
+      "id": "e_web_agent",
+      "source": "n_web_wait",
+      "target": "n_web_agent"
+    },
+    {
+      "id": "e_web_seguir",
+      "source": "n_web_agent",
+      "sourceHandle": "seguir",
+      "target": "n_web_wait",
+      "role": "loopback"
+    },
+    {
+      "id": "e_web_advisor",
+      "source": "n_web_agent",
+      "sourceHandle": "asesor",
+      "target": "n_handoff",
+      "tag": "HANDOFF"
+    },
+    {
+      "id": "e_web_menu",
+      "source": "n_web_agent",
+      "sourceHandle": "menu",
+      "target": "n_menu",
+      "tag": "MENU"
+    },
+    {
+      "id": "e_iot_agent",
+      "source": "n_iot_wait",
+      "target": "n_iot_agent"
+    },
+    {
+      "id": "e_iot_seguir",
+      "source": "n_iot_agent",
+      "sourceHandle": "seguir",
+      "target": "n_iot_wait",
+      "role": "loopback"
+    },
+    {
+      "id": "e_iot_advisor",
+      "source": "n_iot_agent",
+      "sourceHandle": "asesor",
+      "target": "n_handoff",
+      "tag": "HANDOFF"
+    },
+    {
+      "id": "e_iot_menu",
+      "source": "n_iot_agent",
+      "sourceHandle": "menu",
+      "target": "n_menu",
+      "tag": "MENU"
+    },
+    {
+      "id": "e_bawto_agent",
+      "source": "n_bawto_wait",
+      "target": "n_bawto_agent"
+    },
+    {
+      "id": "e_bawto_seguir",
+      "source": "n_bawto_agent",
+      "sourceHandle": "seguir",
+      "target": "n_bawto_wait",
+      "role": "loopback"
+    },
+    {
+      "id": "e_bawto_advisor",
+      "source": "n_bawto_agent",
+      "sourceHandle": "asesor",
+      "target": "n_handoff",
+      "tag": "HANDOFF"
+    },
+    {
+      "id": "e_bawto_menu",
+      "source": "n_bawto_agent",
+      "sourceHandle": "menu",
+      "target": "n_menu",
+      "tag": "MENU"
+    },
+    {
+      "id": "e_ecommerce_agent",
+      "source": "n_ecommerce_wait",
+      "target": "n_ecommerce_agent"
+    },
+    {
+      "id": "e_ecommerce_api",
+      "source": "n_ecommerce_agent",
+      "sourceHandle": "api",
+      "target": "n_meudim_api_wait"
+    },
+    {
+      "id": "e_ecommerce_store",
+      "source": "n_ecommerce_agent",
+      "sourceHandle": "tienda",
+      "target": "n_meudim_store_wait"
+    },
+    {
+      "id": "e_ecommerce_seguir",
+      "source": "n_ecommerce_agent",
+      "sourceHandle": "seguir",
+      "target": "n_ecommerce_wait",
+      "role": "loopback"
+    },
+    {
+      "id": "e_ecommerce_advisor",
+      "source": "n_ecommerce_agent",
+      "sourceHandle": "asesor",
+      "target": "n_handoff",
+      "tag": "HANDOFF"
+    },
+    {
+      "id": "e_ecommerce_menu",
+      "source": "n_ecommerce_agent",
+      "sourceHandle": "menu",
+      "target": "n_menu",
+      "tag": "MENU"
+    },
+    {
+      "id": "e_meudim_api_agent",
+      "source": "n_meudim_api_wait",
+      "target": "n_meudim_api_agent"
+    },
+    {
+      "id": "e_meudim_api_seguir",
+      "source": "n_meudim_api_agent",
+      "sourceHandle": "seguir",
+      "target": "n_meudim_api_wait",
+      "role": "loopback"
+    },
+    {
+      "id": "e_meudim_api_advisor",
+      "source": "n_meudim_api_agent",
+      "sourceHandle": "asesor",
+      "target": "n_handoff",
+      "tag": "HANDOFF"
+    },
+    {
+      "id": "e_meudim_api_menu",
+      "source": "n_meudim_api_agent",
+      "sourceHandle": "menu",
+      "target": "n_menu",
+      "tag": "MENU"
+    },
+    {
+      "id": "e_meudim_store_agent",
+      "source": "n_meudim_store_wait",
+      "target": "n_meudim_store_agent"
+    },
+    {
+      "id": "e_meudim_store_seguir",
+      "source": "n_meudim_store_agent",
+      "sourceHandle": "seguir",
+      "target": "n_meudim_store_wait",
+      "role": "loopback"
+    },
+    {
+      "id": "e_meudim_store_advisor",
+      "source": "n_meudim_store_agent",
+      "sourceHandle": "asesor",
+      "target": "n_handoff",
+      "tag": "HANDOFF"
+    },
+    {
+      "id": "e_meudim_store_menu",
+      "source": "n_meudim_store_agent",
+      "sourceHandle": "menu",
+      "target": "n_menu",
+      "tag": "MENU"
+    },
+    {
+      "id": "e_cards_agent",
+      "source": "n_cards_wait",
+      "target": "n_cards_agent"
+    },
+    {
+      "id": "e_cards_seguir",
+      "source": "n_cards_agent",
+      "sourceHandle": "seguir",
+      "target": "n_cards_wait",
+      "role": "loopback"
+    },
+    {
+      "id": "e_cards_advisor",
+      "source": "n_cards_agent",
+      "sourceHandle": "asesor",
+      "target": "n_handoff",
+      "tag": "HANDOFF"
+    },
+    {
+      "id": "e_cards_menu",
+      "source": "n_cards_agent",
+      "sourceHandle": "menu",
+      "target": "n_menu",
+      "tag": "MENU"
+    },
+    {
+      "id": "e_tech_agent",
+      "source": "n_tech_wait",
+      "target": "n_tech_agent"
+    },
+    {
+      "id": "e_tech_seguir",
+      "source": "n_tech_agent",
+      "sourceHandle": "seguir",
+      "target": "n_tech_wait",
+      "role": "loopback"
+    },
+    {
+      "id": "e_tech_advisor",
+      "source": "n_tech_agent",
+      "sourceHandle": "asesor",
+      "target": "n_handoff",
+      "tag": "HANDOFF"
+    },
+    {
+      "id": "e_tech_menu",
+      "source": "n_tech_agent",
+      "sourceHandle": "menu",
+      "target": "n_menu",
+      "tag": "MENU"
+    },
+    {
+      "id": "e_handoff_end",
+      "source": "n_handoff",
+      "target": "n_end"
+    }
+  ]
+}

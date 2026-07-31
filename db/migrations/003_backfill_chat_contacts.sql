@@ -1,3 +1,7 @@
+-- migrate:baseline
+-- Histórica: backfill único ya ejecutado a mano sobre la base de producción.
+-- Se registra sin ejecutarse; en una base nueva no hay chats que convertir.
+--
 -- Convierte identidades ya observadas en chats en contactos de la organización.
 INSERT INTO contacts(org_id,phone_normalized,name)
 SELECT b.org_id, regexp_replace(ch.contact,'[^0-9]','','g'), NULLIF(ch.contact_name,'')

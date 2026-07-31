@@ -1,27 +1,30 @@
 # Deploy del backend (Bawto)
 
-Estado actual del despliegue en producción y cómo actualizarlo. Verificado
-e2e el 2026-07-22.
+Estado actual del despliegue en producción y cómo actualizarlo. Backend,
+frontend y topología final verificados el 2026-07-29.
 
 ## Topología
 
 ```
-WhatsApp / navegador
-        │ https
-        ▼
-nginx @ yuriser (209.74.83.236)          bawto.sistemuino.com
-        │
-        ├─ primario:  10.11.12.2:3009    ← PC de Gerson (WireGuard, APP_ENV=dev)
-        └─ backup:    127.0.0.1:3009     ← backend en el server  (APP_ENV=prod)
-                                            systemd: bawto-backend.service
-        ▼
-Postgres 16 (mismo server; escucha en 127.0.0.1 y 10.11.12.1)
+Internet
+   │ https://bawto.sistemuino.com
+   ▼
+nginx @ yuriser (209.74.83.236)
+   ├─ /webhook/whatsapp (exacto) → bawto_backend
+   │      ├─ primario: 10.11.12.2:3009 (PC por WireGuard, APP_ENV=dev)
+   │      └─ backup:   127.0.0.1:3009 (server, APP_ENV=prod)
+   │
+   └─ resto de rutas → Next.js 127.0.0.1:3010 (Docker)
+          ├─ Better Auth + JWKS
+          └─ /api/* → backend local 127.0.0.1:3009
+
+Postgres 16 vive en el mismo server y escucha en 127.0.0.1 y 10.11.12.1.
 ```
 
-- Con la PC encendida, nginx enruta **siempre al primario** (la respuesta de
-  `GET /` dice `env: dev`).
+- El panel y sus rutas autenticadas siempre usan el backend local del server.
+- Solo el webhook exacto conserva el failover PC → server.
 - Con la PC apagada, el connect falla a los **3 s** y nginx reintenta en el
-  backup (`env: prod`). Aplica también a POST (webhooks de Meta) gracias a
+  backup. Aplica al POST de Meta gracias a
   `non_idempotent`; es seguro porque el procesamiento es idempotente por
   `messages.wa_id`.
 - Ambas instancias usan **la misma base** (`sacs_chatbots`), así que el estado
@@ -34,7 +37,10 @@ Postgres 16 (mismo server; escucha en 127.0.0.1 y 10.11.12.1)
 | Binario | `/opt/bawto/bawto-backend` | Go, linux/amd64, corre como `www-data` |
 | Config | `/opt/bawto/.env` | `chmod 600`; Postgres por `127.0.0.1`; bindea `127.0.0.1:3009` |
 | Servicio | `/etc/systemd/system/bawto-backend.service` | `Restart=always`, enabled al boot |
-| nginx | `/etc/nginx/sites-available/bawto.conf` | upstream `bawto_backend` (primario + backup); backup del original en `/root/bawto.conf.bak.*` |
+| Frontend | `/opt/bawto-frontend` | release, `.env` con `chmod 600` y contenedor `bawto-frontend` |
+| Imagen frontend | `bawto-frontend:20260731-4` | Next standalone, Node 22, límite de 512 MiB |
+| nginx | `/etc/nginx/sites-available/bawto.conf` | frontend `:3010` + webhook con failover; backup `bawto.conf.bak.20260728-081909` |
+| Swap | `/swapfile` | 2 GiB, persistente mediante `/etc/fstab` |
 
 Comandos útiles en el server:
 
@@ -42,6 +48,9 @@ Comandos útiles en el server:
 systemctl status bawto-backend        # estado
 journalctl -u bawto-backend -f        # logs en vivo
 curl -s http://127.0.0.1:3009/        # health local ({"ok":true,...,"env":"prod"})
+docker ps --filter name=bawto-frontend # estado del panel
+docker logs -f bawto-frontend          # logs del panel
+curl -I http://127.0.0.1:3010/signin  # health local del frontend
 nginx -t && systemctl reload nginx    # tras tocar bawto.conf
 ```
 
@@ -58,13 +67,137 @@ ssh -p 22022 root@209.74.83.236 "systemctl stop bawto-backend && mv /opt/bawto/b
 ```
 
 (Se sube como `.new` y se mueve con el servicio parado porque Linux no deja
-sobreescribir un binario en ejecución.)
+sobreescribir un binario en ejecución. Conviene dejar el anterior como
+`bawto-backend.pre-<fase>` antes de mover: revertir es entonces un `mv`.)
 
-Verificación del failover (la respuesta delata quién contesta):
+**Esto actualiza solo la instancia del server.** La PC es el *primario* del webhook
+y corre su propio proceso (`go run .` en `backend/`), así que tras un redeploy las
+dos instancias tienen código distinto hasta que se reinicie también la de la PC. Da
+igual mientras el cambio no toque el camino del webhook —el panel siempre usa el
+backend del server—, pero si lo toca hay que reiniciar las dos. Reiniciar la de la
+PC es seguro en cualquier momento: nginx falla al primario en 3 s, cae al backup y
+el procesamiento es idempotente por `messages.wa_id`.
+
+Verificación pública básica:
 
 ```powershell
-curl.exe -s https://bawto.sistemuino.com/   # env:dev = PC · env:prod = server
+curl.exe -I https://bawto.sistemuino.com/signin
+curl.exe -s https://bawto.sistemuino.com/api/auth/jwks
 ```
+
+## Migraciones de base de datos
+
+Las migraciones son archivos numerados en `db/migrations/`, embebidos en el
+binario y aplicados por `cmd/migrate`. Cada una corre en su propia transacción y
+queda registrada en `schema_migrations` con el hash de su contenido.
+
+**No se aplican en el arranque del servidor, a propósito**: las dos instancias
+del failover comparten la misma base y una de ellas es la PC de desarrollo. Si
+el arranque migrara, encender la PC con código a medio hacer aplicaría DDL a
+producción sin que nadie lo pidiera.
+
+```bash
+# En el server, con el .env de producción cargado:
+cd /opt/bawto && ./bawto-backend-migrate status   # qué falta, sin tocar nada
+cd /opt/bawto && ./bawto-backend-migrate up       # aplica lo pendiente
+```
+
+Desde la PC se compila igual que el binario principal, cambiando el paquete:
+
+```powershell
+$env:GOOS='linux'; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'
+go build -trimpath -ldflags '-s -w' -o "$env:TEMP\bawto-backend-migrate" ./cmd/migrate
+Remove-Item Env:GOOS,Env:GOARCH,Env:CGO_ENABLED
+```
+
+Reglas:
+
+- **Respaldar antes** (`pg_dump`), sobre todo `bots`, `chats`, `flow_runs` y las
+  tablas de datos.
+- Una migración ya aplicada es **inmutable**. Si se edita su archivo, el migrador
+  aborta con el hash viejo y el nuevo en el mensaje: hay que crear una migración
+  nueva, no retocar la anterior.
+- Las migraciones `001`–`003` llevan la directiva `-- migrate:baseline`: se
+  aplicaron a mano antes de que existiera el migrador y su efecto ya está en
+  `schema.sql`, así que se **registran sin ejecutarse**. La 001 fallaría si se
+  reejecutara (referencia las columnas `bot_id` que ella misma elimina).
+- Una migración no puede abrir su propia transacción (`BEGIN`/`COMMIT`): el
+  migrador ya la envuelve y el `COMMIT` interno cerraría esa transacción. El
+  migrador lo rechaza antes de ejecutar.
+- Base nueva: `better-auth migrate` → `db/schema.sql` → `cmd/migrate`.
+
+### Sincronizar el catálogo de templates
+
+La API autenticada ofrece `POST /bots/:botId/templates/sync`. Para una operación o
+despliegue sin sesión web puede usarse el comando equivalente desde una máquina con
+acceso a Postgres y al `.env` del backend:
+
+```bash
+go run ./cmd/watemplates <botId> sync-catalog <wabaId>
+```
+
+Consulta todas las páginas de `/{WABA-ID}/message_templates`, actualiza
+estado/categoría/calidad/componentes y marca como `DELETED` las plantillas que dejaron
+de aparecer. No crea ni modifica plantillas en Meta.
+
+### Publicar un flujo desde un archivo
+
+El webhook ejecuta **la versión publicada** del flujo `message` de mayor
+prioridad. `bots.flow` ya no existe (migración `011_drop_bots_flow`), así que no
+hay copia paralela que pueda contradecirla.
+
+```bash
+./bawto-backend-migrate \
+  -publish-flow-file ./waa.json \
+  -bot-id <botId> \
+  -flow-key flow_waa_isp \
+  -author deploy
+```
+
+El comando valida con `engine.Validate`, normaliza, es idempotente por checksum y
+relee la versión publicada de la base para comprobar que coincide con el archivo.
+
+Un bot sin flujo `message` publicado no ejecuta nada: el webhook responde con el
+eco. Pausar o archivar un flujo tiene ese efecto a propósito.
+
+## Rollback de la migración multiflujo
+
+Los flags están separados (PLAN §17) porque un flag único obligaría a apagar los
+recordatorios para revertir el dispatcher, que es lo contrario de lo que se
+querría en un incidente. Se ponen en `/opt/bawto/.env` y requieren
+`systemctl restart bawto-backend`.
+
+| Flag | Default | Qué apaga | Efecto al desactivar |
+|---|---|---|---|
+| `SCHEDULER_ENABLED` | `true` | Cron + worker de entrega | Deja de encolar y entregar; no borra runs |
+| `MULTI_FLOW_DISPATCH_ENABLED` | `false` | Sesiones y selección de flujo | Vuelve a `chats.current_layer` (fase 7; hoy no lo lee nadie) |
+
+`FLOWS_TABLE_ENABLED` **ya no existe**: la lectura desde `flows` dejó de ser
+opcional al eliminarse `bots.flow`, y un flag cuyo apagado no tiene destino solo
+sirve para confundir. El rollback de un flujo es restaurar su versión anterior
+(`POST /bots/:botId/flows/:flowId/versions/:versionId/restore` + publicar), que es
+más preciso que revertir el camino de lectura entero.
+
+Los parámetros opcionales del scheduler son `SCHEDULER_CATCHUP_WINDOW=2h`,
+`SCHEDULER_LOCK_TIMEOUT=10m`, `SCHEDULER_CHAT_POSTPONE=2h` y
+`SCHEDULER_WABA_MPS=5`. La correlación sin cita usa
+`REMINDER_CORRELATION_WINDOW=72h`.
+
+Si hay que frenar los envíos programados: `SCHEDULER_ENABLED=false`. El webhook
+entrante **sigue atendiendo**; solo se detiene el cron y la entrega saliente.
+
+Qué **no** hay que borrar en un rollback:
+
+- Las tablas `flows` y `flow_versions` ni sus filas. Son la **única** copia del
+  grafo desde la migración `011`: borrarlas deja a los bots sin flujo y destruye
+  el historial de versiones publicadas.
+- Los `flow_runs`. Si alguno no debe entregarse, se marca `cancelled`; no se
+  borra.
+- El registro `schema_migrations`. Borrar una fila haría que el migrador intente
+  reaplicar esa migración.
+
+No existe un `down` por migración: las de esta fase son aditivas y el rollback
+real es el flag. Revertir el esquema exigiría restaurar el respaldo.
 
 ## Diferencias del `.env` de producción vs dev
 
@@ -73,7 +206,8 @@ curl.exe -s https://bawto.sistemuino.com/   # env:dev = PC · env:prod = server
 | `APP_ENV` | `prod` | `dev` |
 | `SERVER_PORT` | `127.0.0.1:3009` (solo loopback; nginx es el frontdoor) | `:3009` |
 | `DATABASE_URL` | host `127.0.0.1` (Postgres local) | host `10.11.12.1` (vía WireGuard) |
-| `JWKS_URL` | *(default `localhost:3000` — ver caveat)* | default |
+| `JWKS_URL` | `http://127.0.0.1:3010/api/auth/jwks` | frontend dev en `localhost:3000` |
+| `CORS_ORIGINS` | `https://bawto.sistemuino.com` | origen local de desarrollo |
 
 El resto (claves de cifrado, secretos de Meta, IA) es idéntico.
 
@@ -83,14 +217,22 @@ El resto (claves de cifrado, secretos de Meta, IA) es idéntico.
 
 ## Caveats conocidos
 
-1. **Scheduler duplicado** — con ambas instancias arriba, las dos corren el
-   worker de cron contra la misma BD. Los runs son idempotentes por
-   registro/contacto, pero falta un lock (p. ej. `pg_advisory_lock`) para que
-   solo una instancia programe envíos.
-2. **JWKS / rutas autenticadas** — el backend del server valida JWT contra el
-   default `http://localhost:3000/api/auth/jwks`, donde no corre ningún
-   frontend. En failover solo funciona el path del **webhook/bot** (que es lo
-   crítico); el panel autenticado no. Se resuelve al desplegar el frontend en
-   el server (ajustar entonces `JWKS_URL` en `/opt/bawto/.env`).
-3. **`fail_timeout=10s`** — tras un fallo del primario, nginx lo marca caído
+1. **`fail_timeout=10s`** — tras un fallo del primario, nginx lo marca caído
    10 s; al reencender la PC puede tardar hasta ~10 s en volver al primario.
+
+El scheduler ya no es un caveat: ambas instancias pueden ejecutar workers de
+entrega con `FOR UPDATE SKIP LOCKED`, mientras una conexión dedicada mantiene el
+advisory lock de descubrimiento. `run_key` único sigue siendo la garantía dura.
+
+## Frontend: release y actualización
+
+El contenedor publica solo en loopback mediante `--network host`; nginx es el
+único frontdoor. El `.env` de producción usa:
+
+- `BETTER_AUTH_URL=https://bawto.sistemuino.com`
+- `GO_API_URL=http://127.0.0.1:3009`
+- Postgres local (`127.0.0.1`)
+
+Para un nuevo release, crear una etiqueta nueva, comprobar `http://127.0.0.1:3010`
+y recién entonces recargar nginx. No reutilizar el puerto `3000`: pertenece al
+servicio Vox en este servidor.

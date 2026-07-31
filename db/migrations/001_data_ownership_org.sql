@@ -1,3 +1,9 @@
+-- migrate:baseline
+-- Histórica: se aplicó a mano antes de que existiera el migrador, y su efecto
+-- ya está en schema.sql (contacts/contact_fields/audiences/data_objects con
+-- org_id y sin bot_id). El migrador la registra sin ejecutarla: volver a
+-- correrla fallaría, porque referencia las columnas bot_id que ella misma borra.
+--
 -- Mueve la propiedad de datos de bots hacia organizaciones.
 -- Aplicar una sola vez, después de respaldar la base.
 BEGIN;

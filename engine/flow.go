@@ -12,6 +12,10 @@ type Trigger struct {
 	Timezone string   `json:"timezone,omitempty"`
 	ViewID   string   `json:"viewId,omitempty"`
 	EventKey string   `json:"eventKey,omitempty"`
+	// ReplyIntent se inyecta como source_intent cuando una respuesta se
+	// correlaciona con un run de este flujo. Cada negocio define sus propias
+	// intenciones en la configuración del flujo.
+	ReplyIntent string `json:"replyIntent,omitempty"`
 }
 
 type Node struct {
@@ -27,6 +31,12 @@ type Node struct {
 	Instruction string   `json:"instruction,omitempty"`
 	Outputs     []string `json:"outputs,omitempty"`
 	AgentRef    string   `json:"agentRef,omitempty"`
+	// ContextMode controla si este agente recibe el historial del flujo.
+	// Vacío y "none" usan únicamente el mensaje/variables actuales.
+	ContextMode string `json:"contextMode,omitempty"` // none | recent
+	// Silent: el agente solo decide la rama y no le escribe al cliente. Evita el
+	// mensaje duplicado cuando la rama ya termina en un `send` con el texto oficial.
+	Silent bool `json:"silent,omitempty"`
 	// wait
 	Expect       string `json:"expect,omitempty"`
 	SaveAs       string `json:"saveAs,omitempty"`
@@ -46,6 +56,13 @@ type Edge struct {
 	Source       string `json:"source"`
 	Target       string `json:"target"`
 	SourceHandle string `json:"sourceHandle,omitempty"`
+	// Role es semántica explícita del editor; el motor sigue source → target.
+	Role string `json:"role,omitempty"` // loopback
+	// Tag es presentación del editor: la conexión se dibuja como una etiqueta
+	// con nombre en ambos extremos en vez de como una línea. El motor la ignora;
+	// está aquí para que el campo no se pierda si el grafo se reescribe desde
+	// esta struct.
+	Tag string `json:"tag,omitempty"`
 }
 
 type Flow struct {

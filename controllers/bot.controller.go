@@ -1,13 +1,11 @@
 package controllers
 
 import (
-	"encoding/json"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/Yzx7/sacs-chatbots/channels/whatsapp"
-	"github.com/Yzx7/sacs-chatbots/engine"
 	"github.com/Yzx7/sacs-chatbots/models"
 	"github.com/Yzx7/sacs-chatbots/types"
 )
@@ -108,37 +106,20 @@ func (con *Controller) DeleteBot(c *fiber.Ctx) error {
 	return con.ok(c, "bot eliminado", nil)
 }
 
-// GET /bots/:botId/flow — grafo del flujo (cualquier miembro).
-func (con *Controller) GetBotFlow(c *fiber.Ctx) error {
+// GET /bots/:botId/variables — catálogo de variables del bot para el editor.
+// Evita que el flujo referencie `{data_factura_x}` cuando el objeto se llama
+// `facturas`: el editor marca en rojo lo que no existe aquí.
+func (con *Controller) ListFlowVariables(c *fiber.Ctx) error {
 	bot, err := con.botWithRole(c, c.Params("botId"))
 	if err != nil {
 		return con.failErr(c, err)
 	}
-	return con.ok(c, "ok", bot.Flow)
-}
-
-// PUT /bots/:botId/flow — guarda el grafo del flujo (owner/admin/member).
-func (con *Controller) UpdateBotFlow(c *fiber.Ctx) error {
-	bot, err := con.botWithRole(c, c.Params("botId"), "owner", "admin", "member")
+	vars, err := models.FlowVariables(c.Context(), con.Env.Postgres, bot.ID)
 	if err != nil {
-		return con.failErr(c, err)
+		con.Env.Logger.Error("flow variables", "bot", bot.ID, "err", err.Error())
+		return con.fail(c, fiber.StatusInternalServerError, "no se pudo leer el catálogo de variables")
 	}
-	body := c.Body()
-	if !json.Valid(body) {
-		return con.fail(c, fiber.StatusBadRequest, "flujo inválido (no es JSON)")
-	}
-	var flow engine.Flow
-	if err := json.Unmarshal(body, &flow); err != nil {
-		return con.fail(c, fiber.StatusBadRequest, "flujo inválido")
-	}
-	if err := engine.Validate(&flow); err != nil {
-		return con.fail(c, fiber.StatusBadRequest, err.Error())
-	}
-	if err := models.UpdateBotFlow(c.Context(), con.Env.Postgres, bot.ID, json.RawMessage(body)); err != nil {
-		con.Env.Logger.Error("UpdateBotFlow", "botId", bot.ID, "err", err.Error())
-		return con.fail(c, fiber.StatusInternalServerError, "no se pudo guardar el flujo")
-	}
-	return con.ok(c, "flujo guardado", nil)
+	return con.ok(c, "ok", vars)
 }
 
 // PUT /bots/:botId/channel — conecta el bot a WhatsApp (owner/admin).
@@ -229,6 +210,7 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 		Code          string `json:"code"`
 		PhoneNumberID string `json:"phoneNumberId"`
 		WabaID        string `json:"wabaId"`
+		BusinessID    string `json:"businessId"`
 		Mode          string `json:"mode"`
 		Pin           string `json:"pin"`
 	}
@@ -238,6 +220,7 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 	b.Code = strings.TrimSpace(b.Code)
 	b.PhoneNumberID = strings.TrimSpace(b.PhoneNumberID)
 	b.WabaID = strings.TrimSpace(b.WabaID)
+	b.BusinessID = strings.TrimSpace(b.BusinessID)
 	b.Mode = strings.TrimSpace(b.Mode)
 	b.Pin = strings.TrimSpace(b.Pin)
 	if b.Code == "" || b.PhoneNumberID == "" || b.WabaID == "" {
@@ -273,7 +256,10 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 	if err != nil {
 		return con.fail(c, fiber.StatusInternalServerError, "no se pudo cifrar el token")
 	}
-	if err := models.UpdateBotChannel(c.Context(), con.Env.Postgres, bot.ID, "wsp", b.PhoneNumberID, "", enc); err != nil {
+	if err := models.UpdateBotChannelEmbedded(
+		c.Context(), con.Env.Postgres, bot.ID, "wsp", b.PhoneNumberID, "",
+		b.WabaID, b.BusinessID, enc,
+	); err != nil {
 		return con.fail(c, fiber.StatusInternalServerError, "no se pudo conectar el canal (¿phone_number_id ya usado?)")
 	}
 	return con.ok(c, "canal conectado por Embedded Signup", nil)

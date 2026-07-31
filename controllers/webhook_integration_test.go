@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Yzx7/sacs-chatbots/config"
+	"github.com/Yzx7/sacs-chatbots/engine"
 	"github.com/Yzx7/sacs-chatbots/env"
 	"github.com/Yzx7/sacs-chatbots/helpers"
 	"github.com/Yzx7/sacs-chatbots/models"
@@ -81,7 +82,7 @@ func TestWhatsAppPipelineIntegration(t *testing.T) {
 		t.Fatalf("UpdateBotChannel: %v", err)
 	}
 
-	payload := []byte(`{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"PNID"},"contacts":[{"profile":{"name":"Ana"}}],"messages":[{"from":"51999","id":"wamid.itest1","type":"text","text":{"body":"hola"}}]}}]}]}`)
+	payload := []byte(`{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"PNID"},"contacts":[{"profile":{"name":"Ana"}}],"messages":[{"from":"51999888777","id":"wamid.itest1","type":"text","text":{"body":"hola"}}]}}]}]}`)
 
 	// Procesar dos veces (idempotencia por wa_id).
 	con.processWhatsApp(payload)
@@ -91,7 +92,7 @@ func TestWhatsAppPipelineIntegration(t *testing.T) {
 	if gotBody == nil {
 		t.Fatal("la Cloud API (mock) no recibió el eco")
 	}
-	if gotBody["to"] != "51999" {
+	if gotBody["to"] != "51999888777" {
 		t.Fatalf("destinatario incorrecto: %v", gotBody["to"])
 	}
 	txt, _ := gotBody["text"].(map[string]any)
@@ -100,7 +101,7 @@ func TestWhatsAppPipelineIntegration(t *testing.T) {
 	}
 
 	// El mensaje entrante se guardó una sola vez (idempotencia).
-	chatID, err := models.UpsertChat(ctx, pool, bot.ID, "51999", "")
+	chatID, err := models.UpsertChat(ctx, pool, bot.ID, "51999888777", "")
 	if err != nil {
 		t.Fatalf("UpsertChat: %v", err)
 	}
@@ -167,11 +168,25 @@ func TestWhatsAppFlowEngineIntegration(t *testing.T) {
 	enc, _ := cph.Encrypt("TKN")
 	_ = models.UpdateBotChannel(ctx, pool, bot.ID, "wsp", "PNIDF", "", enc)
 
-	flowJSON := `{"id":"f","name":"F","trigger":{"type":"message","match":"any"},"nodes":[{"id":"s1","kind":"send","body":"Hola {input}"},{"id":"w1","kind":"wait"},{"id":"s2","kind":"send","body":"fin"}],"edges":[{"id":"e1","source":"trigger","target":"s1"},{"id":"e2","source":"s1","target":"w1"},{"id":"e3","source":"w1","target":"s2"}]}`
-	_ = models.UpdateBotFlow(ctx, pool, bot.ID, json.RawMessage(flowJSON))
+	// El webhook ejecuta la versión publicada del flujo `message`, así que el
+	// montaje de la prueba pasa por el mismo camino que el editor.
+	flowJSON := json.RawMessage(`{"id":"f","name":"F","trigger":{"type":"message","match":"any"},"nodes":[{"id":"s1","kind":"send","body":"Hola {input}"},{"id":"w1","kind":"wait"},{"id":"s2","kind":"send","body":"fin"}],"edges":[{"id":"e1","source":"trigger","target":"s1"},{"id":"e2","source":"s1","target":"w1"},{"id":"e3","source":"w1","target":"s2"}]}`)
+	flow, err := models.CreateFlow(ctx, pool, bot.ID, models.NewFlow{
+		Key: "flow_fe", Name: "F", TriggerType: "message", IsFallback: true, UserID: uid,
+	})
+	if err != nil {
+		t.Fatalf("CreateFlow: %v", err)
+	}
+	canonical, checksum, err := engine.CanonicalChecksum(flowJSON)
+	if err != nil {
+		t.Fatalf("CanonicalChecksum: %v", err)
+	}
+	if _, err := models.PublishFlow(ctx, pool, bot.ID, flow.ID, canonical, checksum, uid); err != nil {
+		t.Fatalf("PublishFlow: %v", err)
+	}
 
 	inbound := func(waID, text string) []byte {
-		return []byte(`{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"PNIDF"},"messages":[{"from":"51999","id":"` + waID + `","type":"text","text":{"body":"` + text + `"}}]}}]}]}`)
+		return []byte(`{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"PNIDF"},"messages":[{"from":"51999888777","id":"` + waID + `","type":"text","text":{"body":"` + text + `"}}]}}]}]}`)
 	}
 
 	con.processWhatsApp(inbound("wamid.f1", "hola"))

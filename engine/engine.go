@@ -11,8 +11,20 @@ import (
 type State struct {
 	NodeID       string            `json:"nodeId"`
 	Vars         map[string]string `json:"vars"`
+	History      []ChatMessage     `json:"history,omitempty"`
 	WaitingSince time.Time         `json:"waitingSince,omitempty"`
 	TimeoutHours int               `json:"timeoutHours,omitempty"`
+	// ResumeDirect reintenta el nodo indicado por NodeID en vez de tratarlo como
+	// un wait ya consumido. Se usa cuando falla una dependencia externa.
+	ResumeDirect bool `json:"resumeDirect,omitempty"`
+}
+
+// ChatMessage es un turno visible de la conversación que se conserva mientras
+// el flujo está activo. El adaptador IA lo convierte en mensajes reales
+// user/assistant, de modo que un loop wait → agent recuerda lo conversado.
+type ChatMessage struct {
+	Role    string `json:"role"` // user | assistant
+	Content string `json:"content"`
 }
 
 // Result es la salida de un avance del flujo.
@@ -38,12 +50,22 @@ type Deps struct {
 	MediaID   string
 	WaID      string
 	// Agent ejecuta un nodo IA: devuelve el texto a enviar y la rama de salida.
-	Agent func(instruction string, vars map[string]string, outputs []string) (reply, branch string, err error)
+	Agent func(nodeID, instruction string, vars map[string]string, outputs []string, silent bool) (reply, branch string, err error)
+	// AgentWithHistory es la variante conversacional. Los nodos con
+	// contextMode=recent reciben una copia del historial visible acumulado; los
+	// demás pueden usar el mismo adaptador con historial vacío.
+	AgentWithHistory func(nodeID, instruction string, vars map[string]string, outputs []string, history []ChatMessage, silent bool) (reply, branch string, err error)
 	// Tool ejecuta una función/API externa y devuelve un resultado (string).
 	Tool func(ref string, args, vars map[string]string) (result string, err error)
 }
 
 const maxSteps = 100
+
+const (
+	maxHistoryMessages = 30
+	maxHistoryRunes    = 16000
+	maxMessageRunes    = 4000
+)
 
 var varRe = regexp.MustCompile(`\{(\w+)\}`)
 
@@ -58,21 +80,43 @@ func Advance(flow *Flow, state *State, userInput string, deps Deps) (Result, err
 		state = nil
 	}
 
+	var history []ChatMessage
+	keepHistory := flowUsesRecentContext(flow)
 	if state == nil {
 		vars["input"] = userInput
 		cur = flow.next("trigger", "")
 	} else {
+		if keepHistory {
+			history = append(history, state.History...)
+		}
 		for k, v := range state.Vars {
 			vars[k] = v
 		}
 		vars["input"] = userInput
-		if w := flow.node(state.NodeID); w != nil {
+	}
+	if keepHistory {
+		history = appendChatMessage(history, "user", historyInput(userInput, deps.InputType))
+	}
+
+	if state != nil {
+		if state.ResumeDirect {
+			cur = state.NodeID
+		} else if w := flow.node(state.NodeID); w != nil {
 			if !inputMatches(w.Expect, deps.InputType) {
 				prompt := "Necesito que respondas con un mensaje de texto."
 				if w.Expect == "image" {
 					prompt = "Necesito que envíes una imagen para continuar."
 				}
-				return Result{Sends: []string{prompt}, State: state}, nil
+				if keepHistory {
+					history = appendChatMessage(history, "assistant", prompt)
+				}
+				return Result{Sends: []string{prompt}, State: &State{
+					NodeID:       state.NodeID,
+					Vars:         state.Vars,
+					History:      history,
+					WaitingSince: state.WaitingSince,
+					TimeoutHours: state.TimeoutHours,
+				}}, nil
 			}
 			if w.SaveAs != "" {
 				value := userInput
@@ -122,7 +166,11 @@ func Advance(flow *Flow, state *State, userInput string, deps Deps) (Result, err
 				}
 				templates = append(templates, TemplateSend{Name: n.TemplateName, Language: language, Params: params})
 			} else {
-				sends = append(sends, interpolate(n.Body, vars))
+				message := interpolate(n.Body, vars)
+				sends = append(sends, message)
+				if keepHistory {
+					history = appendChatMessage(history, "assistant", message)
+				}
 			}
 			cur = flow.next(cur, "")
 
@@ -144,20 +192,60 @@ func Advance(flow *Flow, state *State, userInput string, deps Deps) (Result, err
 			cur = flow.next(cur, "") // tag: sin efecto por ahora
 
 		case "wait":
-			return Result{Sends: sends, Templates: templates, State: &State{NodeID: n.ID, Vars: vars, WaitingSince: time.Now().UTC(), TimeoutHours: n.TimeoutHours}, Handoff: handoff}, nil
+			return Result{Sends: sends, Templates: templates, State: &State{
+				NodeID:       n.ID,
+				Vars:         vars,
+				History:      history,
+				WaitingSince: time.Now().UTC(),
+				TimeoutHours: n.TimeoutHours,
+			}, Handoff: handoff}, nil
 
 		case "agent":
 			var reply, branch string
 			var err error
-			if deps.Agent == nil {
-				return Result{Sends: sends, Templates: templates, Handoff: handoff}, fmt.Errorf("agente IA no configurado")
+			instruction := interpolate(n.Instruction, vars)
+			contextVars := agentContextVars(vars)
+			switch n.ContextMode {
+			case "recent":
+				if deps.AgentWithHistory == nil {
+					return Result{Sends: sends, Templates: templates, Handoff: handoff},
+						fmt.Errorf("agente IA con contexto no configurado")
+				}
+				reply, branch, err = deps.AgentWithHistory(
+					n.ID, instruction, contextVars, n.Outputs,
+					append([]ChatMessage(nil), history...), n.Silent,
+				)
+			default:
+				switch {
+				case deps.Agent != nil:
+					reply, branch, err = deps.Agent(n.ID, instruction, contextVars, n.Outputs, n.Silent)
+				case deps.AgentWithHistory != nil:
+					reply, branch, err = deps.AgentWithHistory(
+						n.ID, instruction, contextVars, n.Outputs, nil, n.Silent,
+					)
+				default:
+					return Result{Sends: sends, Templates: templates, Handoff: handoff}, fmt.Errorf("agente IA no configurado")
+				}
 			}
-			reply, branch, err = deps.Agent(interpolate(n.Instruction, vars), vars, n.Outputs)
 			if err != nil {
-				return Result{Sends: sends, Templates: templates, Handoff: handoff}, err
+				return Result{
+					Sends: sends, Templates: templates, Handoff: handoff,
+					State: &State{
+						NodeID:       n.ID,
+						Vars:         vars,
+						History:      history,
+						WaitingSince: time.Now().UTC(),
+						TimeoutHours: 24,
+						ResumeDirect: true,
+					},
+				}, err
 			}
-			if reply != "" {
+			// Un clasificador (silent) no habla: su rama ya lleva al mensaje oficial.
+			if reply != "" && !n.Silent {
 				sends = append(sends, reply)
+				if keepHistory {
+					history = appendChatMessage(history, "assistant", reply)
+				}
 			}
 			cur = flow.next(cur, branch)
 
@@ -184,6 +272,70 @@ func Advance(flow *Flow, state *State, userInput string, deps Deps) (Result, err
 	}
 
 	return Result{Sends: sends, Templates: templates, Done: true, Handoff: handoff}, nil
+}
+
+func historyInput(input, inputType string) string {
+	if strings.TrimSpace(input) != "" {
+		return input
+	}
+	switch inputType {
+	case "image":
+		return "[El usuario envió una imagen.]"
+	case "audio":
+		return "[El usuario envió un audio.]"
+	case "video":
+		return "[El usuario envió un video.]"
+	case "document":
+		return "[El usuario envió un documento.]"
+	default:
+		return ""
+	}
+}
+
+func flowUsesRecentContext(flow *Flow) bool {
+	for i := range flow.Nodes {
+		if flow.Nodes[i].Kind == "agent" && flow.Nodes[i].ContextMode == "recent" {
+			return true
+		}
+	}
+	return false
+}
+
+func appendChatMessage(history []ChatMessage, role, content string) []ChatMessage {
+	content = strings.TrimSpace(content)
+	if content == "" || role != "user" && role != "assistant" {
+		return history
+	}
+	runes := []rune(content)
+	if len(runes) > maxMessageRunes {
+		content = string(runes[:maxMessageRunes])
+	}
+	history = append(history, ChatMessage{Role: role, Content: content})
+	for len(history) > maxHistoryMessages || chatHistoryRunes(history) > maxHistoryRunes {
+		history = history[1:]
+	}
+	return history
+}
+
+func chatHistoryRunes(history []ChatMessage) int {
+	total := 0
+	for _, message := range history {
+		total += len([]rune(message.Content))
+	}
+	return total
+}
+
+// agentContextVars limita el contexto implícito del proveedor al mensaje actual
+// y su tipo. El resto de variables solo llega al agente cuando el autor del flujo
+// la referencia explícitamente en la instrucción y el motor la interpola.
+func agentContextVars(vars map[string]string) map[string]string {
+	context := make(map[string]string, 2)
+	for _, key := range []string{"input", "input_type"} {
+		if value, ok := vars[key]; ok {
+			context[key] = value
+		}
+	}
+	return context
 }
 
 func inputMatches(expect, inputType string) bool {

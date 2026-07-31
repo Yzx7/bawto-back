@@ -8,6 +8,7 @@ import (
 
 	"github.com/Yzx7/sacs-chatbots/config"
 	"github.com/Yzx7/sacs-chatbots/engine/ai"
+	"github.com/Yzx7/sacs-chatbots/events"
 	"github.com/Yzx7/sacs-chatbots/helpers"
 )
 
@@ -22,4 +23,5 @@ type Env struct {
 	LogCloser      io.Closer
 	Cipher         *helpers.Cipher // cifrado de secretos de canal (nil si TOKEN_ENC_KEY no está)
 	Agent          *ai.Agent       // nodo IA (MiniMax); nil si MINIMAX_API_KEY no está
+	Events         *events.Hub     // eventos de chat en vivo (SSE); nil deshabilita el stream
 }

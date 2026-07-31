@@ -20,6 +20,7 @@ type InboundMessage struct {
 	Type        MessageType // text | reply | image | other
 	Text        string      // texto (o título del reply)
 	ReplyID     string      // id del botón/lista seleccionado
+	QuotedWaID  string      // id del mensaje del negocio citado por el usuario
 	MediaID     string      // id de media del proveedor (imagen/documento)
 	MimeType    string      // tipo MIME informado por el canal
 	Caption     string      // texto adjunto a la media

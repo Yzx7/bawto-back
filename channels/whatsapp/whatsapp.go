@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,9 +64,12 @@ type webhookPayload struct {
 					WaID string `json:"wa_id"`
 				} `json:"contacts"`
 				Messages []struct {
-					From string `json:"from"`
-					ID   string `json:"id"`
-					Type string `json:"type"`
+					From    string `json:"from"`
+					ID      string `json:"id"`
+					Type    string `json:"type"`
+					Context struct {
+						ID string `json:"id"`
+					} `json:"context"`
 					Text struct {
 						Body string `json:"body"`
 					} `json:"text"`
@@ -110,6 +114,7 @@ func Parse(body []byte) ([]channels.InboundMessage, error) {
 					WaID:        m.ID,
 					From:        m.From,
 					ContactName: name,
+					QuotedWaID:  m.Context.ID,
 				}
 				switch m.Type {
 				case "text":
@@ -134,6 +139,105 @@ func Parse(body []byte) ([]channels.InboundMessage, error) {
 					im.Type = channels.MsgOther
 				}
 				out = append(out, im)
+			}
+		}
+	}
+	return out, nil
+}
+
+// DeliveryStatus es una actualización asíncrona de Meta para un mensaje que la
+// API ya había aceptado. Puede llegar repetida, desordenada o antes de que el
+// caller termine de persistir el envío.
+type DeliveryStatus struct {
+	ChannelID        string
+	MessageID        string
+	Status           string
+	OccurredAt       time.Time
+	RecipientID      string
+	ErrorCode        string
+	ErrorTitle       string
+	ErrorMessage     string
+	ErrorDetails     string
+	ConversationID   string
+	ConversationType string
+	PricingModel     string
+	PricingType      string
+	PricingCategory  string
+	Billable         *bool
+	OpaqueCallback   string
+}
+
+type statusPayload struct {
+	Entry []struct {
+		Changes []struct {
+			Value struct {
+				Metadata struct {
+					PhoneNumberID string `json:"phone_number_id"`
+				} `json:"metadata"`
+				Statuses []struct {
+					ID             string `json:"id"`
+					Status         string `json:"status"`
+					Timestamp      string `json:"timestamp"`
+					RecipientID    string `json:"recipient_id"`
+					OpaqueCallback string `json:"biz_opaque_callback_data"`
+					Conversation   struct {
+						ID     string `json:"id"`
+						Origin struct {
+							Type string `json:"type"`
+						} `json:"origin"`
+					} `json:"conversation"`
+					Pricing struct {
+						Billable     *bool  `json:"billable"`
+						PricingModel string `json:"pricing_model"`
+						Category     string `json:"category"`
+						Type         string `json:"type"`
+					} `json:"pricing"`
+					Errors []struct {
+						Code      int    `json:"code"`
+						Title     string `json:"title"`
+						Message   string `json:"message"`
+						ErrorData struct {
+							Details string `json:"details"`
+						} `json:"error_data"`
+					} `json:"errors"`
+				} `json:"statuses"`
+			} `json:"value"`
+		} `json:"changes"`
+	} `json:"entry"`
+}
+
+// ParseStatuses extrae statuses[] sin mezclarlos con mensajes entrantes.
+func ParseStatuses(body []byte) ([]DeliveryStatus, error) {
+	var payload statusPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	var out []DeliveryStatus
+	for _, entry := range payload.Entry {
+		for _, change := range entry.Changes {
+			for _, status := range change.Value.Statuses {
+				if status.ID == "" || status.Status == "" {
+					continue
+				}
+				occurredAt := time.Now().UTC()
+				if seconds, err := strconv.ParseInt(status.Timestamp, 10, 64); err == nil {
+					occurredAt = time.Unix(seconds, 0).UTC()
+				}
+				item := DeliveryStatus{
+					ChannelID: change.Value.Metadata.PhoneNumberID, MessageID: status.ID,
+					Status: status.Status, OccurredAt: occurredAt, RecipientID: status.RecipientID,
+					ConversationID: status.Conversation.ID, ConversationType: status.Conversation.Origin.Type,
+					PricingModel: status.Pricing.PricingModel, PricingCategory: status.Pricing.Category,
+					PricingType: status.Pricing.Type, Billable: status.Pricing.Billable,
+					OpaqueCallback: status.OpaqueCallback,
+				}
+				if len(status.Errors) > 0 {
+					item.ErrorCode = strconv.Itoa(status.Errors[0].Code)
+					item.ErrorTitle = status.Errors[0].Title
+					item.ErrorMessage = status.Errors[0].Message
+					item.ErrorDetails = status.Errors[0].ErrorData.Details
+				}
+				out = append(out, item)
 			}
 		}
 	}
@@ -205,6 +309,35 @@ type SendConfig struct {
 	PhoneNumberID string
 	Token         string // access token (descifrado)
 	HTTP          *http.Client
+}
+
+// APIError conserva la clasificación HTTP y Retry-After para que el scheduler
+// pueda decidir entre reintentar y terminar sin depender del texto del error.
+type APIError struct {
+	StatusCode int
+	Body       string
+	RetryAfter time.Duration
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("whatsapp send %d: %s", e.StatusCode, e.Body)
+}
+
+// AmbiguousSendError significa que la petición pudo haber llegado a Meta pero
+// no obtuvimos respuesta. Reenviarla automáticamente arriesgaría un duplicado.
+type AmbiguousSendError struct{ Err error }
+
+func (e *AmbiguousSendError) Error() string { return "whatsapp send ambiguo: " + e.Err.Error() }
+func (e *AmbiguousSendError) Unwrap() error { return e.Err }
+
+func retryAfter(h string, now time.Time) time.Duration {
+	if seconds, err := strconv.Atoi(strings.TrimSpace(h)); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if at, err := http.ParseTime(h); err == nil && at.After(now) {
+		return at.Sub(now)
+	}
+	return 0
 }
 
 // DownloadMedia resuelve el media_id y guarda una copia durable antes de que
@@ -353,12 +486,12 @@ func SendText(ctx context.Context, cfg SendConfig, to, body string) (string, err
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
-		return "", err
+		return "", &AmbiguousSendError{Err: err}
 	}
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		return "", fmt.Errorf("whatsapp send %d: %s", resp.StatusCode, string(rb))
+		return "", &APIError{StatusCode: resp.StatusCode, Body: string(rb), RetryAfter: retryAfter(resp.Header.Get("Retry-After"), time.Now())}
 	}
 	var r struct {
 		Messages []struct {
@@ -369,7 +502,51 @@ func SendText(ctx context.Context, cfg SendConfig, to, body string) (string, err
 	if len(r.Messages) > 0 {
 		return r.Messages[0].ID, nil
 	}
-	return "", nil
+	return "", fmt.Errorf("whatsapp: respuesta sin message id")
+}
+
+type TemplateStatus struct {
+	Name     string `json:"name"`
+	Language string `json:"language"`
+	Status   string `json:"status"`
+	Category string `json:"category"`
+}
+
+// GetTemplateStatus consulta la fuente de verdad de Meta antes de un envío
+// proactivo. En la fase 4 esta lectura podrá servirse desde el catálogo local.
+func GetTemplateStatus(ctx context.Context, cfg SendConfig, wabaID, name, language string) (*TemplateStatus, error) {
+	endpoint := fmt.Sprintf("%s/%s/%s/message_templates?name=%s&fields=name,language,status,category",
+		strings.TrimRight(cfg.APIBase, "/"), cfg.Version, wabaID, url.QueryEscape(name))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+cfg.Token)
+	hc := cfg.HTTP
+	if hc == nil {
+		hc = &http.Client{Timeout: 15 * time.Second}
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 300 {
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(rb), RetryAfter: retryAfter(resp.Header.Get("Retry-After"), time.Now())}
+	}
+	var result struct {
+		Data []TemplateStatus `json:"data"`
+	}
+	if err := json.Unmarshal(rb, &result); err != nil {
+		return nil, err
+	}
+	for i := range result.Data {
+		if result.Data[i].Name == name && result.Data[i].Language == language {
+			return &result.Data[i], nil
+		}
+	}
+	return nil, nil
 }
 
 // MarkMessageAsRead confirma a WhatsApp que el mensaje entrante fue leído.
@@ -454,12 +631,12 @@ func sendPayload(ctx context.Context, cfg SendConfig, payload map[string]any) (s
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
-		return "", err
+		return "", &AmbiguousSendError{Err: err}
 	}
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		return "", fmt.Errorf("whatsapp send %d: %s", resp.StatusCode, string(rb))
+		return "", &APIError{StatusCode: resp.StatusCode, Body: string(rb), RetryAfter: retryAfter(resp.Header.Get("Retry-After"), time.Now())}
 	}
 	var r struct {
 		Messages []struct {
@@ -470,5 +647,5 @@ func sendPayload(ctx context.Context, cfg SendConfig, payload map[string]any) (s
 	if len(r.Messages) > 0 {
 		return r.Messages[0].ID, nil
 	}
-	return "", nil
+	return "", fmt.Errorf("whatsapp: respuesta sin message id")
 }

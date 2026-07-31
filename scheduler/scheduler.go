@@ -1,56 +1,81 @@
-// Package scheduler convierte triggers schedule en flow_runs idempotentes.
+// Package scheduler ejecuta flujos programados con semántica durable e
+// idempotente. La unicidad de run_key es la garantía de corrección; el advisory
+// lock solo evita que dos instancias hagan el mismo trabajo de descubrimiento.
 package scheduler
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
+	"math/rand/v2"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/Yzx7/sacs-chatbots/channels/whatsapp"
 	"github.com/Yzx7/sacs-chatbots/config"
 	"github.com/Yzx7/sacs-chatbots/engine"
+	"github.com/Yzx7/sacs-chatbots/events"
 	"github.com/Yzx7/sacs-chatbots/helpers"
 	"github.com/Yzx7/sacs-chatbots/models"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/robfig/cron/v3"
 )
+
+const schedulerAdvisoryLock int64 = 0x424157544F02
 
 type Report struct{ Queued, Skipped, Total int }
 
-// QueueFlow resuelve la vista del trigger y reserva un run por registro/contacto.
-func QueueFlow(ctx context.Context, pool *pgxpool.Pool, bot *models.Bot, now time.Time) (Report, error) {
-	var flow engine.Flow
-	if json.Unmarshal(bot.Flow, &flow) != nil || flow.Trigger.Type != "schedule" || flow.Trigger.ViewID == "" {
-		return Report{}, fmt.Errorf("el bot no tiene un flujo schedule con viewId")
+var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+
+// Occurrences enumera los instantes exactos del cron en (lastTick, now].
+func Occurrences(expression string, loc *time.Location, lastTick, now time.Time) ([]time.Time, error) {
+	schedule, err := cronParser.Parse(expression)
+	if err != nil {
+		return nil, err
 	}
-	loc := time.UTC
+	cursor := lastTick.In(loc)
+	end := now.In(loc)
+	out := make([]time.Time, 0)
+	for len(out) < 10000 {
+		next := schedule.Next(cursor)
+		if next.After(end) {
+			return out, nil
+		}
+		out = append(out, next.UTC())
+		cursor = next
+	}
+	return nil, fmt.Errorf("cron produjo más de 10000 ocurrencias pendientes")
+}
+
+// QueueFlow resuelve la vista de la versión publicada y congela el contexto.
+func QueueFlow(ctx context.Context, pool *pgxpool.Pool, scheduled models.ScheduledFlow, at time.Time) (Report, error) {
+	var flow engine.Flow
+	if err := json.Unmarshal(scheduled.Definition, &flow); err != nil || flow.Trigger.Type != "schedule" || flow.Trigger.ViewID == "" {
+		return Report{}, fmt.Errorf("flujo schedule inválido o sin viewId")
+	}
+	location := time.UTC
 	if flow.Trigger.Timezone != "" {
 		var err error
-		loc, err = time.LoadLocation(flow.Trigger.Timezone)
+		location, err = time.LoadLocation(flow.Trigger.Timezone)
 		if err != nil {
-			return Report{}, fmt.Errorf("zona horaria inválida: %w", err)
+			return Report{}, fmt.Errorf("timezone inválida: %w", err)
 		}
 	}
-	records, err := models.ResolveDataView(ctx, pool, bot.ID, flow.Trigger.ViewID)
+	records, err := models.ResolveDataViewAt(ctx, pool, scheduled.BotID, flow.Trigger.ViewID, at.In(location))
 	if err != nil {
 		return Report{}, err
 	}
 	report := Report{Total: len(records)}
-	flowID := flow.ID
-	if flowID == "" {
-		flowID = "default"
-	}
-	dateKey := now.In(loc).Format("2006-01-02")
 	for _, record := range records {
-		contact, err := models.PrimaryContactForRecord(ctx, pool, bot.ID, record.ID)
-		if err != nil || contact == nil {
+		contact, err := models.PrimaryContactForRecord(ctx, pool, scheduled.BotID, record.ID)
+		if err != nil || contact == nil || contact.Status != "active" {
 			report.Skipped++
 			continue
 		}
-		vars, err := models.DataRecordContext(ctx, pool, bot.ID, record.ID)
+		vars, err := models.DataRecordContext(ctx, pool, scheduled.BotID, record.ID)
 		if err != nil {
 			return report, err
 		}
@@ -60,8 +85,10 @@ func QueueFlow(ctx context.Context, pool *pgxpool.Pool, bot *models.Bot, now tim
 			vars["contact_name"] = *contact.Name
 		}
 		raw, _ := json.Marshal(vars)
-		key := fmt.Sprintf("%s:%s:%s:%s", flowID, record.ID, contact.ID, dateKey)
-		_, created, err := models.CreateFlowRun(ctx, pool, bot.ID, flowID, record.ID, contact.ID, key, raw)
+		key := fmt.Sprintf("%s:%s:%s:%s:%s", scheduled.FlowID, scheduled.FlowVersionID,
+			record.ID, contact.ID, at.UTC().Truncate(time.Minute).Format(time.RFC3339))
+		_, created, err := models.CreateFlowRun(ctx, pool, scheduled.BotID, scheduled.FlowID,
+			scheduled.FlowVersionID, record.ID, contact.ID, key, at, raw)
 		if err != nil {
 			return report, err
 		}
@@ -74,14 +101,12 @@ func QueueFlow(ctx context.Context, pool *pgxpool.Pool, bot *models.Bot, now tim
 	return report, nil
 }
 
-// Start revisa cada minuto los flows schedule. La idempotencia en flow_runs
-// permite que dos ticks o dos instancias no dupliquen ejecuciones.
-func Start(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) {
+func Start(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config, log *slog.Logger) {
 	go func() {
 		tick := time.NewTicker(time.Minute)
 		defer tick.Stop()
 		for {
-			process(ctx, pool, log, time.Now())
+			process(ctx, pool, cfg, log, time.Now().UTC())
 			select {
 			case <-ctx.Done():
 				return
@@ -91,18 +116,88 @@ func Start(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) {
 	}()
 }
 
-// StartDelivery consume runs encolados. Requiere template nodes: un flow
-// programado nunca usa texto libre fuera de la ventana de 24 h.
-func StartDelivery(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config, cipher *helpers.Cipher, log *slog.Logger) {
+func process(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config, log *slog.Logger, now time.Time) {
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		log.Error("scheduler acquire", "err", err)
+		return
+	}
+	defer conn.Release()
+	var leader bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, schedulerAdvisoryLock).Scan(&leader); err != nil || !leader {
+		return
+	}
+	defer func() {
+		_, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, schedulerAdvisoryLock)
+	}()
+
+	flows, err := models.ListPublishedScheduleFlows(ctx, pool)
+	if err != nil {
+		log.Error("scheduler list flows", "err", err)
+		return
+	}
+	for _, scheduled := range flows {
+		var flow engine.Flow
+		if err := json.Unmarshal(scheduled.Definition, &flow); err != nil {
+			log.Error("scheduler definition", "flow", scheduled.FlowID, "err", err)
+			continue
+		}
+		loc := time.UTC
+		if flow.Trigger.Timezone != "" {
+			loc, err = time.LoadLocation(flow.Trigger.Timezone)
+			if err != nil {
+				log.Error("scheduler timezone", "flow", scheduled.FlowID, "err", err)
+				continue
+			}
+		}
+		if scheduled.LastTickAt == nil {
+			_ = models.AdvanceFlowTick(ctx, pool, scheduled.FlowID, now)
+			continue
+		}
+		occurrences, err := Occurrences(flow.Trigger.Cron, loc, *scheduled.LastTickAt, now)
+		if err != nil {
+			log.Error("scheduler cron", "flow", scheduled.FlowID, "err", err)
+			continue
+		}
+		ok := true
+		for _, occurrence := range occurrences {
+			if occurrence.Before(now.Add(-cfg.SchedulerCatchupWindow)) {
+				_ = models.RecordScheduleOccurrence(ctx, pool, scheduled.FlowID, scheduled.FlowVersionID,
+					occurrence, "skipped", "fuera de ventana de catch-up", 0, 0)
+				continue
+			}
+			report, qerr := QueueFlow(ctx, pool, scheduled, occurrence)
+			if qerr != nil {
+				ok = false
+				_ = models.RecordScheduleOccurrence(ctx, pool, scheduled.FlowID, scheduled.FlowVersionID,
+					occurrence, "failed", qerr.Error(), 0, 0)
+				log.Error("scheduler queue", "flow", scheduled.FlowID, "at", occurrence, "err", qerr)
+				break
+			}
+			_ = models.RecordScheduleOccurrence(ctx, pool, scheduled.FlowID, scheduled.FlowVersionID,
+				occurrence, "processed", "", report.Queued, report.Skipped)
+		}
+		if ok {
+			_ = models.AdvanceFlowTick(ctx, pool, scheduled.FlowID, now)
+		}
+	}
+}
+
+func StartDelivery(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config, cipher *helpers.Cipher, hub *events.Hub, log *slog.Logger) {
 	if cipher == nil {
 		log.Warn("delivery scheduler disabled: cipher unavailable")
 		return
 	}
+	host, _ := os.Hostname()
+	workerID := fmt.Sprintf("%s:%d", host, os.Getpid())
 	go func() {
 		tick := time.NewTicker(5 * time.Second)
 		defer tick.Stop()
 		for {
-			for deliverOne(ctx, pool, cfg, cipher, log) {
+			if recovered, err := models.RecoverStaleFlowRuns(ctx, pool, time.Now().Add(-cfg.SchedulerLockTimeout)); err == nil && recovered > 0 {
+				log.Warn("delivery recovered stale runs", "count", recovered)
+			}
+			for deliverOne(ctx, pool, cfg, cipher, hub, log, workerID) {
 			}
 			select {
 			case <-ctx.Done():
@@ -112,8 +207,17 @@ func StartDelivery(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config, 
 		}
 	}()
 }
-func deliverOne(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config, cipher *helpers.Cipher, log *slog.Logger) bool {
-	run, err := models.ClaimFlowRun(ctx, pool)
+
+type deliveryResult struct {
+	providerID string
+	wabaID     string
+	cancel     string
+	postpone   string
+	err        error
+}
+
+func deliverOne(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config, cipher *helpers.Cipher, hub *events.Hub, log *slog.Logger, workerID string) bool {
+	run, err := models.ClaimFlowRun(ctx, pool, workerID)
 	if err != nil {
 		log.Error("delivery claim", "err", err)
 		return false
@@ -121,136 +225,198 @@ func deliverOne(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config, cip
 	if run == nil {
 		return false
 	}
-	if err = deliver(ctx, pool, cfg, cipher, run); err != nil {
-		_ = models.FailFlowRun(ctx, pool, run.ID, err)
-		log.Error("delivery run", "run", run.ID, "err", err)
-		return true
+	result := deliver(ctx, pool, cfg, cipher, hub, run)
+	switch {
+	case result.cancel != "":
+		_ = models.CancelFlowRun(ctx, pool, run.ID, result.cancel)
+	case result.postpone != "":
+		_ = models.PostponeFlowRun(ctx, pool, run.ID, result.postpone, time.Now().Add(cfg.SchedulerChatPostpone), 3)
+	case result.err == nil:
+		_ = models.FinishFlowRun(ctx, pool, run.ID, result.providerID)
+	default:
+		classifyDeliveryError(ctx, pool, run, result.wabaID, result.err, log)
 	}
-	_ = models.FinishFlowRun(ctx, pool, run.ID)
 	return true
 }
-func deliver(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config, cipher *helpers.Cipher, run *models.FlowRun) error {
-	bot, err := models.GetBot(ctx, pool, run.BotID)
-	if err != nil || bot == nil {
-		return fmt.Errorf("bot no encontrado")
+
+func classifyDeliveryError(ctx context.Context, pool *pgxpool.Pool, run *models.FlowRun, wabaID string, cause error, log *slog.Logger) {
+	var ambiguous *whatsapp.AmbiguousSendError
+	if errors.As(cause, &ambiguous) {
+		_ = models.UnverifyFlowRun(ctx, pool, run.ID, cause.Error())
+		log.Error("delivery unverified", "run", run.ID, "err", cause)
+		return
+	}
+	var api *whatsapp.APIError
+	if errors.As(cause, &api) {
+		code := fmt.Sprint(api.StatusCode)
+		if api.StatusCode == 408 || api.StatusCode == 429 || api.StatusCode >= 500 {
+			delay := retryDelay(run.Attempt)
+			if api.RetryAfter > delay {
+				delay = api.RetryAfter
+			}
+			if api.StatusCode == 429 && wabaID != "" {
+				_ = models.PauseWABA(ctx, pool, wabaID, time.Now().Add(delay))
+			}
+			_ = models.RetryFlowRun(ctx, pool, run.ID, code, "transient", cause.Error(), time.Now().Add(delay))
+			return
+		}
+		_ = models.FailFlowRun(ctx, pool, run.ID, code, "permanent", cause.Error())
+		return
+	}
+	_ = models.RetryFlowRun(ctx, pool, run.ID, "", "transient", cause.Error(), time.Now().Add(retryDelay(run.Attempt)))
+}
+
+func retryDelay(attempt int) time.Duration {
+	delays := []time.Duration{0, time.Minute, 5 * time.Minute, 30 * time.Minute, 2 * time.Hour}
+	i := attempt - 1
+	if i < 0 {
+		i = 0
+	}
+	if i >= len(delays) {
+		i = len(delays) - 1
+	}
+	if delays[i] == 0 {
+		return 0
+	}
+	return time.Duration(float64(delays[i]) * (0.5 + rand.Float64()))
+}
+
+func deliver(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config, cipher *helpers.Cipher, hub *events.Hub, run *models.FlowRun) deliveryResult {
+	definition, err := models.RunnableFlowDefinition(ctx, pool, run)
+	if err != nil {
+		return deliveryResult{err: err}
+	}
+	if definition == nil {
+		return deliveryResult{cancel: "flujo ya no está publicado"}
+	}
+	if run.ContactID == nil || run.DataRecordID == nil {
+		return deliveryResult{cancel: "contacto o registro eliminado"}
 	}
 	var flow engine.Flow
-	if json.Unmarshal(bot.Flow, &flow) != nil {
-		return fmt.Errorf("flujo inválido")
+	if err := json.Unmarshal(definition, &flow); err != nil {
+		return deliveryResult{err: fmt.Errorf("flujo inválido: %w", err)}
 	}
-	vars := map[string]string{}
-	_ = json.Unmarshal(run.Context, &vars)
-	result, err := engine.Advance(&flow, nil, "", engine.Deps{Context: vars})
+	location := time.UTC
+	if flow.Trigger.Timezone != "" {
+		location, err = time.LoadLocation(flow.Trigger.Timezone)
+		if err != nil {
+			return deliveryResult{cancel: "timezone inválida"}
+		}
+	}
+	stillInView, err := models.RecordStillInViewAt(ctx, pool, run.BotID, flow.Trigger.ViewID,
+		*run.DataRecordID, time.Now().In(location))
 	if err != nil {
-		return err
+		return deliveryResult{err: err}
 	}
-	if len(result.Sends) > 0 {
-		return fmt.Errorf("un flow schedule debe usar nodos template, no texto libre")
+	if !stillInView {
+		return deliveryResult{cancel: "registro ya no cumple la vista"}
 	}
-	if len(result.Templates) == 0 {
-		return fmt.Errorf("el flow schedule no produjo una plantilla")
+	capped, err := models.ReminderCapReached(ctx, pool, run.FlowID, *run.DataRecordID, 3)
+	if err != nil {
+		return deliveryResult{err: err}
 	}
-	if bot.ChannelID == nil || *bot.ChannelID == "" {
-		return fmt.Errorf("bot sin canal conectado")
+	if capped {
+		return deliveryResult{cancel: "límite de recordatorios alcanzado"}
+	}
+	contact, err := models.GetContact(ctx, pool, run.BotID, *run.ContactID)
+	if err != nil {
+		return deliveryResult{err: err}
+	}
+	if contact == nil || contact.Status != "active" {
+		return deliveryResult{cancel: "contacto inactivo, bloqueado o eliminado"}
+	}
+	if reason, err := models.ReminderChatBlock(ctx, pool, run.BotID, contact.PhoneNormalized); err != nil {
+		return deliveryResult{err: err}
+	} else if reason != "" {
+		return deliveryResult{postpone: reason}
+	}
+	bot, err := models.GetBot(ctx, pool, run.BotID)
+	if err != nil || bot == nil {
+		return deliveryResult{err: fmt.Errorf("bot no encontrado")}
+	}
+	if bot.ChannelID == nil || bot.WabaID == nil || *bot.ChannelID == "" || *bot.WabaID == "" {
+		return deliveryResult{cancel: "canal sin phone_number_id o waba_id"}
 	}
 	channel, err := models.GetBotByChannel(ctx, pool, whatsapp.Channel, *bot.ChannelID)
 	if err != nil || channel == nil {
-		return fmt.Errorf("canal no encontrado")
+		return deliveryResult{err: fmt.Errorf("canal no encontrado")}
 	}
 	token, err := cipher.Decrypt(channel.TokenEnc)
 	if err != nil {
-		return err
+		return deliveryResult{err: err}
 	}
-	contact, err := models.GetContact(ctx, pool, bot.ID, run.ContactID)
-	if err != nil || contact == nil {
-		return fmt.Errorf("contacto no encontrado")
-	}
-	sendCfg := whatsapp.SendConfig{APIBase: cfg.WhatsAppAPIBase, Version: cfg.WhatsAppAPIVersion, PhoneNumberID: *bot.ChannelID, Token: token}
-	for _, t := range result.Templates {
-		if _, err := whatsapp.SendTemplate(ctx, sendCfg, contact.PhoneNormalized, t.Name, t.Language, t.Params); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func process(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger, now time.Time) {
-	bots, err := models.ListScheduledBots(ctx, pool)
+	vars := map[string]string{}
+	_ = json.Unmarshal(run.Context, &vars)
+	execution, err := engine.Advance(&flow, nil, "", engine.Deps{Context: vars})
 	if err != nil {
-		log.Error("scheduler list bots", "err", err)
-		return
+		return deliveryResult{err: err}
 	}
-	for i := range bots {
-		var flow engine.Flow
-		if json.Unmarshal(bots[i].Flow, &flow) != nil {
-			continue
-		}
-		loc := time.UTC
-		if flow.Trigger.Timezone != "" {
-			var e error
-			loc, e = time.LoadLocation(flow.Trigger.Timezone)
-			if e != nil {
-				log.Warn("scheduler timezone", "bot", bots[i].ID, "err", e)
-				continue
-			}
-		}
-		if !CronMatches(flow.Trigger.Cron, now.In(loc)) {
-			continue
-		}
-		if _, err := QueueFlow(ctx, pool, &bots[i], now); err != nil {
-			log.Error("scheduler queue", "bot", bots[i].ID, "err", err)
-		}
+	if len(execution.Sends) > 0 || len(execution.Templates) != 1 {
+		return deliveryResult{cancel: "un flow schedule debe producir exactamente una plantilla"}
 	}
-}
-
-// CronMatches admite cron de cinco campos: *, números, listas, rangos y pasos
-// (por ejemplo: 0 9 1 * * o */15 8-18 * * 1-5).
-func CronMatches(cron string, at time.Time) bool {
-	parts := strings.Fields(cron)
-	if len(parts) != 5 {
-		return false
+	template := execution.Templates[0]
+	sendCfg := whatsapp.SendConfig{APIBase: cfg.WhatsAppAPIBase, Version: cfg.WhatsAppAPIVersion,
+		PhoneNumberID: *bot.ChannelID, Token: token}
+	status, err := whatsapp.GetTemplateStatus(ctx, sendCfg, *bot.WabaID, template.Name, template.Language)
+	if err != nil {
+		return deliveryResult{wabaID: *bot.WabaID, err: err}
 	}
-	values := []int{at.Minute(), at.Hour(), at.Day(), int(at.Month()), int(at.Weekday())}
-	ranges := [][2]int{{0, 59}, {0, 23}, {1, 31}, {1, 12}, {0, 6}}
-	for i, spec := range parts {
-		if !cronFieldMatches(spec, values[i], ranges[i][0], ranges[i][1]) {
-			return false
+	if status == nil || !strings.EqualFold(status.Status, "APPROVED") {
+		return deliveryResult{cancel: "plantilla no existe o no está aprobada"}
+	}
+	// La categoría se valida y advierte al publicar. Meta permite también
+	// MARKETING/AUTHENTICATION en schedules; el worker no debe convertir una
+	// advertencia explícitamente aceptada en una cancelación silenciosa.
+	spacing := time.Duration(float64(time.Second) / cfg.SchedulerWABAMPS)
+	wait, err := models.ReserveWABASlot(ctx, pool, *bot.WabaID, spacing)
+	if err != nil {
+		return deliveryResult{err: err}
+	}
+	if wait > 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return deliveryResult{err: ctx.Err()}
+		case <-timer.C:
 		}
 	}
-	return true
-}
-
-func cronFieldMatches(spec string, value, min, max int) bool {
-	for _, part := range strings.Split(spec, ",") {
-		base, step := part, 1
-		if before, after, ok := strings.Cut(part, "/"); ok {
-			base = before
-			var err error
-			step, err = strconv.Atoi(after)
-			if err != nil || step < 1 {
-				continue
-			}
-		}
-		lo, hi := min, max
-		if base != "*" {
-			if a, b, ok := strings.Cut(base, "-"); ok {
-				var e1, e2 error
-				lo, e1 = strconv.Atoi(a)
-				hi, e2 = strconv.Atoi(b)
-				if e1 != nil || e2 != nil {
-					continue
-				}
-			} else {
-				n, e := strconv.Atoi(base)
-				if e != nil {
-					continue
-				}
-				lo, hi = n, n
-			}
-		}
-		if value >= lo && value <= hi && (value-lo)%step == 0 {
-			return true
+	providerID, err := whatsapp.SendTemplate(ctx, sendCfg, contact.PhoneNormalized, template.Name, template.Language, template.Params)
+	if err != nil {
+		return deliveryResult{wabaID: *bot.WabaID, err: err}
+	}
+	if err := models.AttachFlowRunProviderMessage(ctx, pool, run.ID, providerID); err != nil {
+		return deliveryResult{providerID: providerID, wabaID: *bot.WabaID, err: &whatsapp.AmbiguousSendError{Err: err}}
+	}
+	contactName := ""
+	if contact.Name != nil {
+		contactName = *contact.Name
+	}
+	chatID, err := models.UpsertChat(ctx, pool, run.BotID, contact.PhoneNormalized, contactName)
+	if err != nil {
+		return deliveryResult{providerID: providerID, wabaID: *bot.WabaID, err: &whatsapp.AmbiguousSendError{Err: err}}
+	}
+	metadata, _ := json.Marshal(map[string]string{
+		"flowId": run.FlowID, "flowVersionId": run.FlowVersionID, "flowRunId": run.ID,
+		"dataRecordId": *run.DataRecordID, "templateName": template.Name,
+	})
+	body := "[Plantilla " + template.Name + "]"
+	if len(template.Params) > 0 {
+		body += " " + strings.Join(template.Params, " · ")
+	}
+	message, err := models.InsertOutboundMessageWithMetadata(ctx, pool, chatID, providerID, "template", body, metadata)
+	if err != nil {
+		return deliveryResult{providerID: providerID, wabaID: *bot.WabaID, err: &whatsapp.AmbiguousSendError{Err: err}}
+	}
+	if message != nil && hub != nil {
+		raw, _ := json.Marshal(message)
+		hub.Publish(ctx, events.Event{Type: "message", BotID: run.BotID, ChatID: chatID, Payload: raw})
+	}
+	if updates, err := models.ReconcileProviderStatusEvents(ctx, pool, providerID); err == nil && hub != nil {
+		for _, update := range updates {
+			raw, _ := json.Marshal(update)
+			hub.Publish(ctx, events.Event{Type: "message_status", BotID: update.BotID, ChatID: update.ChatID, Payload: raw})
 		}
 	}
-	return false
+	return deliveryResult{providerID: providerID, wabaID: *bot.WabaID}
 }

@@ -1,0 +1,1388 @@
+{
+  "id": "flow_waa_isp",
+  "name": "WAA — Atención integral ISP",
+  "trigger": {
+    "type": "message",
+    "match": "any"
+  },
+  "nodes": [
+    {
+      "id": "n_intent",
+      "kind": "agent",
+      "pos": {
+        "x": -277.7941827954836,
+        "y": 85.98443027085398
+      },
+      "instruction": "Clasifica la intención principal del mensaje actual del cliente: \"{input}\". Si {source_intent} es payment_reminder_reply, elige payment: la respuesta está correlacionada con un recordatorio transaccional. Elige billing si consulta deuda, saldo, factura, recibo o fecha de vencimiento, o si responde 1. Elige payment si quiere reportar un pago o enviar un comprobante, o si responde 2. Elige no_internet si no tiene conexión o responde 3. Elige slow si reporta lentitud o responde 4 sin más detalle. Elige intermittent si la conexión se corta o va y viene. Elige wifi si el problema es clave, cobertura o conexión Wi-Fi. Elige equipment si reporta router u ONT quemado, roto, mojado, con olor a quemado, chispas o riesgo eléctrico. Elige plans si consulta planes, cobertura, instalación o quiere contratar, o si responde 5. Elige admin si responde 6 sin detallar el trámite. Elige relocation si pide traslado o cambio de domicilio. Elige cancel si pide baja o cancelación. Elige reconnect si pide reconexión o reactivación. Elige human si pide asesor, agente o persona, o si responde 7. Elige menu si solo saluda, agradece, la intención no es clara o la opción es inválida. No escribas al cliente: elige únicamente una rama.",
+      "outputs": [
+        "billing",
+        "payment",
+        "no_internet",
+        "slow",
+        "intermittent",
+        "wifi",
+        "equipment",
+        "plans",
+        "admin",
+        "relocation",
+        "cancel",
+        "reconnect",
+        "human",
+        "menu"
+      ],
+      "silent": true
+    },
+    {
+      "id": "n_has_name",
+      "kind": "condition",
+      "pos": {
+        "x": 240.4531090180505,
+        "y": 1040.9419948348009
+      },
+      "expression": "contact_name"
+    },
+    {
+      "id": "n_menu_named",
+      "kind": "send",
+      "pos": {
+        "x": 600,
+        "y": 10
+      },
+      "body": "👋 Hola, *{contact_name}*. Soy *WAA*, tu asistente de internet.\n\n¿En qué te ayudo?\n1️⃣ Consultar factura o deuda\n2️⃣ Reportar un pago\n3️⃣ Estoy sin internet\n4️⃣ Internet lento, intermitente o problema Wi-Fi\n5️⃣ Planes, cobertura o nueva instalación\n6️⃣ Traslado, reconexión o cancelación\n7️⃣ Hablar con un asesor\n\nTambién puedes escribir directamente lo que sucede."
+    },
+    {
+      "id": "n_menu_generic",
+      "kind": "send",
+      "pos": {
+        "x": 734.5060290992333,
+        "y": 593.3614578406617
+      },
+      "body": "👋 Soy *WAA*, tu asistente de internet.\n\n¿En qué te ayudo?\n1️⃣ Consultar factura o deuda\n2️⃣ Reportar un pago\n3️⃣ Estoy sin internet\n4️⃣ Internet lento, intermitente o problema Wi-Fi\n5️⃣ Planes, cobertura o nueva instalación\n6️⃣ Traslado, reconexión o cancelación\n7️⃣ Hablar con un asesor\n\nTambién puedes escribir directamente lo que sucede."
+    },
+    {
+      "id": "n_wait_menu",
+      "kind": "wait",
+      "pos": {
+        "x": 900,
+        "y": 80
+      },
+      "expect": "text",
+      "saveAs": "menu_option",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_has_invoice_billing",
+      "kind": "condition",
+      "pos": {
+        "x": 133.1859399564322,
+        "y": -1280
+      },
+      "expression": "data_facturas_numero"
+    },
+    {
+      "id": "n_invoice_summary",
+      "kind": "send",
+      "pos": {
+        "x": 600,
+        "y": -1370
+      },
+      "body": "📄 Encontré la factura *{data_facturas_numero}*.\nPeríodo: {data_facturas_periodo}\nImporte: *{data_facturas_importe} {data_facturas_moneda}*\nVencimiento: *{data_facturas_vencimiento}*\nEstado: *{data_facturas_estado}*."
+    },
+    {
+      "id": "n_billing_menu",
+      "kind": "send",
+      "pos": {
+        "x": 900,
+        "y": -1370
+      },
+      "body": "Sobre esta factura puedes escribir:\n• *comprobante* para reportar un pago\n• *métodos de pago*\n• *reclamo* si no reconoces el importe\n• *menú* para volver"
+    },
+    {
+      "id": "n_wait_billing",
+      "kind": "wait",
+      "pos": {
+        "x": 1200,
+        "y": -1370
+      },
+      "expect": "text",
+      "saveAs": "billing_option",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_billing_choice",
+      "kind": "agent",
+      "pos": {
+        "x": 1500,
+        "y": -1370
+      },
+      "instruction": "Clasifica la respuesta sobre facturación: \"{input}\". Elige payment si quiere pagar, reportar pago o enviar comprobante. Elige methods si pregunta dónde o cómo pagar. Elige claim si desconoce el importe, considera que hay un error o solicita revisión. Elige menu si pide volver, saluda, responde algo ambiguo o no coincide. No escribas al cliente.",
+      "outputs": [
+        "payment",
+        "methods",
+        "claim",
+        "menu"
+      ],
+      "silent": true
+    },
+    {
+      "id": "n_no_invoice_billing",
+      "kind": "send",
+      "pos": {
+        "x": 600,
+        "y": -1190
+      },
+      "body": "No encontré una factura asociada automáticamente a este número. Para revisarlo sin mostrar datos de otra persona, envíame tu *código de cliente* o los *últimos 4 dígitos del documento del titular*."
+    },
+    {
+      "id": "n_wait_billing_identifier",
+      "kind": "wait",
+      "pos": {
+        "x": 900,
+        "y": -1190
+      },
+      "expect": "text",
+      "saveAs": "billing_identifier",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_payment_methods",
+      "kind": "send",
+      "pos": {
+        "x": 1800,
+        "y": -1510
+      },
+      "body": "Para protegerte de fraudes, un asesor confirmará el canal de pago autorizado y el importe vigente antes de que realices la operación."
+    },
+    {
+      "id": "n_ask_billing_claim",
+      "kind": "send",
+      "pos": {
+        "x": 1800,
+        "y": -1230
+      },
+      "body": "Cuéntame brevemente qué dato o importe de la factura deseas revisar. No envíes contraseñas ni información bancaria."
+    },
+    {
+      "id": "n_wait_billing_claim",
+      "kind": "wait",
+      "pos": {
+        "x": 2100,
+        "y": -1230
+      },
+      "expect": "text",
+      "saveAs": "billing_claim",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_has_invoice_payment",
+      "kind": "condition",
+      "pos": {
+        "x": 206.78664258967763,
+        "y": -961.6681898585495
+      },
+      "expression": "data_facturas_numero"
+    },
+    {
+      "id": "n_ask_receipt",
+      "kind": "send",
+      "pos": {
+        "x": 900,
+        "y": -1000
+      },
+      "body": "Perfecto 📎 Envíame ahora una *foto o captura del comprobante*. Deben verse claramente la fecha, el importe y la operación. No envíes claves ni datos completos de tu tarjeta."
+    },
+    {
+      "id": "n_wait_receipt",
+      "kind": "wait",
+      "pos": {
+        "x": 1200,
+        "y": -1000
+      },
+      "expect": "image",
+      "saveAs": "payment_receipt",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_record_receipt",
+      "kind": "tool",
+      "pos": {
+        "x": 1500,
+        "y": -1000
+      },
+      "toolRef": "record_payment_receipt",
+      "args": {},
+      "saveAs": "invoice_id"
+    },
+    {
+      "id": "n_payment_ok",
+      "kind": "send",
+      "pos": {
+        "x": 1800,
+        "y": -1070
+      },
+      "body": "✅ Recibí y guardé tu comprobante. La factura quedó *pendiente de validación*. Te avisaremos por este medio cuando finalice la revisión."
+    },
+    {
+      "id": "n_payment_error",
+      "kind": "send",
+      "pos": {
+        "x": 1800,
+        "y": -930
+      },
+      "body": "Recibí la imagen, pero no pude asociarla de forma segura con una factura pendiente. Conservaré la conversación y te derivaré con facturación para revisarla."
+    },
+    {
+      "id": "n_no_invoice_payment",
+      "kind": "send",
+      "pos": {
+        "x": 900,
+        "y": -850
+      },
+      "body": "Antes de recibir el comprobante necesito identificar la cuenta correcta. Envíame tu *código de cliente* o los *últimos 4 dígitos del documento del titular*."
+    },
+    {
+      "id": "n_wait_payment_identifier",
+      "kind": "wait",
+      "pos": {
+        "x": 1200,
+        "y": -850
+      },
+      "expect": "text",
+      "saveAs": "payment_identifier",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_nointernet_steps",
+      "kind": "send",
+      "pos": {
+        "x": 270.41476267681315,
+        "y": -715.7019334712015
+      },
+      "body": "Vamos a revisar la conexión 🔧\n\n1. Confirma que el router/ONT tenga energía.\n2. Revisa solo los cables externos: deben estar firmes, sin abrir el equipo.\n3. Desconecta la energía durante 30 segundos y vuelve a conectarla una sola vez.\n4. Espera hasta 3 minutos.\n\nResponde:\n1️⃣ Ya funciona\n2️⃣ La luz *LOS* está roja o parpadea\n3️⃣ La luz *PON* está apagada\n4️⃣ Las luces parecen normales, pero sigo sin internet"
+    },
+    {
+      "id": "n_wait_nointernet",
+      "kind": "wait",
+      "pos": {
+        "x": 620,
+        "y": -560
+      },
+      "expect": "text",
+      "saveAs": "nointernet_result",
+      "timeoutHours": 4
+    },
+    {
+      "id": "n_nointernet_result",
+      "kind": "agent",
+      "pos": {
+        "x": 930,
+        "y": -560
+      },
+      "instruction": "Clasifica el resultado del diagnóstico sin internet: \"{input}\". Elige resolved si ya funciona o responde 1. Elige los si menciona LOS roja/parpadeando o responde 2. Elige pon si PON está apagada o responde 3. Elige normal si las luces están normales pero no navega o responde 4. Elige unclear para cualquier otra respuesta. No escribas al cliente.",
+      "outputs": [
+        "resolved",
+        "los",
+        "pon",
+        "normal",
+        "unclear"
+      ],
+      "silent": true
+    },
+    {
+      "id": "n_support_resolved",
+      "kind": "send",
+      "pos": {
+        "x": 2450,
+        "y": -350
+      },
+      "body": "¡Excelente! ✅ El servicio volvió a funcionar. Si el problema se repite, escribe *intermitencia* para registrarlo y derivarlo."
+    },
+    {
+      "id": "n_los_notice",
+      "kind": "send",
+      "pos": {
+        "x": 1240,
+        "y": -700
+      },
+      "body": "La luz LOS roja suele indicar pérdida de señal óptica. No dobles ni desconectes el cable de fibra; requiere revisión técnica."
+    },
+    {
+      "id": "n_pon_notice",
+      "kind": "send",
+      "pos": {
+        "x": 1240,
+        "y": -620
+      },
+      "body": "La luz PON apagada indica que el equipo no está registrando correctamente en la red. Lo derivaré para una revisión técnica."
+    },
+    {
+      "id": "n_normal_steps",
+      "kind": "send",
+      "pos": {
+        "x": 1240,
+        "y": -500
+      },
+      "body": "Las luces están normales. Haz esta última prueba:\n• Desactiva y activa el Wi-Fi del teléfono.\n• Olvida la red y vuelve a ingresar la clave.\n• Si tienes otro dispositivo, comprueba si también está sin internet.\n\nResponde *sí* si volvió o *no* si continúa."
+    },
+    {
+      "id": "n_wait_normal",
+      "kind": "wait",
+      "pos": {
+        "x": 1550,
+        "y": -500
+      },
+      "expect": "text",
+      "saveAs": "normal_result",
+      "timeoutHours": 4
+    },
+    {
+      "id": "n_followup_result",
+      "kind": "agent",
+      "pos": {
+        "x": 2140,
+        "y": -350
+      },
+      "instruction": "Clasifica la respuesta del cliente después de una prueba técnica: \"{input}\". Elige resolved si indica que ya funciona, mejoró, sí o solucionado. Elige escalate si dice no, sigue igual, empeoró, no está seguro o responde de forma ambigua. No escribas al cliente.",
+      "outputs": [
+        "resolved",
+        "escalate"
+      ],
+      "silent": true
+    },
+    {
+      "id": "n_status_prompt",
+      "kind": "send",
+      "pos": {
+        "x": 1240,
+        "y": -380
+      },
+      "body": "Para ubicar la falla responde solo con una opción: *1 funciona*, *2 LOS roja*, *3 PON apagada* o *4 luces normales sin internet*."
+    },
+    {
+      "id": "n_slow_steps",
+      "kind": "send",
+      "pos": {
+        "x": 321.74988177962695,
+        "y": -356.10197092181625
+      },
+      "body": "Revisemos la lentitud 📶\n\n1. Acércate al router y deja una sola descarga o video activo.\n2. Reinicia el router durante 30 segundos y espera 3 minutos.\n3. Prueba nuevamente en dos dispositivos, si es posible.\n\nResponde:\n1️⃣ Ya mejoró\n2️⃣ Solo falla un dispositivo\n3️⃣ Falla en todos los dispositivos\n4️⃣ No pude realizar la prueba"
+    },
+    {
+      "id": "n_wait_slow",
+      "kind": "wait",
+      "pos": {
+        "x": 620,
+        "y": -130
+      },
+      "expect": "text",
+      "saveAs": "slow_result",
+      "timeoutHours": 4
+    },
+    {
+      "id": "n_slow_result",
+      "kind": "agent",
+      "pos": {
+        "x": 930,
+        "y": -130
+      },
+      "instruction": "Clasifica el resultado de la prueba de lentitud: \"{input}\". Elige resolved si mejoró o responde 1. Elige one_device si solo falla un equipo o responde 2. Elige all_devices si falla en todos o responde 3. Elige unknown si no pudo medir, responde 4 o es ambiguo. No escribas al cliente.",
+      "outputs": [
+        "resolved",
+        "one_device",
+        "all_devices",
+        "unknown"
+      ],
+      "silent": true
+    },
+    {
+      "id": "n_one_device_steps",
+      "kind": "send",
+      "pos": {
+        "x": 1240,
+        "y": -170
+      },
+      "body": "Si solo falla un dispositivo, el enlace principal está operativo. En ese equipo:\n• Olvida la red Wi-Fi y vuelve a conectarte.\n• Cierra descargas y actualizaciones.\n• Reinicia el dispositivo.\n\n¿Mejoró? Responde *sí* o *no*."
+    },
+    {
+      "id": "n_wait_device",
+      "kind": "wait",
+      "pos": {
+        "x": 1550,
+        "y": -170
+      },
+      "expect": "text",
+      "saveAs": "device_result",
+      "timeoutHours": 4
+    },
+    {
+      "id": "n_slow_escalate",
+      "kind": "send",
+      "pos": {
+        "x": 1240,
+        "y": -50
+      },
+      "body": "Necesitamos revisar señal, capacidad o configuración de la línea. Un técnico continuará con el diagnóstico."
+    },
+    {
+      "id": "n_intermittent_steps",
+      "kind": "send",
+      "pos": {
+        "x": 287.7695246750446,
+        "y": 673.8513016450019
+      },
+      "body": "Para una conexión intermitente:\n• Verifica que el equipo tenga ventilación y no esté cubierto.\n• Revisa que los cables externos estén firmes.\n• Reinicia una sola vez durante 30 segundos.\n• Observa durante 5 minutos si las luces se apagan o cambian.\n\n¿La conexión quedó estable? Responde *sí* o *no*."
+    },
+    {
+      "id": "n_wait_intermittent",
+      "kind": "wait",
+      "pos": {
+        "x": 671.6914259748665,
+        "y": 278.1747312550563
+      },
+      "expect": "text",
+      "saveAs": "intermittent_result",
+      "timeoutHours": 4
+    },
+    {
+      "id": "n_wifi_steps",
+      "kind": "send",
+      "pos": {
+        "x": 1024.638557033556,
+        "y": 398.7778605933237
+      },
+      "body": "Probemos el Wi-Fi 📡\n• Acércate al router.\n• Desactiva y activa el Wi-Fi del dispositivo.\n• Olvida la red y vuelve a ingresar la contraseña.\n• Evita colocar el router dentro de muebles o junto a electrodomésticos.\n\n¿Pudiste conectarte? Responde *sí* o *no*."
+    },
+    {
+      "id": "n_wait_wifi",
+      "kind": "wait",
+      "pos": {
+        "x": 1382.574201376793,
+        "y": 418.814311407397
+      },
+      "expect": "text",
+      "saveAs": "wifi_result",
+      "timeoutHours": 4
+    },
+    {
+      "id": "n_equipment_notice",
+      "kind": "send",
+      "pos": {
+        "x": 266.3494625101129,
+        "y": 866.4906618197507
+      },
+      "body": "⚠️ Por seguridad, no abras, manipules ni vuelvas a energizar un equipo quemado, mojado, con chispas u olor extraño. Si es seguro hacerlo, aléjate del equipo y espera indicaciones de un técnico."
+    },
+    {
+      "id": "n_ask_zone",
+      "kind": "send",
+      "pos": {
+        "x": 216.18263558986854,
+        "y": 1262.1425892693012
+      },
+      "body": "Con gusto te ayudamos a elegir un plan. Indícame el *distrito, sector o referencia* donde necesitas el servicio."
+    },
+    {
+      "id": "n_wait_zone",
+      "kind": "wait",
+      "pos": {
+        "x": 570.6714534443231,
+        "y": 1074.3776171622285
+      },
+      "expect": "text",
+      "saveAs": "sales_zone",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_ask_usage",
+      "kind": "send",
+      "pos": {
+        "x": 875.8201582343536,
+        "y": 1034.6047633227868
+      },
+      "body": "¿Cuántas personas o dispositivos se conectarán y para qué lo usarán principalmente? Por ejemplo: clases, streaming, videojuegos, cámaras o trabajo remoto."
+    },
+    {
+      "id": "n_wait_usage",
+      "kind": "wait",
+      "pos": {
+        "x": 1196.0442195711985,
+        "y": 1043.0500798278638
+      },
+      "expect": "text",
+      "saveAs": "sales_usage",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_sales_summary",
+      "kind": "send",
+      "pos": {
+        "x": 1550,
+        "y": 990
+      },
+      "body": "✅ Registré la zona *{sales_zone}* y el uso indicado: *{sales_usage}*. Un asesor comercial validará cobertura y te recomendará una opción adecuada."
+    },
+    {
+      "id": "n_admin_menu",
+      "kind": "send",
+      "pos": {
+        "x": 188.82526874494397,
+        "y": 1426.6356819049672
+      },
+      "body": "¿Qué trámite necesitas?\n1️⃣ Traslado o cambio de domicilio\n2️⃣ Cancelación del servicio\n3️⃣ Reconexión o reactivación\n4️⃣ Otro trámite / asesor"
+    },
+    {
+      "id": "n_wait_admin",
+      "kind": "wait",
+      "pos": {
+        "x": 510.31062902468864,
+        "y": 1438.0389216719627
+      },
+      "expect": "text",
+      "saveAs": "admin_option",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_admin_choice",
+      "kind": "agent",
+      "pos": {
+        "x": 839.5055802725881,
+        "y": 1325.2981858495505
+      },
+      "instruction": "Clasifica el trámite solicitado: \"{input}\". Elige relocation para traslado, mudanza, cambio de dirección o respuesta 1. Elige cancel para baja, cancelación o respuesta 2. Elige reconnect para reactivar, reconectar o respuesta 3. Elige human para otro trámite, asesor, respuesta 4 o cualquier respuesta ambigua. No escribas al cliente.",
+      "outputs": [
+        "relocation",
+        "cancel",
+        "reconnect",
+        "human"
+      ],
+      "silent": true
+    },
+    {
+      "id": "n_ask_move",
+      "kind": "send",
+      "pos": {
+        "x": 1240,
+        "y": 1180
+      },
+      "body": "Indícame la nueva dirección o sector, una referencia y la fecha aproximada del traslado. No envíes documentos completos por este chat."
+    },
+    {
+      "id": "n_wait_move",
+      "kind": "wait",
+      "pos": {
+        "x": 1550,
+        "y": 1180
+      },
+      "expect": "text",
+      "saveAs": "relocation_details",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_move_summary",
+      "kind": "send",
+      "pos": {
+        "x": 1860,
+        "y": 1180
+      },
+      "body": "Registré los datos del traslado: *{relocation_details}*. Un asesor validará cobertura, disponibilidad y posibles costos antes de confirmar."
+    },
+    {
+      "id": "n_cancel_info",
+      "kind": "send",
+      "pos": {
+        "x": 1240,
+        "y": 1340
+      },
+      "body": "La cancelación debe validarla el titular y puede requerir revisar equipos o saldos pendientes. Indícame brevemente el motivo de la solicitud."
+    },
+    {
+      "id": "n_wait_cancel",
+      "kind": "wait",
+      "pos": {
+        "x": 1550,
+        "y": 1340
+      },
+      "expect": "text",
+      "saveAs": "cancel_reason",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_cancel_summary",
+      "kind": "send",
+      "pos": {
+        "x": 1860,
+        "y": 1340
+      },
+      "body": "Recibí el motivo: *{cancel_reason}*. Un asesor continuará la validación con el titular. El servicio no se dará de baja automáticamente desde este chat."
+    },
+    {
+      "id": "n_has_invoice_reconnect",
+      "kind": "condition",
+      "pos": {
+        "x": 1358.8789578152878,
+        "y": 560.3006301624995
+      },
+      "expression": "data_facturas_numero"
+    },
+    {
+      "id": "n_reconnect_invoice",
+      "kind": "send",
+      "pos": {
+        "x": 1560.4466067595536,
+        "y": 1610.6052474502292
+      },
+      "body": "Para revisar la reconexión encontré la factura *{data_facturas_numero}* con estado *{data_facturas_estado}* e importe *{data_facturas_importe} {data_facturas_moneda}*.\n\n¿Ya realizaste el pago? Responde *sí*, *no* o *asesor*."
+    },
+    {
+      "id": "n_wait_reconnect",
+      "kind": "wait",
+      "pos": {
+        "x": 1860,
+        "y": 1460
+      },
+      "expect": "text",
+      "saveAs": "reconnect_answer",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_reconnect_result",
+      "kind": "agent",
+      "pos": {
+        "x": 2170,
+        "y": 1460
+      },
+      "instruction": "Clasifica la respuesta sobre reconexión: \"{input}\". Elige paid si ya pagó, tiene comprobante o responde sí. Elige pending si aún no pagó o responde no. Elige human si pide asesor o la respuesta es ambigua. No escribas al cliente.",
+      "outputs": [
+        "paid",
+        "pending",
+        "human"
+      ],
+      "silent": true
+    },
+    {
+      "id": "n_reconnect_pending",
+      "kind": "send",
+      "pos": {
+        "x": 2480,
+        "y": 1510
+      },
+      "body": "La reconexión se evaluará después de registrar el pago. Cuando lo realices, vuelve a escribir *reportar pago* y adjunta el comprobante."
+    },
+    {
+      "id": "n_reconnect_no_invoice",
+      "kind": "send",
+      "pos": {
+        "x": 1570.022662955811,
+        "y": 1774.1327756150347
+      },
+      "body": "No encontré una factura vinculada a este número. Un asesor verificará el estado del contrato antes de solicitar la reconexión."
+    },
+    {
+      "id": "n_handoff_technical",
+      "kind": "action",
+      "pos": {
+        "x": 2780,
+        "y": -430
+      },
+      "action": "handoff",
+      "params": {
+        "motivo": "diagnóstico técnico no resuelto o riesgo en el equipo"
+      }
+    },
+    {
+      "id": "n_handoff_technical_notice",
+      "kind": "send",
+      "pos": {
+        "x": 3090,
+        "y": -430
+      },
+      "body": "Te derivaré con *soporte técnico* 👷. El bot quedará en pausa para no interrumpir la atención."
+    },
+    {
+      "id": "n_handoff_billing",
+      "kind": "action",
+      "pos": {
+        "x": 2450,
+        "y": -1110
+      },
+      "action": "handoff",
+      "params": {
+        "motivo": "validación de factura, identidad o comprobante"
+      }
+    },
+    {
+      "id": "n_handoff_billing_notice",
+      "kind": "send",
+      "pos": {
+        "x": 2760,
+        "y": -1110
+      },
+      "body": "Te derivaré con *facturación* 👤. El bot quedará en pausa mientras revisan la cuenta y la información compartida."
+    },
+    {
+      "id": "n_handoff_sales",
+      "kind": "action",
+      "pos": {
+        "x": 1860,
+        "y": 990
+      },
+      "action": "handoff",
+      "params": {
+        "motivo": "consulta de cobertura, instalación o plan ISP"
+      }
+    },
+    {
+      "id": "n_handoff_sales_notice",
+      "kind": "send",
+      "pos": {
+        "x": 2170,
+        "y": 990
+      },
+      "body": "Te comunicaré con *ventas* para confirmar cobertura, instalación, precio y condiciones del plan."
+    },
+    {
+      "id": "n_handoff_admin",
+      "kind": "action",
+      "pos": {
+        "x": 2170,
+        "y": 1260
+      },
+      "action": "handoff",
+      "params": {
+        "motivo": "traslado, cancelación, reconexión u otro trámite administrativo"
+      }
+    },
+    {
+      "id": "n_handoff_admin_notice",
+      "kind": "send",
+      "pos": {
+        "x": 2480,
+        "y": 1260
+      },
+      "body": "Te derivaré con un *asesor administrativo* para validar titularidad, condiciones y próximos pasos."
+    },
+    {
+      "id": "n_handoff_general",
+      "kind": "action",
+      "pos": {
+        "x": 165.88483359042127,
+        "y": 1576.6356819049674
+      },
+      "action": "handoff",
+      "params": {
+        "motivo": "solicitud explícita de atención humana"
+      }
+    },
+    {
+      "id": "n_handoff_general_notice",
+      "kind": "send",
+      "pos": {
+        "x": 529.2456580100556,
+        "y": 1809.9072220879787
+      },
+      "body": "Claro. Te paso con un *asesor* 👤 y pausaré el bot para que la conversación continúe sin interrupciones."
+    },
+    {
+      "id": "n_end",
+      "kind": "action",
+      "pos": {
+        "x": 3420,
+        "y": 80
+      },
+      "action": "end"
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_trigger",
+      "source": "trigger",
+      "target": "n_intent"
+    },
+    {
+      "id": "e_intent_billing",
+      "source": "n_intent",
+      "sourceHandle": "billing",
+      "target": "n_has_invoice_billing"
+    },
+    {
+      "id": "e_intent_payment",
+      "source": "n_intent",
+      "sourceHandle": "payment",
+      "target": "n_has_invoice_payment"
+    },
+    {
+      "id": "e_intent_nointernet",
+      "source": "n_intent",
+      "sourceHandle": "no_internet",
+      "target": "n_nointernet_steps"
+    },
+    {
+      "id": "e_intent_slow",
+      "source": "n_intent",
+      "sourceHandle": "slow",
+      "target": "n_slow_steps"
+    },
+    {
+      "id": "e_intent_intermittent",
+      "source": "n_intent",
+      "sourceHandle": "intermittent",
+      "target": "n_intermittent_steps"
+    },
+    {
+      "id": "e_intent_wifi",
+      "source": "n_intent",
+      "sourceHandle": "wifi",
+      "target": "n_wifi_steps"
+    },
+    {
+      "id": "e_intent_equipment",
+      "source": "n_intent",
+      "sourceHandle": "equipment",
+      "target": "n_equipment_notice"
+    },
+    {
+      "id": "e_intent_plans",
+      "source": "n_intent",
+      "sourceHandle": "plans",
+      "target": "n_ask_zone"
+    },
+    {
+      "id": "e_intent_admin",
+      "source": "n_intent",
+      "sourceHandle": "admin",
+      "target": "n_admin_menu"
+    },
+    {
+      "id": "e_intent_relocation",
+      "source": "n_intent",
+      "sourceHandle": "relocation",
+      "target": "n_ask_move"
+    },
+    {
+      "id": "e_intent_cancel",
+      "source": "n_intent",
+      "sourceHandle": "cancel",
+      "target": "n_cancel_info"
+    },
+    {
+      "id": "e_intent_reconnect",
+      "source": "n_intent",
+      "sourceHandle": "reconnect",
+      "target": "n_has_invoice_reconnect"
+    },
+    {
+      "id": "e_intent_human",
+      "source": "n_intent",
+      "sourceHandle": "human",
+      "target": "n_handoff_general"
+    },
+    {
+      "id": "e_intent_menu",
+      "source": "n_intent",
+      "sourceHandle": "menu",
+      "target": "n_has_name"
+    },
+    {
+      "id": "e_name_yes",
+      "source": "n_has_name",
+      "sourceHandle": "true",
+      "target": "n_menu_named"
+    },
+    {
+      "id": "e_name_no",
+      "source": "n_has_name",
+      "sourceHandle": "false",
+      "target": "n_menu_generic"
+    },
+    {
+      "id": "e_menu_named_wait",
+      "source": "n_menu_named",
+      "target": "n_wait_menu"
+    },
+    {
+      "id": "e_menu_generic_wait",
+      "source": "n_menu_generic",
+      "target": "n_wait_menu"
+    },
+    {
+      "id": "e_menu_loop",
+      "source": "n_wait_menu",
+      "target": "n_intent"
+    },
+    {
+      "id": "e_billing_invoice_yes",
+      "source": "n_has_invoice_billing",
+      "sourceHandle": "true",
+      "target": "n_invoice_summary"
+    },
+    {
+      "id": "e_billing_invoice_no",
+      "source": "n_has_invoice_billing",
+      "sourceHandle": "false",
+      "target": "n_no_invoice_billing"
+    },
+    {
+      "id": "e_invoice_to_options",
+      "source": "n_invoice_summary",
+      "target": "n_billing_menu"
+    },
+    {
+      "id": "e_billing_options_wait",
+      "source": "n_billing_menu",
+      "target": "n_wait_billing"
+    },
+    {
+      "id": "e_billing_wait_choice",
+      "source": "n_wait_billing",
+      "target": "n_billing_choice"
+    },
+    {
+      "id": "e_billing_payment",
+      "source": "n_billing_choice",
+      "sourceHandle": "payment",
+      "target": "n_has_invoice_payment"
+    },
+    {
+      "id": "e_billing_methods",
+      "source": "n_billing_choice",
+      "sourceHandle": "methods",
+      "target": "n_payment_methods"
+    },
+    {
+      "id": "e_billing_claim",
+      "source": "n_billing_choice",
+      "sourceHandle": "claim",
+      "target": "n_ask_billing_claim"
+    },
+    {
+      "id": "e_billing_menu",
+      "source": "n_billing_choice",
+      "sourceHandle": "menu",
+      "target": "n_has_name"
+    },
+    {
+      "id": "e_no_invoice_identifier",
+      "source": "n_no_invoice_billing",
+      "target": "n_wait_billing_identifier"
+    },
+    {
+      "id": "e_identifier_billing_handoff",
+      "source": "n_wait_billing_identifier",
+      "target": "n_handoff_billing"
+    },
+    {
+      "id": "e_methods_handoff",
+      "source": "n_payment_methods",
+      "target": "n_handoff_billing"
+    },
+    {
+      "id": "e_claim_wait",
+      "source": "n_ask_billing_claim",
+      "target": "n_wait_billing_claim"
+    },
+    {
+      "id": "e_claim_handoff",
+      "source": "n_wait_billing_claim",
+      "target": "n_handoff_billing"
+    },
+    {
+      "id": "e_payment_invoice_yes",
+      "source": "n_has_invoice_payment",
+      "sourceHandle": "true",
+      "target": "n_ask_receipt"
+    },
+    {
+      "id": "e_payment_invoice_no",
+      "source": "n_has_invoice_payment",
+      "sourceHandle": "false",
+      "target": "n_no_invoice_payment"
+    },
+    {
+      "id": "e_receipt_wait",
+      "source": "n_ask_receipt",
+      "target": "n_wait_receipt"
+    },
+    {
+      "id": "e_receipt_tool",
+      "source": "n_wait_receipt",
+      "target": "n_record_receipt"
+    },
+    {
+      "id": "e_receipt_ok",
+      "source": "n_record_receipt",
+      "sourceHandle": "ok",
+      "target": "n_payment_ok"
+    },
+    {
+      "id": "e_receipt_error",
+      "source": "n_record_receipt",
+      "sourceHandle": "error",
+      "target": "n_payment_error"
+    },
+    {
+      "id": "e_payment_ok_end",
+      "source": "n_payment_ok",
+      "target": "n_end"
+    },
+    {
+      "id": "e_payment_error_handoff",
+      "source": "n_payment_error",
+      "target": "n_handoff_billing"
+    },
+    {
+      "id": "e_no_invoice_payment_wait",
+      "source": "n_no_invoice_payment",
+      "target": "n_wait_payment_identifier"
+    },
+    {
+      "id": "e_payment_identifier_handoff",
+      "source": "n_wait_payment_identifier",
+      "target": "n_handoff_billing"
+    },
+    {
+      "id": "e_nointernet_wait",
+      "source": "n_nointernet_steps",
+      "target": "n_wait_nointernet"
+    },
+    {
+      "id": "e_nointernet_classify",
+      "source": "n_wait_nointernet",
+      "target": "n_nointernet_result"
+    },
+    {
+      "id": "e_nointernet_resolved",
+      "source": "n_nointernet_result",
+      "sourceHandle": "resolved",
+      "target": "n_support_resolved"
+    },
+    {
+      "id": "e_nointernet_los",
+      "source": "n_nointernet_result",
+      "sourceHandle": "los",
+      "target": "n_los_notice"
+    },
+    {
+      "id": "e_nointernet_pon",
+      "source": "n_nointernet_result",
+      "sourceHandle": "pon",
+      "target": "n_pon_notice"
+    },
+    {
+      "id": "e_nointernet_normal",
+      "source": "n_nointernet_result",
+      "sourceHandle": "normal",
+      "target": "n_normal_steps"
+    },
+    {
+      "id": "e_nointernet_unclear",
+      "source": "n_nointernet_result",
+      "sourceHandle": "unclear",
+      "target": "n_status_prompt"
+    },
+    {
+      "id": "e_los_handoff",
+      "source": "n_los_notice",
+      "target": "n_handoff_technical"
+    },
+    {
+      "id": "e_pon_handoff",
+      "source": "n_pon_notice",
+      "target": "n_handoff_technical"
+    },
+    {
+      "id": "e_normal_wait",
+      "source": "n_normal_steps",
+      "target": "n_wait_normal"
+    },
+    {
+      "id": "e_normal_followup",
+      "source": "n_wait_normal",
+      "target": "n_followup_result"
+    },
+    {
+      "id": "e_status_retry",
+      "source": "n_status_prompt",
+      "target": "n_wait_nointernet"
+    },
+    {
+      "id": "e_slow_wait",
+      "source": "n_slow_steps",
+      "target": "n_wait_slow"
+    },
+    {
+      "id": "e_slow_classify",
+      "source": "n_wait_slow",
+      "target": "n_slow_result"
+    },
+    {
+      "id": "e_slow_resolved",
+      "source": "n_slow_result",
+      "sourceHandle": "resolved",
+      "target": "n_support_resolved"
+    },
+    {
+      "id": "e_slow_one",
+      "source": "n_slow_result",
+      "sourceHandle": "one_device",
+      "target": "n_one_device_steps"
+    },
+    {
+      "id": "e_slow_all",
+      "source": "n_slow_result",
+      "sourceHandle": "all_devices",
+      "target": "n_slow_escalate"
+    },
+    {
+      "id": "e_slow_unknown",
+      "source": "n_slow_result",
+      "sourceHandle": "unknown",
+      "target": "n_slow_escalate"
+    },
+    {
+      "id": "e_one_device_wait",
+      "source": "n_one_device_steps",
+      "target": "n_wait_device"
+    },
+    {
+      "id": "e_device_followup",
+      "source": "n_wait_device",
+      "target": "n_followup_result"
+    },
+    {
+      "id": "e_slow_handoff",
+      "source": "n_slow_escalate",
+      "target": "n_handoff_technical"
+    },
+    {
+      "id": "e_intermittent_wait",
+      "source": "n_intermittent_steps",
+      "target": "n_wait_intermittent"
+    },
+    {
+      "id": "e_intermittent_followup",
+      "source": "n_wait_intermittent",
+      "target": "n_followup_result"
+    },
+    {
+      "id": "e_wifi_wait",
+      "source": "n_wifi_steps",
+      "target": "n_wait_wifi"
+    },
+    {
+      "id": "e_wifi_followup",
+      "source": "n_wait_wifi",
+      "target": "n_followup_result"
+    },
+    {
+      "id": "e_followup_resolved",
+      "source": "n_followup_result",
+      "sourceHandle": "resolved",
+      "target": "n_support_resolved"
+    },
+    {
+      "id": "e_followup_escalate",
+      "source": "n_followup_result",
+      "sourceHandle": "escalate",
+      "target": "n_handoff_technical"
+    },
+    {
+      "id": "e_equipment_handoff",
+      "source": "n_equipment_notice",
+      "target": "n_handoff_technical"
+    },
+    {
+      "id": "e_support_resolved_end",
+      "source": "n_support_resolved",
+      "target": "n_end"
+    },
+    {
+      "id": "e_sales_zone_wait",
+      "source": "n_ask_zone",
+      "target": "n_wait_zone"
+    },
+    {
+      "id": "e_sales_usage_ask",
+      "source": "n_wait_zone",
+      "target": "n_ask_usage"
+    },
+    {
+      "id": "e_sales_usage_wait",
+      "source": "n_ask_usage",
+      "target": "n_wait_usage"
+    },
+    {
+      "id": "e_sales_summary",
+      "source": "n_wait_usage",
+      "target": "n_sales_summary"
+    },
+    {
+      "id": "e_sales_handoff",
+      "source": "n_sales_summary",
+      "target": "n_handoff_sales"
+    },
+    {
+      "id": "e_admin_wait",
+      "source": "n_admin_menu",
+      "target": "n_wait_admin"
+    },
+    {
+      "id": "e_admin_classify",
+      "source": "n_wait_admin",
+      "target": "n_admin_choice"
+    },
+    {
+      "id": "e_admin_relocation",
+      "source": "n_admin_choice",
+      "sourceHandle": "relocation",
+      "target": "n_ask_move"
+    },
+    {
+      "id": "e_admin_cancel",
+      "source": "n_admin_choice",
+      "sourceHandle": "cancel",
+      "target": "n_cancel_info"
+    },
+    {
+      "id": "e_admin_reconnect",
+      "source": "n_admin_choice",
+      "sourceHandle": "reconnect",
+      "target": "n_has_invoice_reconnect"
+    },
+    {
+      "id": "e_admin_human",
+      "source": "n_admin_choice",
+      "sourceHandle": "human",
+      "target": "n_handoff_general"
+    },
+    {
+      "id": "e_move_wait",
+      "source": "n_ask_move",
+      "target": "n_wait_move"
+    },
+    {
+      "id": "e_move_summary",
+      "source": "n_wait_move",
+      "target": "n_move_summary"
+    },
+    {
+      "id": "e_move_handoff",
+      "source": "n_move_summary",
+      "target": "n_handoff_admin"
+    },
+    {
+      "id": "e_cancel_wait",
+      "source": "n_cancel_info",
+      "target": "n_wait_cancel"
+    },
+    {
+      "id": "e_cancel_summary",
+      "source": "n_wait_cancel",
+      "target": "n_cancel_summary"
+    },
+    {
+      "id": "e_cancel_handoff",
+      "source": "n_cancel_summary",
+      "target": "n_handoff_admin"
+    },
+    {
+      "id": "e_reconnect_invoice_yes",
+      "source": "n_has_invoice_reconnect",
+      "sourceHandle": "true",
+      "target": "n_reconnect_invoice"
+    },
+    {
+      "id": "e_reconnect_invoice_no",
+      "source": "n_has_invoice_reconnect",
+      "sourceHandle": "false",
+      "target": "n_reconnect_no_invoice"
+    },
+    {
+      "id": "e_reconnect_wait",
+      "source": "n_reconnect_invoice",
+      "target": "n_wait_reconnect"
+    },
+    {
+      "id": "e_reconnect_classify",
+      "source": "n_wait_reconnect",
+      "target": "n_reconnect_result"
+    },
+    {
+      "id": "e_reconnect_paid",
+      "source": "n_reconnect_result",
+      "sourceHandle": "paid",
+      "target": "n_ask_receipt"
+    },
+    {
+      "id": "e_reconnect_pending",
+      "source": "n_reconnect_result",
+      "sourceHandle": "pending",
+      "target": "n_reconnect_pending"
+    },
+    {
+      "id": "e_reconnect_human",
+      "source": "n_reconnect_result",
+      "sourceHandle": "human",
+      "target": "n_handoff_billing"
+    },
+    {
+      "id": "e_reconnect_pending_end",
+      "source": "n_reconnect_pending",
+      "target": "n_end"
+    },
+    {
+      "id": "e_reconnect_no_invoice_handoff",
+      "source": "n_reconnect_no_invoice",
+      "target": "n_handoff_admin"
+    },
+    {
+      "id": "e_handoff_technical_notice",
+      "source": "n_handoff_technical",
+      "target": "n_handoff_technical_notice"
+    },
+    {
+      "id": "e_handoff_technical_end",
+      "source": "n_handoff_technical_notice",
+      "target": "n_end"
+    },
+    {
+      "id": "e_handoff_billing_notice",
+      "source": "n_handoff_billing",
+      "target": "n_handoff_billing_notice"
+    },
+    {
+      "id": "e_handoff_billing_end",
+      "source": "n_handoff_billing_notice",
+      "target": "n_end"
+    },
+    {
+      "id": "e_handoff_sales_notice",
+      "source": "n_handoff_sales",
+      "target": "n_handoff_sales_notice"
+    },
+    {
+      "id": "e_handoff_sales_end",
+      "source": "n_handoff_sales_notice",
+      "target": "n_end"
+    },
+    {
+      "id": "e_handoff_admin_notice",
+      "source": "n_handoff_admin",
+      "target": "n_handoff_admin_notice"
+    },
+    {
+      "id": "e_handoff_admin_end",
+      "source": "n_handoff_admin_notice",
+      "target": "n_end"
+    },
+    {
+      "id": "e_handoff_general_notice",
+      "source": "n_handoff_general",
+      "target": "n_handoff_general_notice"
+    },
+    {
+      "id": "e_handoff_general_end",
+      "source": "n_handoff_general_notice",
+      "target": "n_end"
+    }
+  ]
+}

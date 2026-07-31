@@ -51,9 +51,11 @@ type DataFilter struct {
 	Where []DataFilterRule `json:"where"`
 }
 type DataFilterRule struct {
-	Field string `json:"field"`
-	Op    string `json:"op"` // eq | neq | lt | lte | gt | gte | exists
-	Value string `json:"value,omitempty"`
+	Field    string `json:"field"`
+	Op       string `json:"op"` // eq | neq | lt | lte | gt | gte | exists | date_*_relative
+	Value    string `json:"value,omitempty"`
+	FromDays *int   `json:"fromDays,omitempty"`
+	ToDays   *int   `json:"toDays,omitempty"`
 }
 
 const dataObjectCols = `id::text AS id, org_id::text AS org_id, key, name, plural_name, created_at, updated_at`
@@ -84,6 +86,9 @@ func ListDataFields(ctx context.Context, p *pgxpool.Pool, botID, objectID string
 	return pgx.CollectRows(rows, pgx.RowToStructByName[DataField])
 }
 func UpsertDataField(ctx context.Context, p *pgxpool.Pool, botID, objectID, key, label, typ string, required bool) (*DataField, error) {
+	if err := ValidateDataFieldDefinition(key, label, typ); err != nil {
+		return nil, err
+	}
 	rows, e := p.Query(ctx, `INSERT INTO data_fields(object_id,key,label,type,required) SELECT o.id,$3,$4,$5,$6 FROM data_objects o WHERE o.id=$2::uuid AND o.org_id=(SELECT org_id FROM bots WHERE id=$1::uuid) ON CONFLICT(object_id,key) DO UPDATE SET label=EXCLUDED.label,type=EXCLUDED.type,required=EXCLUDED.required RETURNING `+dataFieldCols, botID, objectID, key, label, typ, required)
 	if e != nil {
 		return nil, e
@@ -91,6 +96,20 @@ func UpsertDataField(ctx context.Context, p *pgxpool.Pool, botID, objectID, key,
 	v, e := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[DataField])
 	return &v, e
 }
+
+func ValidateDataFieldDefinition(key, label, typ string) error {
+	key, label, typ = strings.TrimSpace(key), strings.TrimSpace(label), strings.TrimSpace(typ)
+	if key == "" || label == "" {
+		return errors.New("clave y etiqueta son obligatorias")
+	}
+	switch typ {
+	case "text", "number", "date", "boolean", "json":
+		return nil
+	default:
+		return fmt.Errorf("tipo de campo inválido %q", typ)
+	}
+}
+
 func ValidateDataRecord(fields []DataField, data json.RawMessage) error {
 	var values map[string]any
 	if !json.Valid(data) || json.Unmarshal(data, &values) != nil {
@@ -145,7 +164,11 @@ func CreateDataRecord(ctx context.Context, p *pgxpool.Pool, botID, objectID stri
 	return &v, e
 }
 func LinkRecordContact(ctx context.Context, p *pgxpool.Pool, botID, recordID, contactID, role string) error {
-	cmd, e := p.Exec(ctx, `INSERT INTO data_record_contacts(record_id,contact_id,role) SELECT r.id,c.id,$4 FROM data_records r JOIN data_objects o ON o.id=r.object_id JOIN contacts c ON c.org_id=o.org_id WHERE r.id=$2::uuid AND c.id=$3::uuid AND o.org_id=(SELECT org_id FROM bots WHERE id=$1::uuid) ON CONFLICT DO NOTHING`, botID, recordID, contactID, role)
+	// El `DO UPDATE` es lo que hace idempotente al vínculo. Con `DO NOTHING`, un
+	// segundo intento sobre el mismo par no afecta filas y la comprobación de
+	// abajo lo denunciaba como "no pertenece al bot": el error de propiedad y el
+	// de repetición son indistinguibles desde `RowsAffected`.
+	cmd, e := p.Exec(ctx, `INSERT INTO data_record_contacts(record_id,contact_id,role) SELECT r.id,c.id,$4 FROM data_records r JOIN data_objects o ON o.id=r.object_id JOIN contacts c ON c.org_id=o.org_id WHERE r.id=$2::uuid AND c.id=$3::uuid AND o.org_id=(SELECT org_id FROM bots WHERE id=$1::uuid) ON CONFLICT (record_id,contact_id,role) DO UPDATE SET role=EXCLUDED.role`, botID, recordID, contactID, role)
 	if e != nil {
 		return e
 	}
@@ -165,6 +188,13 @@ func CreateDataView(ctx context.Context, p *pgxpool.Pool, botID, objectID, name 
 	if len(filter) == 0 {
 		filter = json.RawMessage(`{}`)
 	}
+	fields, err := ListDataFields(ctx, p, botID, objectID)
+	if err != nil {
+		return nil, err
+	}
+	if err = ValidateDataFilter(fields, filter); err != nil {
+		return nil, err
+	}
 	rows, e := p.Query(ctx, `INSERT INTO data_views(object_id,name,filter) SELECT o.id,$3,$4::jsonb FROM data_objects o WHERE o.id=$2::uuid AND o.org_id=(SELECT org_id FROM bots WHERE id=$1::uuid) RETURNING `+dataViewCols, botID, objectID, name, filter)
 	if e != nil {
 		return nil, e
@@ -173,10 +203,76 @@ func CreateDataView(ctx context.Context, p *pgxpool.Pool, botID, objectID, name 
 	return &v, e
 }
 
+func intValue(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func ValidateDataFilter(fields []DataField, raw json.RawMessage) error {
+	if len(raw) == 0 || string(raw) == "{}" {
+		return nil
+	}
+	var filter DataFilter
+	if !json.Valid(raw) || json.Unmarshal(raw, &filter) != nil {
+		return errors.New("filtro de vista inválido")
+	}
+	fieldTypes := map[string]string{}
+	for _, field := range fields {
+		fieldTypes[field.Key] = field.Type
+	}
+	for _, rule := range filter.Where {
+		typ, ok := fieldTypes[rule.Field]
+		if !ok {
+			return fmt.Errorf("el campo %q no existe en el objeto", rule.Field)
+		}
+		switch rule.Op {
+		case "exists":
+		case "eq", "neq", "lt", "lte", "gt", "gte":
+			if typ == "date" {
+				if _, err := time.Parse("2006-01-02", rule.Value); err != nil {
+					return fmt.Errorf("el valor de %q debe tener formato AAAA-MM-DD", rule.Field)
+				}
+			}
+			if typ == "number" {
+				if _, err := strconv.ParseFloat(rule.Value, 64); err != nil {
+					return fmt.Errorf("el valor de %q debe ser numérico", rule.Field)
+				}
+			}
+		case "date_eq_relative", "date_before_relative", "date_after_relative", "date_between_relative":
+			if typ != "date" {
+				return fmt.Errorf("el operador %q solo admite campos date", rule.Op)
+			}
+			from, to := intValue(rule.FromDays), intValue(rule.ToDays)
+			if from < -3650 || from > 3650 || to < -3650 || to > 3650 {
+				return fmt.Errorf("el rango relativo de %q debe estar entre -3650 y 3650 días", rule.Field)
+			}
+			if rule.Op == "date_between_relative" && from > to {
+				return fmt.Errorf("fromDays no puede ser mayor que toDays en %q", rule.Field)
+			}
+		default:
+			return fmt.Errorf("operador inválido %q", rule.Op)
+		}
+	}
+	return nil
+}
+
 // ResolveDataView ejecuta filtros declarativos contra los registros de una
 // vista. No acepta SQL ni nombres de columnas libres: cada field se comprueba
 // contra el esquema del objeto antes de construir la consulta.
 func ResolveDataView(ctx context.Context, p *pgxpool.Pool, botID, viewID string) ([]DataRecord, error) {
+	return ResolveDataViewAt(ctx, p, botID, viewID, time.Now().UTC())
+}
+
+// ResolveDataViewAt fija una sola fecha de referencia para toda la consulta.
+// El caller debe pasarla ya convertida a la timezone del flujo.
+func ResolveDataViewAt(
+	ctx context.Context,
+	p *pgxpool.Pool,
+	botID, viewID string,
+	reference time.Time,
+) ([]DataRecord, error) {
 	rows, err := p.Query(ctx, `SELECT v.id::text AS id, v.object_id::text AS object_id, v.name, v.filter, v.created_at, v.updated_at
         FROM data_views v JOIN data_objects o ON o.id = v.object_id WHERE v.id = $1::uuid AND o.org_id = (SELECT org_id FROM bots WHERE id=$2::uuid)`, viewID, botID)
 	if err != nil {
@@ -201,6 +297,9 @@ func ResolveDataView(ctx context.Context, p *pgxpool.Pool, botID, viewID string)
 	for _, field := range fields {
 		fieldTypes[field.Key] = field.Type
 	}
+	if err := ValidateDataFilter(fields, view.Filter); err != nil {
+		return nil, err
+	}
 	query := `SELECT ` + dataRecordCols + ` FROM data_records WHERE object_id = $1::uuid`
 	args := []any{view.ObjectID}
 	for _, rule := range filter.Where {
@@ -213,8 +312,28 @@ func ResolveDataView(ctx context.Context, p *pgxpool.Pool, botID, viewID string)
 			query += ` AND NULLIF(data ->> $` + strconv.Itoa(len(args)) + `, '') IS NOT NULL`
 			continue
 		}
-		if rule.Op != "eq" && rule.Op != "neq" && rule.Op != "lt" && rule.Op != "lte" && rule.Op != "gt" && rule.Op != "gte" {
-			return nil, fmt.Errorf("operador inválido %q", rule.Op)
+		if strings.HasPrefix(rule.Op, "date_") && strings.HasSuffix(rule.Op, "_relative") {
+			args = append(args, rule.Field)
+			keyPos := len(args)
+			expr := `safe_iso_date(data ->> $` + strconv.Itoa(keyPos) + `)`
+			today := time.Date(reference.Year(), reference.Month(), reference.Day(), 0, 0, 0, 0, reference.Location())
+			switch rule.Op {
+			case "date_eq_relative":
+				args = append(args, today.AddDate(0, 0, intValue(rule.FromDays)))
+				query += ` AND ` + expr + ` = $` + strconv.Itoa(len(args)) + `::date`
+			case "date_before_relative":
+				args = append(args, today.AddDate(0, 0, intValue(rule.FromDays)))
+				query += ` AND ` + expr + ` < $` + strconv.Itoa(len(args)) + `::date`
+			case "date_after_relative":
+				args = append(args, today.AddDate(0, 0, intValue(rule.FromDays)))
+				query += ` AND ` + expr + ` > $` + strconv.Itoa(len(args)) + `::date`
+			case "date_between_relative":
+				args = append(args, today.AddDate(0, 0, intValue(rule.FromDays)),
+					today.AddDate(0, 0, intValue(rule.ToDays)))
+				query += ` AND ` + expr + ` BETWEEN $` + strconv.Itoa(len(args)-1) +
+					`::date AND $` + strconv.Itoa(len(args)) + `::date`
+			}
+			continue
 		}
 		operator := map[string]string{"eq": "=", "neq": "!=", "lt": "<", "lte": "<=", "gt": ">", "gte": ">="}[rule.Op]
 		args = append(args, rule.Field, rule.Value)
@@ -225,7 +344,7 @@ func ResolveDataView(ctx context.Context, p *pgxpool.Pool, botID, viewID string)
 			expr = `NULLIF(` + expr + `, '')::numeric`
 			query += ` AND ` + expr + ` ` + operator + ` ` + valueRef + `::numeric`
 		} else if typ == "date" {
-			expr = `NULLIF(` + expr + `, '')::date`
+			expr = `safe_iso_date(` + expr + `)`
 			query += ` AND ` + expr + ` ` + operator + ` ` + valueRef + `::date`
 		} else {
 			query += ` AND ` + expr + ` ` + operator + ` ` + valueRef
@@ -243,18 +362,25 @@ func ResolveDataView(ctx context.Context, p *pgxpool.Pool, botID, viewID string)
 // planas: record_id, record_object y record_<campo>.
 func DataRecordContext(ctx context.Context, p *pgxpool.Pool, botID, recordID string) (map[string]string, error) {
 	var record DataRecord
-	err := p.QueryRow(ctx, `SELECT r.id::text, r.object_id::text, r.data, r.created_at, r.updated_at FROM data_records r JOIN data_objects o ON o.id = r.object_id WHERE r.id = $1::uuid AND o.org_id = (SELECT org_id FROM bots WHERE id=$2::uuid)`, recordID, botID).Scan(&record.ID, &record.ObjectID, &record.Data, &record.CreatedAt, &record.UpdatedAt)
+	var objectKey string
+	err := p.QueryRow(ctx, `SELECT r.id::text, r.object_id::text, o.key, r.data, r.created_at, r.updated_at
+		FROM data_records r JOIN data_objects o ON o.id = r.object_id
+		WHERE r.id = $1::uuid AND o.org_id = (SELECT org_id FROM bots WHERE id=$2::uuid)`,
+		recordID, botID).Scan(&record.ID, &record.ObjectID, &objectKey, &record.Data, &record.CreatedAt, &record.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	vars := map[string]string{"record_id": record.ID, "record_object_id": record.ObjectID}
+	vars := map[string]string{
+		"record_id": record.ID, "record_object_id": record.ObjectID, "record_object": objectKey,
+	}
 	var data map[string]any
 	if json.Unmarshal(record.Data, &data) == nil {
 		for key, value := range data {
 			vars["record_"+key] = fmt.Sprint(value)
+			vars["data_"+objectKey+"_"+key] = fmt.Sprint(value)
 		}
 	}
 	return vars, nil
@@ -263,7 +389,7 @@ func DataRecordContext(ctx context.Context, p *pgxpool.Pool, botID, recordID str
 // PrimaryContactForRecord encuentra el destinatario del registro, sin conocer
 // su dominio (factura, pedido, cita, etc.).
 func PrimaryContactForRecord(ctx context.Context, p *pgxpool.Pool, botID, recordID string) (*Contact, error) {
-	rows, err := p.Query(ctx, `SELECT `+contactCols+` FROM contacts c
+	rows, err := p.Query(ctx, `SELECT `+contactColsC+` FROM contacts c
         JOIN data_record_contacts rc ON rc.contact_id = c.id
         JOIN data_records r ON r.id = rc.record_id
         JOIN data_objects o ON o.id = r.object_id

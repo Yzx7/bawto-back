@@ -37,7 +37,7 @@ func TestVerifyChallenge(t *testing.T) {
 }
 
 func TestParseText(t *testing.T) {
-	payload := `{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"PNID"},"contacts":[{"profile":{"name":"Ana"},"wa_id":"51999"}],"messages":[{"from":"51999","id":"wamid.1","type":"text","text":{"body":"hola"}}]}}]}]}`
+	payload := `{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"PNID"},"contacts":[{"profile":{"name":"Ana"},"wa_id":"51999"}],"messages":[{"from":"51999","id":"wamid.1","type":"text","context":{"id":"wamid.out"},"text":{"body":"hola"}}]}}]}]}`
 	msgs, err := Parse([]byte(payload))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -47,8 +47,26 @@ func TestParseText(t *testing.T) {
 	}
 	m := msgs[0]
 	if m.ChannelID != "PNID" || m.From != "51999" || m.WaID != "wamid.1" ||
-		m.Text != "hola" || m.ContactName != "Ana" || m.Type != channels.MsgText {
+		m.Text != "hola" || m.ContactName != "Ana" || m.Type != channels.MsgText ||
+		m.QuotedWaID != "wamid.out" {
 		t.Fatalf("mensaje mal parseado: %+v", m)
+	}
+}
+
+func TestParseStatuses(t *testing.T) {
+	payload := `{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"PNID"},"statuses":[{"id":"wamid.out","status":"failed","timestamp":"1785283200","recipient_id":"51999","biz_opaque_callback_data":"run-123","conversation":{"id":"conv-1","origin":{"type":"utility"}},"pricing":{"billable":true,"pricing_model":"PMP","type":"regular","category":"utility"},"errors":[{"code":131026,"title":"Undeliverable","message":"Message undeliverable","error_data":{"details":"phone cannot receive"}}]}]}}]}]}`
+	statuses, err := ParseStatuses([]byte(payload))
+	if err != nil || len(statuses) != 1 {
+		t.Fatalf("ParseStatuses: len=%d err=%v", len(statuses), err)
+	}
+	status := statuses[0]
+	if status.ChannelID != "PNID" || status.MessageID != "wamid.out" ||
+		status.Status != "failed" || status.ErrorCode != "131026" ||
+		status.ErrorDetails != "phone cannot receive" || status.ConversationID != "conv-1" ||
+		status.PricingModel != "PMP" || status.PricingType != "regular" ||
+		status.PricingCategory != "utility" || status.OpaqueCallback != "run-123" ||
+		status.Billable == nil || !*status.Billable {
+		t.Fatalf("status mal parseado: %+v", status)
 	}
 }
 

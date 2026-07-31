@@ -1,0 +1,13 @@
+-- Retira `bots.flow`: el grafo vive solo en `flows` / `flow_versions`.
+--
+-- Hasta ahora había dos copias del mismo flujo. El webhook leía `bots.flow` y el
+-- editor legado escribía ahí, así que publicar una versión no cambiaba lo que
+-- contestaba el bot y guardar en el editor multiflujo tampoco. Con la columna
+-- fuera, la versión publicada es la única fuente de verdad y no existe un camino
+-- silencioso que la contradiga.
+--
+-- Prerrequisito comprobado antes de escribir esta migración: los tres bots con
+-- grafo (BOTI, Sistemuino, waa) tienen su flujo `message` publicado y su
+-- definición es idéntica a la columna que se elimina. `flow_versions` conserva
+-- el historial completo, así que el contenido no se pierde con el DROP.
+ALTER TABLE bots DROP COLUMN IF EXISTS flow;

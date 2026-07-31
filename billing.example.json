@@ -1,0 +1,61 @@
+{
+  "profile": {
+    "legalName": "Cliente de ejemplo S.A.C.",
+    "taxId": "00000000000",
+    "billingEmail": "facturacion@example.com",
+    "planName": "Bawto a medida",
+    "currency": "PEN",
+    "taxRate": 0,
+    "status": "active",
+    "billingDay": 1
+  },
+  "rates": [
+    {
+      "code": "platform",
+      "name": "Plataforma Bawto",
+      "description": "Acceso mensual, automatizaciones y panel operativo",
+      "metric": "fixed",
+      "fixedQuantity": 1,
+      "unitSize": 1,
+      "unitLabel": "mes",
+      "unitPrice": 0,
+      "currency": "PEN",
+      "effectiveFrom": "2026-07-01",
+      "sortOrder": 10
+    },
+    {
+      "code": "bots",
+      "name": "Bots y canales activos",
+      "metric": "active_bot",
+      "unitSize": 1,
+      "unitLabel": "bot",
+      "unitPrice": 0,
+      "currency": "PEN",
+      "effectiveFrom": "2026-07-01",
+      "sortOrder": 20
+    },
+    {
+      "code": "ai",
+      "name": "Procesamiento de inteligencia artificial",
+      "metric": "ai_total_token",
+      "unitSize": 1000000,
+      "unitLabel": "millón de tokens",
+      "unitPrice": 0,
+      "currency": "PEN",
+      "effectiveFrom": "2026-07-01",
+      "sortOrder": 30
+    },
+    {
+      "code": "support",
+      "name": "Soporte y acompañamiento",
+      "metric": "fixed",
+      "fixedQuantity": 1,
+      "unitSize": 1,
+      "unitLabel": "mes",
+      "unitPrice": 0,
+      "currency": "PEN",
+      "effectiveFrom": "2026-07-01",
+      "sortOrder": 40
+    }
+  ]
+}

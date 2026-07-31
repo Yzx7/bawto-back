@@ -8,7 +8,9 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/joho/godotenv v1.5.1
 	github.com/lestrrat-go/jwx/v3 v3.1.1
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/viper v1.21.0
+	github.com/valyala/fasthttp v1.51.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
@@ -51,7 +53,6 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
-	github.com/valyala/fasthttp v1.51.0 // indirect
 	github.com/valyala/fastjson v1.6.10 // indirect
 	github.com/valyala/tcplisten v1.0.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect

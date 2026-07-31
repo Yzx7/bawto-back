@@ -32,6 +32,9 @@ func ListDataFieldsByOrg(ctx context.Context, p *pgxpool.Pool, orgID, objectID s
 	return pgx.CollectRows(rows, pgx.RowToStructByName[DataField])
 }
 func UpsertDataFieldByOrg(ctx context.Context, p *pgxpool.Pool, orgID, objectID, key, label, typ string, required bool) (*DataField, error) {
+	if err := ValidateDataFieldDefinition(key, label, typ); err != nil {
+		return nil, err
+	}
 	rows, e := p.Query(ctx, `INSERT INTO data_fields(object_id,key,label,type,required) SELECT o.id,$3,$4,$5,$6 FROM data_objects o WHERE o.id=$2::uuid AND o.org_id=$1::uuid ON CONFLICT(object_id,key) DO UPDATE SET label=EXCLUDED.label,type=EXCLUDED.type,required=EXCLUDED.required RETURNING `+dataFieldCols, orgID, objectID, key, label, typ, required)
 	if e != nil {
 		return nil, e
@@ -154,10 +157,48 @@ func CreateDataViewByOrg(ctx context.Context, p *pgxpool.Pool, orgID, objectID, 
 	if len(filter) == 0 {
 		filter = json.RawMessage(`{}`)
 	}
+	fields, err := ListDataFieldsByOrg(ctx, p, orgID, objectID)
+	if err != nil {
+		return nil, err
+	}
+	if err = ValidateDataFilter(fields, filter); err != nil {
+		return nil, err
+	}
 	rows, e := p.Query(ctx, `INSERT INTO data_views(object_id,name,filter) SELECT o.id,$3,$4::jsonb FROM data_objects o WHERE o.id=$2::uuid AND o.org_id=$1::uuid RETURNING `+dataViewCols, orgID, objectID, name, filter)
 	if e != nil {
 		return nil, e
 	}
 	v, e := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[DataView])
 	return &v, e
+}
+
+func UpdateDataViewByOrg(ctx context.Context, p *pgxpool.Pool, orgID, objectID, viewID, name string, filter json.RawMessage) (*DataView, error) {
+	if len(filter) == 0 {
+		filter = json.RawMessage(`{}`)
+	}
+	fields, err := ListDataFieldsByOrg(ctx, p, orgID, objectID)
+	if err != nil {
+		return nil, err
+	}
+	if err = ValidateDataFilter(fields, filter); err != nil {
+		return nil, err
+	}
+	rows, err := p.Query(ctx, `UPDATE data_views SET name=$4,filter=$5::jsonb,updated_at=NOW()
+		WHERE id=$3::uuid AND object_id=(SELECT id FROM data_objects WHERE id=$2::uuid AND org_id=$1::uuid)
+		RETURNING `+dataViewCols, orgID, objectID, viewID, name, filter)
+	if err != nil {
+		return nil, err
+	}
+	v, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[DataView])
+	return &v, err
+}
+
+func DeleteDataViewByOrg(ctx context.Context, p *pgxpool.Pool, orgID, objectID, viewID string) (bool, error) {
+	cmd, err := p.Exec(ctx, `DELETE FROM data_views
+		WHERE id=$3::uuid AND object_id=(SELECT id FROM data_objects WHERE id=$2::uuid AND org_id=$1::uuid)`,
+		orgID, objectID, viewID)
+	if err != nil {
+		return false, err
+	}
+	return cmd.RowsAffected() > 0, nil
 }

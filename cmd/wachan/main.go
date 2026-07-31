@@ -7,7 +7,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -35,7 +34,6 @@ func main() {
 	phone := flag.String("phone", "", "display phone (opcional)")
 	token := flag.String("token", "", "access token (se cifra)")
 	migrate := flag.Bool("migrate", false, "aplica migraciones idempotentes")
-	setFlow := flag.String("setflow", "", "ruta a un JSON de flujo para guardar en el bot (-bot)")
 	flag.Parse()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -49,29 +47,16 @@ func main() {
 	defer pool.Close()
 
 	if *migrate {
-		if _, err := pool.Exec(ctx, `ALTER TABLE chats ADD COLUMN IF NOT EXISTS handoff_until TIMESTAMPTZ`); err != nil {
-			fmt.Println("ERR migrate:", err)
-			os.Exit(1)
+		for _, stmt := range []string{
+			`ALTER TABLE chats ADD COLUMN IF NOT EXISTS handoff_until TIMESTAMPTZ`,
+			`ALTER TABLE chats ADD COLUMN IF NOT EXISTS last_read_at TIMESTAMPTZ`,
+		} {
+			if _, err := pool.Exec(ctx, stmt); err != nil {
+				fmt.Println("ERR migrate:", err)
+				os.Exit(1)
+			}
+			fmt.Println("OK:", stmt)
 		}
-		fmt.Println("OK migración aplicada: chats.handoff_until")
-		return
-	}
-
-	if *setFlow != "" && *botID != "" {
-		raw, err := os.ReadFile(*setFlow)
-		if err != nil {
-			fmt.Println("ERR leer flujo:", err)
-			os.Exit(1)
-		}
-		if !json.Valid(raw) {
-			fmt.Println("ERR: el archivo no es JSON válido")
-			os.Exit(1)
-		}
-		if err := models.UpdateBotFlow(ctx, pool, *botID, raw); err != nil {
-			fmt.Println("ERR guardar flujo:", err)
-			os.Exit(1)
-		}
-		fmt.Printf("OK flujo guardado en bot=%s (%d bytes)\n", *botID, len(raw))
 		return
 	}
 

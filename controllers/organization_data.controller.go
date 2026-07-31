@@ -6,6 +6,7 @@ import (
 	"github.com/Yzx7/sacs-chatbots/models"
 	"github.com/Yzx7/sacs-chatbots/types"
 	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"strconv"
 	"strings"
@@ -92,7 +93,7 @@ func (con *Controller) UpsertOrgDataField(c *fiber.Ctx) error {
 	}
 	v, e := models.UpsertDataFieldByOrg(c.Context(), con.Env.Postgres, org, c.Params("objectId"), strings.TrimSpace(in.Key), strings.TrimSpace(in.Label), strings.TrimSpace(in.Type), in.Required)
 	if e != nil {
-		return con.fail(c, 400, "no se pudo guardar el campo")
+		return con.fail(c, 400, e.Error())
 	}
 	return c.Status(201).JSON(types.OK("campo guardado", v))
 }
@@ -256,7 +257,87 @@ func (con *Controller) CreateOrgDataView(c *fiber.Ctx) error {
 	}
 	v, e := models.CreateDataViewByOrg(c.Context(), con.Env.Postgres, org, c.Params("objectId"), strings.TrimSpace(in.Name), in.Filter)
 	if e != nil {
-		return con.fail(c, 400, "no se pudo crear la vista")
+		return con.fail(c, 400, e.Error())
 	}
 	return c.Status(201).JSON(types.OK("vista creada", v))
+}
+
+func (con *Controller) UpdateOrgDataView(c *fiber.Ctx) error {
+	org := c.Params("orgId")
+	if _, e := con.requireOrgRole(c, org, "owner", "admin", "member"); e != nil {
+		return con.failErr(c, e)
+	}
+	var in struct {
+		Name   string
+		Filter json.RawMessage
+	}
+	if c.BodyParser(&in) != nil || strings.TrimSpace(in.Name) == "" || (len(in.Filter) > 0 && !json.Valid(in.Filter)) {
+		return con.fail(c, 400, "vista inválida")
+	}
+	v, e := models.UpdateDataViewByOrg(c.Context(), con.Env.Postgres, org, c.Params("objectId"), c.Params("viewId"), strings.TrimSpace(in.Name), in.Filter)
+	if errors.Is(e, pgx.ErrNoRows) {
+		return con.fail(c, 404, "vista no encontrada")
+	}
+	if e != nil {
+		return con.fail(c, 400, e.Error())
+	}
+	return con.ok(c, "vista actualizada", v)
+}
+
+func (con *Controller) DeleteOrgDataView(c *fiber.Ctx) error {
+	org := c.Params("orgId")
+	if _, e := con.requireOrgRole(c, org, "owner", "admin", "member"); e != nil {
+		return con.failErr(c, e)
+	}
+	deleted, e := models.DeleteDataViewByOrg(c.Context(), con.Env.Postgres, org, c.Params("objectId"), c.Params("viewId"))
+	if e != nil {
+		return con.fail(c, 400, "no se pudo eliminar la vista")
+	}
+	if !deleted {
+		return con.fail(c, 404, "vista no encontrada")
+	}
+	return con.ok(c, "vista eliminada", nil)
+}
+
+func (con *Controller) ImportOrgDataRecordsCSV(c *fiber.Ctx) error {
+	org := c.Params("orgId")
+	if _, err := con.requireOrgRole(c, org, "owner", "admin", "member"); err != nil {
+		return con.failErr(c, err)
+	}
+	objectID := c.Params("objectId")
+	fields, err := models.ListDataFieldsByOrg(c.Context(), con.Env.Postgres, org, objectID)
+	if err != nil {
+		return con.fail(c, 400, "objeto no encontrado")
+	}
+	file, err := c.FormFile("file")
+	if err != nil {
+		return con.fail(c, 400, "adjunta un archivo CSV en el campo file")
+	}
+	if !strings.HasSuffix(strings.ToLower(file.Filename), ".csv") {
+		return con.fail(c, 400, "solo se aceptan archivos CSV")
+	}
+	src, err := file.Open()
+	if err != nil {
+		return con.fail(c, 400, "no se pudo abrir el archivo")
+	}
+	defer src.Close()
+	report, err := models.ParseDataRecordsCSV(src, fields)
+	if err != nil {
+		return con.fail(c, 400, err.Error())
+	}
+	preview, _ := strconv.ParseBool(c.FormValue("preview"))
+	imported := 0
+	if !preview {
+		for _, row := range report.Rows {
+			if row.Error != "" {
+				continue
+			}
+			raw, _ := json.Marshal(row.Data)
+			if _, err = models.CreateDataRecordByOrg(c.Context(), con.Env.Postgres, org, objectID, raw); err != nil {
+				return con.fail(c, 400, "la importación se interrumpió en la fila "+strconv.Itoa(row.Row)+": "+err.Error())
+			}
+			imported++
+		}
+	}
+	return con.ok(c, "importación procesada", fiber.Map{"imported": imported, "preview": preview, "report": report})
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/Yzx7/sacs-chatbots/channels"
 	"github.com/Yzx7/sacs-chatbots/channels/whatsapp"
 	"github.com/Yzx7/sacs-chatbots/engine"
+	"github.com/Yzx7/sacs-chatbots/engine/ai"
 	"github.com/Yzx7/sacs-chatbots/models"
 )
 
@@ -57,6 +58,8 @@ func (con *Controller) processWhatsApp(body []byte) {
 
 	// Coexistence: ecos de mensajes salientes (incluye los que escribe una
 	// persona desde la app de WhatsApp Business) → silencian al bot.
+	con.handleTemplateEvents(ctx, body)
+	con.handleStatuses(ctx, body)
 	con.handleEchoes(ctx, body)
 
 	msgs, err := whatsapp.Parse(body)
@@ -79,7 +82,7 @@ func (con *Controller) processWhatsApp(body []byte) {
 			con.whatsAppLogger().Error("wa ensure contact", "err", err.Error())
 			continue
 		}
-		metadata, _ := json.Marshal(fiber.Map{"replyId": m.ReplyID, "mediaId": m.MediaID, "mimeType": m.MimeType, "caption": m.Caption})
+		metadata, _ := json.Marshal(fiber.Map{"replyId": m.ReplyID, "quotedWaId": m.QuotedWaID, "mediaId": m.MediaID, "mimeType": m.MimeType, "caption": m.Caption})
 		messageID, created, err := models.InsertInboundMessage(ctx, pool, chatID, m.WaID, string(m.Type), m.Text, metadata)
 		if err != nil {
 			con.whatsAppLogger().Error("wa insert message", "err", err.Error())
@@ -88,14 +91,17 @@ func (con *Controller) processWhatsApp(body []byte) {
 		if !created {
 			continue
 		}
-
-		// Handoff: si una persona tiene el chat, el bot guarda el mensaje pero no responde.
-		if models.BotSilenced(ctx, pool, chatID) {
-			continue
+		correlation, err := models.CorrelateInboundReminder(ctx, pool, messageID, chatID,
+			m.QuotedWaID, cfg.ReminderCorrelationWindow)
+		if err != nil {
+			con.whatsAppLogger().Error("wa correlate reminder", "message", m.WaID, "err", err.Error())
+			correlation = nil
 		}
 
-		// Requiere canal conectado para responder.
+		// Requiere canal conectado para descargar medios y responder. Sin él, la
+		// bandeja al menos ve el texto.
 		if con.Env.Cipher == nil || len(bot.TokenEnc) == 0 || bot.ChannelID == nil {
+			con.publishInbound(ctx, bot.ID, chatID, messageID, m, false)
 			continue
 		}
 		token, err := con.Env.Cipher.Decrypt(bot.TokenEnc)
@@ -114,15 +120,27 @@ func (con *Controller) processWhatsApp(body []byte) {
 			// impedir que el bot procese o responda el mensaje.
 			con.whatsAppLogger().Warn("wa mark read", "message", m.WaID, "err", err.Error())
 		}
+		// El medio se descarga siempre (aunque atienda un humano): así el agente
+		// ve la imagen en la bandeja y no depende de un media_id que expira.
+		hasMedia := false
 		if m.Type == channels.MsgImage && m.MediaID != "" {
 			data, mimeType, mediaErr := whatsapp.DownloadMedia(ctx, sendCfg, m.MediaID)
 			if mediaErr != nil {
 				con.whatsAppLogger().Error("wa download media", "err", mediaErr.Error())
 			} else if err := models.SaveMessageMedia(ctx, pool, messageID, m.MediaID, mimeType, data); err != nil {
 				con.whatsAppLogger().Error("wa save media", "err", err.Error())
-			} else if m.MimeType == "" {
-				m.MimeType = mimeType
+			} else {
+				hasMedia = true
+				if m.MimeType == "" {
+					m.MimeType = mimeType
+				}
 			}
+		}
+		con.publishInbound(ctx, bot.ID, chatID, messageID, m, hasMedia)
+
+		// Handoff: si una persona tiene el chat, el bot guarda el mensaje pero no responde.
+		if models.BotSilenced(ctx, pool, chatID) {
+			continue
 		}
 
 		lockConn, err := pool.Acquire(ctx)
@@ -133,7 +151,7 @@ func (con *Controller) processWhatsApp(body []byte) {
 			lockConn.Release()
 			continue
 		}
-		replies, newState, handoff := con.runFlowOrEcho(ctx, bot, chatID, m, func() {
+		replies, newState, handoff := con.runFlowOrEcho(ctx, bot, chatID, messageID, m, correlation, func() {
 			if err := whatsapp.ShowTypingIndicator(ctx, sendCfg, m.WaID); err != nil {
 				// El indicador es accesorio: un fallo no bloquea la respuesta.
 				con.whatsAppLogger().Warn("wa typing indicator", "message", m.WaID, "err", err.Error())
@@ -151,7 +169,12 @@ func (con *Controller) processWhatsApp(body []byte) {
 				sentAll = false
 				break
 			}
-			_ = models.InsertMessage(ctx, pool, chatID, id, true, "text", txt)
+			if saved, err := models.InsertOutboundMessage(ctx, pool, chatID, id, "text", txt); err != nil {
+				con.whatsAppLogger().Error("wa guardar respuesta", "err", err.Error())
+			} else if saved != nil {
+				con.publishChat(ctx, "message", bot.ID, chatID, saved)
+				con.reconcileStatusEvents(ctx, id)
+			}
 		}
 		if sentAll && newState != nil {
 			_ = models.SetChatState(ctx, pool, chatID, newState)
@@ -162,10 +185,71 @@ func (con *Controller) processWhatsApp(body []byte) {
 				con.whatsAppLogger().Error("handoff", "chat", chatID, "err", err.Error())
 			} else {
 				con.whatsAppLogger().Info("chat escalado a humano", "chat", chatID)
+				con.publishMode(ctx, bot.ID, chatID)
 			}
 		}
 		_, _ = lockConn.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1,0))`, chatID)
 		lockConn.Release()
+	}
+}
+
+// handleTemplateEvents conserva y aplica los cambios de estado, calidad y
+// categoría de las plantillas. Los payloads usan entry.id como WABA ID.
+func (con *Controller) handleTemplateEvents(ctx context.Context, body []byte) {
+	events, err := whatsapp.ParseTemplateEvents(body)
+	if err != nil || len(events) == 0 {
+		return
+	}
+	for _, event := range events {
+		applied, err := models.StoreAndApplyTemplateEvent(ctx, con.Env.Postgres, event)
+		if err != nil {
+			con.whatsAppLogger().Error("wa template event", "field", event.Field,
+				"template", event.Name, "err", err.Error())
+			continue
+		}
+		if applied {
+			con.whatsAppLogger().Info("wa template actualizado", "field", event.Field,
+				"waba", event.WabaID, "template", event.Name, "status", event.Status,
+				"category", event.Category, "pendingCategory", event.PendingCategory)
+		}
+	}
+}
+
+// handleStatuses persiste primero el evento y luego intenta reconciliarlo. Si
+// el status ganó la carrera al INSERT del mensaje, queda pendiente sin perderse.
+func (con *Controller) handleStatuses(ctx context.Context, body []byte) {
+	statuses, err := whatsapp.ParseStatuses(body)
+	if err != nil || len(statuses) == 0 {
+		return
+	}
+	for _, status := range statuses {
+		metadata, _ := json.Marshal(status)
+		_, err := models.StoreProviderStatusEvent(ctx, con.Env.Postgres, models.ProviderStatusEventInput{
+			Channel: whatsapp.Channel, ChannelID: status.ChannelID,
+			ProviderMessageID: status.MessageID, Status: status.Status, OccurredAt: status.OccurredAt,
+			RecipientID: status.RecipientID, ErrorCode: status.ErrorCode, ErrorTitle: status.ErrorTitle,
+			ErrorMessage: status.ErrorMessage, ErrorDetails: status.ErrorDetails,
+			ConversationID: status.ConversationID, ConversationType: status.ConversationType,
+			PricingModel: status.PricingModel, PricingType: status.PricingType,
+			PricingCategory: status.PricingCategory, Billable: status.Billable,
+			OpaqueCallback: status.OpaqueCallback, Metadata: metadata,
+		})
+		if err != nil {
+			con.whatsAppLogger().Error("wa status persist", "message", status.MessageID, "err", err.Error())
+			continue
+		}
+		con.reconcileStatusEvents(ctx, status.MessageID)
+	}
+}
+
+func (con *Controller) reconcileStatusEvents(ctx context.Context, providerMessageID string) {
+	updates, err := models.ReconcileProviderStatusEvents(ctx, con.Env.Postgres, providerMessageID)
+	if err != nil {
+		con.whatsAppLogger().Error("wa status reconcile", "message", providerMessageID, "err", err.Error())
+		return
+	}
+	for _, update := range updates {
+		con.publishChat(ctx, "message_status", update.BotID, update.ChatID, update)
 	}
 }
 
@@ -194,24 +278,32 @@ func (con *Controller) handleEchoes(ctx context.Context, body []byte) {
 		if err != nil {
 			continue
 		}
-		_ = models.InsertMessage(ctx, pool, chatID, e.WaID, true, e.Type, e.Text)
+		// Se guarda y se publica para que la bandeja muestre lo que el agente
+		// escribió desde el teléfono, no solo lo que sale del bot.
+		if saved, err := models.InsertOutboundMessage(ctx, pool, chatID, e.WaID, e.Type, e.Text); err == nil && saved != nil {
+			con.publishChat(ctx, "message", bot.ID, chatID, saved)
+			con.reconcileStatusEvents(ctx, e.WaID)
+		}
 		if err := models.HandoffChat(ctx, pool, chatID, handoffWindow); err != nil {
 			con.whatsAppLogger().Error("handoff por eco", "chat", chatID, "err", err.Error())
 			continue
 		}
 		con.whatsAppLogger().Info("humano tomó el chat desde la app (coexistence)", "chat", chatID)
+		con.publishMode(ctx, bot.ID, chatID)
 	}
 }
 
 // runFlowOrEcho ejecuta el motor si el bot tiene flujo (trigger message); si no, eco.
 // Devuelve los mensajes a enviar, el nuevo estado a persistir (nil = no tocar) y
 // si el flujo pidió escalar a un humano.
-func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel, chatID string, m channels.InboundMessage, beforeProcess func()) ([]string, json.RawMessage, bool) {
+func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel, chatID string, inboundMessageID int64, m channels.InboundMessage, correlation *models.ReminderCorrelation, beforeProcess func()) ([]string, json.RawMessage, bool) {
 	pool := con.Env.Postgres
 
+	definition := con.messageFlowDefinition(ctx, bot.ID)
+
 	var flow engine.Flow
-	hasFlow := len(bot.Flow) > 0 &&
-		json.Unmarshal(bot.Flow, &flow) == nil &&
+	hasFlow := len(definition) > 0 &&
+		json.Unmarshal(definition, &flow) == nil &&
 		len(flow.Nodes) > 0 && flow.Trigger.Type == "message"
 	if !hasFlow {
 		if m.Type == channels.MsgText {
@@ -234,36 +326,131 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 	if st == nil && !engine.TriggerMatches(flow.Trigger, m.Text) {
 		return nil, nil, false
 	}
+	if shouldBlockAmbiguousReceipt(correlation, m.Type) {
+		beforeProcess()
+		return []string{"Encontré más de un aviso reciente y no puedo atribuir este archivo con seguridad. Responde directamente al aviso correcto y vuelve a enviar la imagen para asociarla sin errores."}, nil, false
+	}
 	beforeProcess()
 
 	// Inyecta el nodo IA (MiniMax) si está configurado.
-	deps := engine.Deps{Context: models.FlowContext(ctx, pool, bot.ID, m.From), InputType: string(m.Type), MediaID: m.MediaID, WaID: m.WaID}
+	flowContext := models.FlowContext(ctx, pool, bot.ID, m.From)
+	flowContext["source_intent"] = ""
+	if correlated, err := models.CorrelationContext(ctx, pool, bot.ID, correlation); err != nil {
+		con.whatsAppLogger().Error("wa correlation context", "message", m.WaID, "err", err.Error())
+	} else {
+		for key, value := range correlated {
+			flowContext[key] = value
+		}
+	}
+	deps := engine.Deps{Context: flowContext, InputType: string(m.Type), MediaID: m.MediaID, WaID: m.WaID}
 	if con.Env.Agent != nil {
-		deps.Agent = func(instruction string, vars map[string]string, outputs []string) (string, string, error) {
-			return con.Env.Agent.Run(ctx, instruction, vars, outputs)
+		deps.AgentWithHistory = func(nodeID, instruction string, vars map[string]string, outputs []string, history []engine.ChatMessage, silent bool) (string, string, error) {
+			for attempt := 1; attempt <= 2; attempt++ {
+				startedAt := time.Now()
+				reply, branch, usage, runErr := con.Env.Agent.RunWithHistoryUsage(ctx, instruction, vars, outputs, history, silent)
+				duration := time.Since(startedAt)
+				errorCode := ai.OutputErrorCode(runErr)
+				if usage.Provider != "" {
+					outcome := "ok"
+					if runErr != nil {
+						outcome = "invalid_output"
+					}
+					usageMetadata := map[string]string{
+						"source":      "flow_agent",
+						"node_id":     nodeID,
+						"attempt":     fmt.Sprint(attempt),
+						"duration_ms": fmt.Sprint(duration.Milliseconds()),
+					}
+					if errorCode != "" {
+						usageMetadata["error_code"] = errorCode
+					}
+					if branch != "" {
+						usageMetadata["branch"] = branch
+					}
+					metadata, _ := json.Marshal(usageMetadata)
+					if err := models.RecordAIUsage(ctx, pool, models.AIUsageEventInput{
+						OrganizationID: bot.OrgID, BotID: bot.ID, ChatID: chatID,
+						InboundMessageID: inboundMessageID, Provider: usage.Provider,
+						Model: usage.Model, ProviderRequestID: usage.RequestID,
+						InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
+						CacheReadInputTokens:     usage.CacheReadInputTokens,
+						CacheCreationInputTokens: usage.CacheCreationInputTokens,
+						InputUSDPerMillion:       usage.Rates.InputPerMillion,
+						OutputUSDPerMillion:      usage.Rates.OutputPerMillion,
+						CacheReadUSDPerMillion:   usage.Rates.CacheReadPerMillion,
+						CacheWriteUSDPerMillion:  usage.Rates.CacheWritePerMillion,
+						Outcome:                  outcome, Metadata: metadata,
+					}); err != nil {
+						con.whatsAppLogger().Error("ai usage persist", "request", usage.RequestID, "err", err.Error())
+					}
+				}
+
+				logArgs := []any{
+					"bot_id", bot.ID,
+					"chat_id", chatID,
+					"node_id", nodeID,
+					"attempt", attempt,
+					"duration_ms", duration.Milliseconds(),
+					"model", usage.Model,
+					"branch", branch,
+					"silent", silent,
+				}
+				if runErr == nil || attempt == 2 || !retryableAgentOutput(errorCode) {
+					if runErr == nil {
+						con.whatsAppLogger().Info("ai route selected", logArgs...)
+					} else {
+						con.whatsAppLogger().Warn("ai route failed", append(logArgs, "error_code", errorCode)...)
+					}
+					return reply, branch, runErr
+				}
+				con.whatsAppLogger().Warn(
+					"ai structured output retry",
+					"bot_id", bot.ID,
+					"chat_id", chatID,
+					"node_id", nodeID,
+					"error_code", errorCode,
+					"request", usage.RequestID,
+					"duration_ms", duration.Milliseconds(),
+				)
+			}
+			return "", "", fmt.Errorf("agente IA agotó sus intentos")
 		}
 	}
 	deps.Tool = func(ref string, args, vars map[string]string) (string, error) {
 		switch ref {
 		case "record_payment_receipt":
-			return models.RecordPaymentReceipt(ctx, pool, bot.ID, m.From, vars["input_wa_id"], vars["input_media_id"], m.MimeType)
+			return models.RecordPaymentReceiptForRecord(ctx, pool, bot.ID, m.From,
+				vars["input_wa_id"], vars["input_media_id"], m.MimeType, vars["correlated_record_id"])
 		default:
 			return "", fmt.Errorf("herramienta %q no implementada", ref)
 		}
 	}
 	res, err := engine.Advance(&flow, st, m.Text, deps)
-	if err != nil {
-		con.whatsAppLogger().Error("engine advance", "err", err.Error())
-		return []string{"No pude procesar tu solicitud en este momento. Intenta nuevamente o escribe *asesor*."}, nil, false
-	}
-
 	stateRaw := json.RawMessage("null")
 	if res.State != nil {
-		if b, e := json.Marshal(res.State); e == nil {
+		if b, marshalErr := json.Marshal(res.State); marshalErr == nil {
 			stateRaw = b
 		}
 	}
+	if err != nil {
+		con.whatsAppLogger().Error("engine advance", "error_code", ai.OutputErrorCode(err), "err", err.Error())
+		return []string{"No pude procesar tu solicitud en este momento. Intenta nuevamente o escribe *asesor*."}, stateRaw, false
+	}
 	return res.Sends, stateRaw, res.Handoff
+}
+
+func shouldBlockAmbiguousReceipt(correlation *models.ReminderCorrelation, messageType channels.MessageType) bool {
+	return correlation != nil && correlation.Method == "ambiguous" && messageType == channels.MsgImage
+}
+
+func retryableAgentOutput(errorCode string) bool {
+	switch errorCode {
+	case "missing_tool_call", "unexpected_tool", "multiple_tool_calls",
+		"invalid_tool_input", "invalid_branch", "empty_reply":
+		return true
+	default:
+		return false
+	}
 }
 
 func (con *Controller) whatsAppLogger() *slog.Logger {

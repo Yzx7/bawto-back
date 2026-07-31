@@ -42,6 +42,14 @@ type BillingRecord struct {
 }
 
 const contactCols = `id::text AS id, org_id::text AS org_id, phone_normalized, name, data, status, created_at, updated_at`
+
+// contactColsC es la misma lista calificada con el alias `c`. Toda consulta con
+// JOIN debe usar esta: `created_at` existe también en `audience_contacts`, en
+// `data_records` y en `data_objects`, y con la lista sin prefijo Postgres
+// responde "column reference is ambiguous" en tiempo de ejecución, no al
+// compilar. Es el mismo tropiezo que ya costó `GetFlowVersion` y
+// `InvalidDateRecordsForView`.
+const contactColsC = `c.id::text AS id, c.org_id::text AS org_id, c.phone_normalized, c.name, c.data, c.status, c.created_at, c.updated_at`
 const billingCols = `id::text AS id, contact_id::text AS contact_id, period, amount::text AS amount, currency, due_date, status, paid_at, evidence, created_at, updated_at`
 
 // NormalizePhone deja solo los dígitos. La API y los webhooks deben usarla.
@@ -249,6 +257,13 @@ func FlowContext(ctx context.Context, pool *pgxpool.Pool, botID, phone string) m
 // RecordPaymentReceipt asocia la media durable del mensaje con la factura más
 // reciente vinculada al contacto y cambia su estado a validación.
 func RecordPaymentReceipt(ctx context.Context, pool *pgxpool.Pool, botID, phone, waID, mediaID, mimeType string) (string, error) {
+	return RecordPaymentReceiptForRecord(ctx, pool, botID, phone, waID, mediaID, mimeType, "")
+}
+
+// RecordPaymentReceiptForRecord usa primero la correlación genérica del
+// recordatorio. El fallback legado por objeto `facturas` se conserva mientras
+// el prototipo billing_records se migra, pero nunca reemplaza un ID explícito.
+func RecordPaymentReceiptForRecord(ctx context.Context, pool *pgxpool.Pool, botID, phone, waID, mediaID, mimeType, preferredRecordID string) (string, error) {
 	contact, err := GetContactByPhone(ctx, pool, botID, phone)
 	if err != nil || contact == nil {
 		return "", fmt.Errorf("contacto no encontrado")
@@ -261,13 +276,22 @@ func RecordPaymentReceipt(ctx context.Context, pool *pgxpool.Pool, botID, phone,
 		return "", fmt.Errorf("no se pudo conservar la imagen del comprobante")
 	}
 	var recordID string
-	err = pool.QueryRow(ctx, `SELECT r.id::text FROM data_records r
-		JOIN data_objects o ON o.id=r.object_id
-		JOIN data_record_contacts rc ON rc.record_id=r.id
-		WHERE rc.contact_id=$1::uuid AND o.org_id=(SELECT org_id FROM bots WHERE id=$2::uuid)
-		  AND o.key IN ('facturas','factura')
-		  AND COALESCE(r.data->>'estado','') NOT IN ('pagado','cancelado')
-		ORDER BY CASE WHEN r.data->>'estado' IN ('pendiente','vencido') THEN 0 ELSE 1 END,r.created_at DESC LIMIT 1`, contact.ID, botID).Scan(&recordID)
+	if preferredRecordID != "" {
+		err = pool.QueryRow(ctx, `SELECT r.id::text FROM data_records r
+			JOIN data_objects o ON o.id=r.object_id
+			JOIN data_record_contacts rc ON rc.record_id=r.id
+			WHERE r.id=$1::uuid AND rc.contact_id=$2::uuid
+			  AND o.org_id=(SELECT org_id FROM bots WHERE id=$3::uuid)`,
+			preferredRecordID, contact.ID, botID).Scan(&recordID)
+	} else {
+		err = pool.QueryRow(ctx, `SELECT r.id::text FROM data_records r
+			JOIN data_objects o ON o.id=r.object_id
+			JOIN data_record_contacts rc ON rc.record_id=r.id
+			WHERE rc.contact_id=$1::uuid AND o.org_id=(SELECT org_id FROM bots WHERE id=$2::uuid)
+			  AND o.key IN ('facturas','factura')
+			  AND COALESCE(r.data->>'estado','') NOT IN ('pagado','cancelado')
+			ORDER BY CASE WHEN r.data->>'estado' IN ('pendiente','vencido') THEN 0 ELSE 1 END,r.created_at DESC LIMIT 1`, contact.ID, botID).Scan(&recordID)
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", fmt.Errorf("no hay una factura pendiente vinculada al contacto")
 	}

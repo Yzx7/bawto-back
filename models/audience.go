@@ -109,7 +109,7 @@ func ResolveAudience(ctx context.Context, pool *pgxpool.Pool, botID, audienceID 
 		return nil, err
 	}
 	if a.Kind == "manual" {
-		rows, err := pool.Query(ctx, `SELECT `+contactCols+` FROM contacts c JOIN audience_contacts ac ON ac.contact_id = c.id WHERE ac.audience_id = $1::uuid ORDER BY c.created_at`, a.ID)
+		rows, err := pool.Query(ctx, `SELECT `+contactColsC+` FROM contacts c JOIN audience_contacts ac ON ac.contact_id = c.id WHERE ac.audience_id = $1::uuid ORDER BY c.created_at`, a.ID)
 		if err != nil {
 			return nil, err
 		}
