@@ -58,7 +58,10 @@ func (con *Controller) GetBotAIUsage(c *fiber.Ctx) error {
 	if err != nil {
 		return con.fail(c, fiber.StatusBadRequest, err.Error())
 	}
-	usage, err := models.GetAIUsageAnalytics(c.Context(), con.Env.Postgres, bot.OrgID, bot.ID, from, to)
+	// `model` acota todo el panel a un modelo. La comparación entre modelos no
+	// lo respeta a propósito: es la tabla que existe para compararlos.
+	usage, err := models.GetAIUsageAnalytics(c.Context(), con.Env.Postgres,
+		bot.OrgID, bot.ID, strings.TrimSpace(c.Query("model")), from, to)
 	if err != nil {
 		return con.fail(c, fiber.StatusInternalServerError, "no se pudo calcular el consumo de IA")
 	}
