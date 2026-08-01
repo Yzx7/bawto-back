@@ -46,6 +46,25 @@ func (con *Controller) GetBotCosts(c *fiber.Ctx) error {
 	return con.ok(c, "consumo calculado", report)
 }
 
+// GET /bots/:botId/ai-usage — detalle del consumo de tokens del bot. Va aparte
+// de /costs porque responde otra pregunta: /costs valoriza la factura, esto
+// explica de dónde sale el gasto (qué nodo, qué conversación, cuántos pasos).
+func (con *Controller) GetBotAIUsage(c *fiber.Ctx) error {
+	bot, err := con.botWithRole(c, c.Params("botId"))
+	if err != nil {
+		return con.failErr(c, err)
+	}
+	from, to, err := costPeriod(c.Query("from"), c.Query("to"), time.Now().UTC())
+	if err != nil {
+		return con.fail(c, fiber.StatusBadRequest, err.Error())
+	}
+	usage, err := models.GetAIUsageAnalytics(c.Context(), con.Env.Postgres, bot.OrgID, bot.ID, from, to)
+	if err != nil {
+		return con.fail(c, fiber.StatusInternalServerError, "no se pudo calcular el consumo de IA")
+	}
+	return con.ok(c, "consumo de IA calculado", usage)
+}
+
 // costPeriod acepta RFC3339 o YYYY-MM-DD. Una fecha `to` es inclusiva para la
 // persona (se convierte internamente en el inicio del día siguiente).
 func costPeriod(fromRaw, toRaw string, now time.Time) (time.Time, time.Time, error) {

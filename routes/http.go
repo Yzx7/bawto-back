@@ -89,6 +89,7 @@ func RegisterHTTP(app *fiber.App, e *env.Env) {
 	bots.Post("/:botId/schedule/validate-cron", con.ValidateCronExpression)
 	bots.Get("/:botId/flow-runs", con.ListBotFlowRuns)
 	bots.Get("/:botId/costs", con.GetBotCosts)
+	bots.Get("/:botId/ai-usage", con.GetBotAIUsage)
 	bots.Get("/:botId/flow-runs/:runId", con.GetBotFlowRun)
 	bots.Post("/:botId/flow-runs/:runId/retry", con.RetryBotFlowRun)
 	bots.Post("/:botId/flow-runs/:runId/cancel", con.CancelBotFlowRun)

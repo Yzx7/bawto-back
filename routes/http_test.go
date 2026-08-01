@@ -43,6 +43,7 @@ func TestRutasDeLaInterfazOperativaRegistradas(t *testing.T) {
 		http.MethodPost + " /bots/:botId/flow-runs/:runId/retry",
 		http.MethodPost + " /bots/:botId/flow-runs/:runId/cancel",
 		http.MethodGet + " /bots/:botId/costs",
+		http.MethodGet + " /bots/:botId/ai-usage",
 		http.MethodGet + " /orgs/:orgId/costs",
 		http.MethodGet + " /orgs/:orgId/billing",
 		http.MethodGet + " /orgs/:orgId/billing/statements/:statementId",
