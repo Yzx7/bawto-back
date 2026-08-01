@@ -70,15 +70,33 @@ func Build(ctx context.Context) (*Runtime, error) {
 		}
 	}
 
+	// El precio sale del catálogo del modelo salvo que el entorno declare las
+	// cuatro tarifas. Si no se puede resolver, el arranque falla: el modo de
+	// fallo alternativo es un backend sano registrando consumo con la tarifa de
+	// otro modelo, y esas filas no se pueden corregir después.
 	var agent *ai.Agent
 	if cfg.MinimaxAPIKey != "" {
-		agent = ai.NewWithPricing(cfg.MinimaxAPIKey, cfg.MinimaxBaseURL, cfg.AIProvider, cfg.MinimaxModel, ai.Rates{
-			InputPerMillion:      cfg.AIInputUSDPerMillion,
-			OutputPerMillion:     cfg.AIOutputUSDPerMillion,
-			CacheReadPerMillion:  cfg.AICacheReadUSDPerMillion,
-			CacheWritePerMillion: cfg.AICacheWriteUSDPerMillion,
-		})
-		logs.General.Info("IA habilitada", "provider", cfg.AIProvider, "model", cfg.MinimaxModel)
+		var override *ai.Rates
+		if cfg.AIRatesExplicit {
+			override = &ai.Rates{
+				InputPerMillion:      cfg.AIInputUSDPerMillion,
+				OutputPerMillion:     cfg.AIOutputUSDPerMillion,
+				CacheReadPerMillion:  cfg.AICacheReadUSDPerMillion,
+				CacheWritePerMillion: cfg.AICacheWriteUSDPerMillion,
+			}
+		}
+		pricing, err := ai.ResolvePricing(cfg.AIProvider, cfg.MinimaxModel, override)
+		if err != nil {
+			return fail("bootstrap: tarifario de IA: %w", err)
+		}
+		agent = ai.NewWithPricing(cfg.MinimaxAPIKey, cfg.MinimaxBaseURL,
+			pricing.Provider, cfg.MinimaxModel, pricing.Rates)
+		logs.General.Info("IA habilitada",
+			"provider", pricing.Provider, "model", cfg.MinimaxModel,
+			"input_usd_per_million", pricing.Rates.InputPerMillion,
+			"output_usd_per_million", pricing.Rates.OutputPerMillion,
+			"cache_read_usd_per_million", pricing.Rates.CacheReadPerMillion,
+			"tarifario", pricing.Source)
 	}
 
 	// Eventos de chat en vivo: viajan por LISTEN/NOTIFY, así que funcionan igual

@@ -24,6 +24,41 @@ type Agent struct {
 	provider string
 	model    string
 	rates    Rates
+	// tenant aísla el caché de prefijo del proveedor. Vacío = una sola bolsa
+	// compartida por todo lo que pase por esta cuenta.
+	tenant string
+}
+
+// ForTenant devuelve un agente que pide al proveedor aislar su caché de prefijo
+// bajo ese identificador. Es una copia superficial: comparte el cliente HTTP y
+// solo cambia la etiqueta, así que sale gratis llamarlo en cada petición.
+//
+// El caché del proveedor es **por prefijo de contenido, no por sesión**: sin
+// etiqueta, todas las conversaciones de la cuenta comparten bolsa. Comprobado
+// contra la API real: el mismo prompt con otra etiqueta entra en frío (0 tokens
+// de caché) mientras que con la misma entra caliente.
+//
+// La granularidad es una decisión de política, no técnica. Hoy es la
+// organización, que es la frontera de confianza real de una plataforma
+// multiempresa; bajarla al bot es cambiar lo que se pasa aquí. Bajarla al chat
+// sería aislar de más: partiría también el caché del system prompt, que es
+// idéntico entre clientes y no lleva datos de nadie, y es justo el que más
+// ahorra.
+func (a *Agent) ForTenant(tenantID string) *Agent {
+	copia := *a
+	copia.tenant = strings.TrimSpace(tenantID)
+	return &copia
+}
+
+// tenantOptions va por petición y no en el cliente porque el inquilino cambia en
+// cada mensaje, mientras que el cliente vive lo que vive el proceso.
+func (a *Agent) tenantOptions() []option.RequestOption {
+	if a.tenant == "" {
+		return nil
+	}
+	return []option.RequestOption{
+		option.WithJSONSet("metadata", map[string]string{"user_id": a.tenant}),
+	}
 }
 
 // OutputError representa una respuesta del proveedor que no cumple el contrato
@@ -107,11 +142,44 @@ func New(apiKey, baseURL, model string) *Agent {
 // explícito. Así el registro de consumo sigue siendo correcto al cambiar de
 // modelo sin acoplar el motor de flujos a un proveedor concreto.
 func NewWithPricing(apiKey, baseURL, provider, model string, rates Rates) *Agent {
+	opts := []option.RequestOption{option.WithAPIKey(apiKey), option.WithBaseURL(baseURL)}
+	opts = append(opts, providerRequestOptions(provider)...)
 	return &Agent{
-		client:   anthropic.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseURL)),
+		client:   anthropic.NewClient(opts...),
 		provider: provider,
 		model:    model,
 		rates:    rates,
+	}
+}
+
+// providerRequestOptions añade los campos que un proveedor compatible entiende
+// pero que no existen en la API de Anthropic, así que el SDK no los tipa.
+func providerRequestOptions(provider string) []option.RequestOption {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "deepseek":
+		// DeepSeek trae el razonamiento **encendido y en esfuerzo `high`** si no
+		// se dice lo contrario, y en ese estado **rechaza el tool_choice forzado**
+		// con un 400: "Thinking mode does not support this tool_choice". Es decir,
+		// sin esto ningún nodo `agent` que elija rama funciona contra DeepSeek.
+		//
+		// Además es caro aunque no rompiera: medido contra la API real, con
+		// razonamiento salían ~586 tokens de salida por llamada y 7.2 s de
+		// latencia; con él apagado, 107 tokens y 1.6 s.
+		//
+		// La forma correcta es el `thinking` estándar de Anthropic. La
+		// documentación de DeepSeek indica `reasoning: {effort: "none"}` para el
+		// formato Anthropic y **no funciona**: se manda y el servidor sigue en
+		// modo razonamiento (comprobado contra la API, junto con otras tres
+		// formas). `budget_tokens` tampoco sirve, DeepSeek lo ignora.
+		//
+		// Va por WithJSONSet y no por el campo tipado del SDK para no tener que
+		// tocar los dos constructores de parámetros —el clásico y el del bucle
+		// agéntico—: así el proveedor queda configurado en un solo sitio.
+		return []option.RequestOption{
+			option.WithJSONSet("thinking", map[string]string{"type": "disabled"}),
+		}
+	default:
+		return nil
 	}
 }
 
@@ -163,7 +231,7 @@ func (a *Agent) RunWithHistoryUsage(ctx context.Context, instruction string, var
 		params.Temperature = anthropic.Float(0.2)
 	}
 
-	resp, err := a.client.Messages.New(ctx, params)
+	resp, err := a.client.Messages.New(ctx, params, a.tenantOptions()...)
 	if err != nil {
 		return "", "", Usage{}, err
 	}

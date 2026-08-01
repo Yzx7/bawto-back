@@ -365,7 +365,7 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 				startedAt := time.Now()
 				// Sin herramientas se conserva el camino de una sola petición: un
 				// bucle para un nodo que no puede llamar nada solo añadiría coste.
-				reply, branch, usage, runErr := con.runAgent(ctx, request, agentTools, toolExec)
+				reply, branch, usage, runErr := con.runAgent(ctx, bot.OrgID, request, agentTools, toolExec)
 				duration := time.Since(startedAt)
 				errorCode := ai.OutputErrorCode(runErr)
 				if usage.Provider != "" {

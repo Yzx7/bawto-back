@@ -301,3 +301,120 @@ func TestBranchToolRejectsInvalidOutputs(t *testing.T) {
 		}
 	}
 }
+
+// DeepSeek trae el razonamiento encendido en esfuerzo `high` si no se dice lo
+// contrario, y eso se paga como tokens de salida y como latencia. El campo va
+// por WithJSONSet porque `reasoning` no existe en la API de Anthropic, así que
+// nada de tipos lo protege: si alguien lo rompe, solo lo dice esta prueba.
+func TestAgenteDeepSeekApagaElRazonamiento(t *testing.T) {
+	cuerpo := capturarPeticion(t, "deepseek", "deepseek-v4-flash")
+
+	thinking, ok := cuerpo["thinking"].(map[string]any)
+	if !ok {
+		t.Fatalf("falta el campo thinking en la peticion: %#v", cuerpo)
+	}
+	if thinking["type"] != "disabled" {
+		t.Fatalf("se esperaba thinking.type=disabled, llego %#v", thinking["type"])
+	}
+	// `reasoning` es lo que documenta DeepSeek para formato Anthropic y no
+	// funciona: comprobado contra la API real. Si alguien lo reintroduce
+	// creyendo el doc, el razonamiento vuelve a quedarse encendido.
+	if _, existe := cuerpo["reasoning"]; existe {
+		t.Fatal("reasoning no apaga nada en este endpoint; el campo bueno es thinking")
+	}
+}
+
+// El campo es una extensión de DeepSeek: mandárselo a otro proveedor es pedirle
+// que ignore algo que no entiende, y no todos ignoran en silencio.
+func TestAgenteMiniMaxNoMandaRazonamiento(t *testing.T) {
+	cuerpo := capturarPeticion(t, "minimax", "MiniMax-M3")
+
+	if _, existe := cuerpo["thinking"]; existe {
+		t.Fatalf("no deberia mandarse thinking a minimax: %#v", cuerpo["thinking"])
+	}
+}
+
+func capturarPeticion(t *testing.T, provider, model string) map[string]any {
+	t.Helper()
+	var cuerpo map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &cuerpo)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","role":"assistant","model":"m",
+			"content":[{"type":"tool_use","id":"t1","name":"select_flow_branch",
+			"input":{"branch":"a","reply":"hola"}}],
+			"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	a := NewWithPricing("sk-test", srv.URL, provider, model, Rates{})
+	if _, _, err := a.Run(context.Background(), "instrucción",
+		map[string]string{"input": "hola"}, []string{"a", "b"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	return cuerpo
+}
+
+// El caché del proveedor es por prefijo de contenido, no por sesión: sin esta
+// etiqueta todas las conversaciones de la cuenta comparten bolsa. Comprobado
+// contra la API real: el mismo prompt con otra etiqueta entra en frio.
+func TestAgenteAislaElCachePorInquilino(t *testing.T) {
+	cuerpo := capturarPeticionInquilino(t, "minimax", "MiniMax-M3", "org-123")
+
+	metadata, ok := cuerpo["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("falta metadata en la peticion: %#v", cuerpo)
+	}
+	if metadata["user_id"] != "org-123" {
+		t.Fatalf("se esperaba user_id=org-123, llego %#v", metadata["user_id"])
+	}
+}
+
+// Sin inquilino no se manda el campo en vez de mandarlo vacio: una etiqueta ""
+// seria un inquilino mas, y todo lo que no la ponga caeria en su bolsa.
+func TestAgenteSinInquilinoNoMandaMetadata(t *testing.T) {
+	cuerpo := capturarPeticionInquilino(t, "minimax", "MiniMax-M3", "   ")
+
+	if _, existe := cuerpo["metadata"]; existe {
+		t.Fatalf("no deberia mandarse metadata sin inquilino: %#v", cuerpo["metadata"])
+	}
+}
+
+// ForTenant devuelve una copia: si mutara el agente compartido, la etiqueta de
+// una organizacion se quedaria pegada para la siguiente peticion de otra.
+func TestForTenantNoMutaElAgenteCompartido(t *testing.T) {
+	base := NewWithPricing("sk-test", "http://localhost", "minimax", "m", Rates{})
+	derivado := base.ForTenant("org-A")
+
+	if base.tenant != "" {
+		t.Fatalf("ForTenant mutó el agente compartido: %q", base.tenant)
+	}
+	if derivado.tenant != "org-A" {
+		t.Fatalf("la copia no llevó el inquilino: %q", derivado.tenant)
+	}
+	if otra := base.ForTenant("org-B"); otra.tenant != "org-B" || derivado.tenant != "org-A" {
+		t.Fatalf("las copias se pisan: %q / %q", otra.tenant, derivado.tenant)
+	}
+}
+
+func capturarPeticionInquilino(t *testing.T, provider, model, tenant string) map[string]any {
+	t.Helper()
+	var cuerpo map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &cuerpo)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","role":"assistant","model":"m",
+			"content":[{"type":"text","text":"hola"}],
+			"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	a := NewWithPricing("sk-test", srv.URL, provider, model, Rates{}).ForTenant(tenant)
+	if _, _, err := a.Run(context.Background(), "instrucción",
+		map[string]string{"input": "hola"}, nil); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	return cuerpo
+}

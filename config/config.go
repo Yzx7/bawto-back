@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -38,6 +39,10 @@ type Config struct {
 	AIOutputUSDPerMillion     float64 // AI_OUTPUT_USD_PER_MILLION
 	AICacheReadUSDPerMillion  float64 // AI_CACHE_READ_USD_PER_MILLION
 	AICacheWriteUSDPerMillion float64 // AI_CACHE_WRITE_USD_PER_MILLION
+	// AIRatesExplicit distingue "el entorno declaró las tarifas" de "valen cero".
+	// Sin esta marca, un override legítimo de $0 (la escritura de caché lo es)
+	// no se podría diferenciar de una variable ausente.
+	AIRatesExplicit bool
 
 	// CORS: orígenes permitidos, separados por coma.
 	CorsOrigins string // CORS_ORIGINS
@@ -83,16 +88,12 @@ func Load() (*Config, error) {
 	v.SetDefault("MINIMAX_BASE_URL", "https://api.minimax.io/anthropic")
 	v.SetDefault("MINIMAX_MODEL", "MiniMax-M3")
 	v.SetDefault("AI_PROVIDER", "minimax")
-	// MiniMax-M3 pay-as-you-go para contexto <= 512K, consultado el
-	// 2026-07-30. MiniMax no publica una tarifa de cache write para M3 y este
-	// cliente no crea breakpoints explícitos, por eso su default es cero.
-	// Son overrides
-	// obligatoriamente configurables: cambiar de modelo sin cambiar precios
-	// produciría un reporte engañoso.
-	v.SetDefault("AI_INPUT_USD_PER_MILLION", 0.30)
-	v.SetDefault("AI_OUTPUT_USD_PER_MILLION", 1.20)
-	v.SetDefault("AI_CACHE_READ_USD_PER_MILLION", 0.06)
-	v.SetDefault("AI_CACHE_WRITE_USD_PER_MILLION", 0.0)
+	// Las cuatro tarifas **no** llevan default a propósito. Antes lo tenían, con
+	// los precios de MiniMax-M3, y eso convertía un cambio de modelo sin cambio
+	// de precios en meses de consumo registrado con la tarifa de otro — sin un
+	// solo error, porque el default siempre respondía algo. Ahora el precio sale
+	// del catálogo del modelo (ai.ResolvePricing) y estas variables solo existen
+	// como override explícito para un cambio de tarifa del proveedor.
 	// Sin configurar nada, el scheduler corre.
 	v.SetDefault("SCHEDULER_ENABLED", true)
 	v.SetDefault("MULTI_FLOW_DISPATCH_ENABLED", false)
@@ -138,10 +139,32 @@ func Load() (*Config, error) {
 	if cfg.SchedulerCatchupWindow <= 0 || cfg.SchedulerLockTimeout <= 0 || cfg.SchedulerChatPostpone <= 0 || cfg.SchedulerWABAMPS <= 0 || cfg.ReminderCorrelationWindow <= 0 {
 		return nil, fmt.Errorf("config: parámetros del scheduler deben ser mayores que cero")
 	}
-	if strings.TrimSpace(cfg.AIProvider) == "" ||
-		cfg.AIInputUSDPerMillion < 0 || cfg.AIOutputUSDPerMillion < 0 ||
-		cfg.AICacheReadUSDPerMillion < 0 || cfg.AICacheWriteUSDPerMillion < 0 {
-		return nil, fmt.Errorf("config: proveedor y tarifas de IA inválidos")
+	if strings.TrimSpace(cfg.AIProvider) == "" {
+		return nil, fmt.Errorf("config: AI_PROVIDER no puede estar vacío")
+	}
+	// Las cuatro tarifas van juntas o ninguna. Declarar solo algunas dejaría el
+	// resto en cero sin avisar, que es peor que no declarar nada: un costo
+	// estimado a la baja parece un dato bueno.
+	tarifas := []string{
+		"AI_INPUT_USD_PER_MILLION", "AI_OUTPUT_USD_PER_MILLION",
+		"AI_CACHE_READ_USD_PER_MILLION", "AI_CACHE_WRITE_USD_PER_MILLION",
+	}
+	declaradas := 0
+	for _, nombre := range tarifas {
+		if valor, ok := os.LookupEnv(nombre); ok && strings.TrimSpace(valor) != "" {
+			declaradas++
+		}
+	}
+	if declaradas > 0 && declaradas < len(tarifas) {
+		return nil, fmt.Errorf(
+			"config: las tarifas de IA van las cuatro o ninguna (%d declaradas de %d); "+
+				"sin ellas el precio sale del catálogo del modelo", declaradas, len(tarifas))
+	}
+	cfg.AIRatesExplicit = declaradas == len(tarifas)
+	if cfg.AIRatesExplicit &&
+		(cfg.AIInputUSDPerMillion < 0 || cfg.AIOutputUSDPerMillion < 0 ||
+			cfg.AICacheReadUSDPerMillion < 0 || cfg.AICacheWriteUSDPerMillion < 0) {
+		return nil, fmt.Errorf("config: las tarifas de IA no pueden ser negativas")
 	}
 
 	// Normaliza el puerto: acepta "3009", ":3009" o "host:3009".

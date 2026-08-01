@@ -119,12 +119,19 @@ func renderRecord(raw json.RawMessage) string {
 // runAgent elige el camino según lo que el nodo declare. Sin herramientas se
 // mantiene la petición única de siempre: montar un bucle para un nodo que no
 // puede llamar nada solo añadiría latencia y coste.
-func (con *Controller) runAgent(ctx context.Context, request engine.AgentRequest,
+//
+// tenantID aísla el caché de prefijo del proveedor. Se pasa la organización: es
+// la frontera de confianza real de una plataforma multiempresa, y deja el caché
+// del system prompt compartido entre los bots y los chats de una misma empresa,
+// que es donde está el ahorro. Bajarlo al bot es cambiar el argumento en el
+// webhook, sin tocar nada de aquí para abajo.
+func (con *Controller) runAgent(ctx context.Context, tenantID string, request engine.AgentRequest,
 	agentTools []ai.AgentTool, exec ai.ToolExecutor) (string, string, ai.Usage, error) {
+	agent := con.Env.Agent.ForTenant(tenantID)
 	if len(agentTools) == 0 {
-		return con.Env.Agent.RunWithHistoryUsage(ctx, request.Instruction, request.Vars,
+		return agent.RunWithHistoryUsage(ctx, request.Instruction, request.Vars,
 			request.Outputs, request.History, request.Silent)
 	}
-	return con.Env.Agent.RunAgenticUsage(ctx, request.Instruction, request.Vars,
+	return agent.RunAgenticUsage(ctx, request.Instruction, request.Vars,
 		request.Outputs, request.History, request.Silent, agentTools, exec)
 }

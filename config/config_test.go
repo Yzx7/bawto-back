@@ -28,10 +28,15 @@ func TestFeatureFlagsPorDefecto(t *testing.T) {
 	if cfg.ReminderCorrelationWindow != 72*time.Hour {
 		t.Fatalf("ventana de correlación inesperada: %s", cfg.ReminderCorrelationWindow)
 	}
-	if cfg.MinimaxModel != "MiniMax-M3" || cfg.AIProvider != "minimax" ||
-		cfg.AIInputUSDPerMillion != 0.30 || cfg.AIOutputUSDPerMillion != 1.20 ||
-		cfg.AICacheReadUSDPerMillion != 0.06 || cfg.AICacheWriteUSDPerMillion != 0 {
-		t.Fatalf("tarifas IA por defecto inesperadas: %+v", cfg)
+	if cfg.MinimaxModel != "MiniMax-M3" || cfg.AIProvider != "minimax" {
+		t.Fatalf("modelo o proveedor por defecto inesperados: %+v", cfg)
+	}
+	// Las tarifas ya **no** tienen default aquí: las pone el catálogo del modelo
+	// (ai.ResolvePricing) al construir el agente. Tenerlas aquí con los precios
+	// de M3 convertía un cambio de modelo sin cambio de precios en meses de
+	// consumo registrado con la tarifa de otro, sin un solo error.
+	if cfg.AIRatesExplicit {
+		t.Fatalf("sin variables de tarifa no debería haber override: %+v", cfg)
 	}
 }
 
@@ -67,5 +72,52 @@ func TestFeatureFlagsDesdeElEntorno(t *testing.T) {
 		t.Fatalf("los flags no siguen al entorno: %+v", struct{ S, M bool }{
 			cfg.SchedulerEnabled, cfg.MultiFlowDispatchEnabled,
 		})
+	}
+}
+
+// Las cuatro tarifas van juntas o ninguna. Declarar solo algunas dejaría el
+// resto en cero sin avisar, y un costo estimado a la baja parece un dato bueno.
+func TestTarifasDeIAParcialesSonRechazadas(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://u:p@localhost:5432/x?sslmode=disable")
+	t.Setenv("AI_INPUT_USD_PER_MILLION", "0.14")
+	t.Setenv("AI_OUTPUT_USD_PER_MILLION", "0.28")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("se esperaba rechazo de dos tarifas de cuatro")
+	}
+}
+
+func TestTarifasDeIACompletasMarcanElOverride(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://u:p@localhost:5432/x?sslmode=disable")
+	t.Setenv("AI_INPUT_USD_PER_MILLION", "0.14")
+	t.Setenv("AI_OUTPUT_USD_PER_MILLION", "0.28")
+	t.Setenv("AI_CACHE_READ_USD_PER_MILLION", "0.0028")
+	t.Setenv("AI_CACHE_WRITE_USD_PER_MILLION", "0")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.AIRatesExplicit {
+		t.Fatal("con las cuatro declaradas, AIRatesExplicit debe estar en true")
+	}
+	// La escritura de caché en cero es un override legítimo: si se confundiera
+	// con "no declarada", el override entero se perdería.
+	if cfg.AICacheWriteUSDPerMillion != 0 || cfg.AIInputUSDPerMillion != 0.14 {
+		t.Errorf("tarifas mal leídas: %+v", cfg)
+	}
+}
+
+// Sin declarar nada, el precio lo pone el catálogo del modelo, no un default
+// que antes vivía aquí con los precios de MiniMax-M3.
+func TestSinTarifasNoHayOverride(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://u:p@localhost:5432/x?sslmode=disable")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AIRatesExplicit {
+		t.Fatal("sin variables de tarifa no debería haber override")
 	}
 }

@@ -87,7 +87,7 @@ func (a *Agent) RunAgenticUsage(
 	usage = Usage{Provider: a.provider, Model: a.model, Rates: a.rates}
 
 	for step := 0; step < maxAgentSteps; step++ {
-		resp, callErr := a.client.Messages.New(ctx, params)
+		resp, callErr := a.client.Messages.New(ctx, params, a.tenantOptions()...)
 		if callErr != nil {
 			return "", "", usage, callErr
 		}
