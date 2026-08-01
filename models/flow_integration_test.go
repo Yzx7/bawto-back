@@ -212,8 +212,8 @@ func TestFlowArchivarLiberaLaKey(t *testing.T) {
 	}
 
 	// Un flujo archivado deja de ejecutarse.
-	if def, err := PublishedFlowDefinition(ctx, pool, bot.ID, "message"); err != nil || def != nil {
-		t.Fatalf("un flujo archivado no debe resolverse: err=%v def=%s", err, def)
+	if list, err := PublishedMessageFlows(ctx, pool, bot.ID); err != nil || len(list) != 0 {
+		t.Fatalf("un flujo archivado no debe resolverse: err=%v list=%+v", err, list)
 	}
 	// Y no aparece en la lista operativa, pero sí en el historial.
 	if list, err := ListFlows(ctx, pool, bot.ID, false); err != nil || len(list) != 0 {
@@ -275,8 +275,8 @@ func TestFlowAislamientoEntreOrganizaciones(t *testing.T) {
 	if res, err := PublishFlow(ctx, pool, botB.ID, flowA.ID, raw, "x", "intruso"); err != nil || res != nil {
 		t.Fatalf("PublishFlow cruzado publicó algo: %v (err=%v)", res, err)
 	}
-	if def, err := PublishedFlowDefinition(ctx, pool, botB.ID, "message"); err != nil || def != nil {
-		t.Fatalf("el bot B no debe resolver el flujo del bot A: %s (err=%v)", def, err)
+	if list, err := PublishedMessageFlows(ctx, pool, botB.ID); err != nil || len(list) != 0 {
+		t.Fatalf("el bot B no debe resolver el flujo del bot A: %+v (err=%v)", list, err)
 	}
 	// El original sigue intacto.
 	if got, err := GetFlow(ctx, pool, botA.ID, flowA.ID); err != nil || got == nil || got.ArchivedAt != nil {
@@ -301,8 +301,11 @@ func TestFlowPausarYReactivar(t *testing.T) {
 	if _, err := PauseFlow(ctx, pool, bot.ID, flow.ID, "tester"); err != nil {
 		t.Fatalf("PauseFlow: %v", err)
 	}
-	if def, err := PublishedFlowDefinition(ctx, pool, bot.ID, "message"); err != nil || def != nil {
-		t.Fatalf("un flujo pausado no debe ejecutarse: err=%v def=%s", err, def)
+	if list, err := PublishedMessageFlows(ctx, pool, bot.ID); err != nil || len(list) != 0 {
+		t.Fatalf("un flujo pausado no debe ejecutarse: err=%v list=%+v", err, list)
+	}
+	if ref, err := PublishedFlowByID(ctx, pool, bot.ID, flow.ID); err != nil || ref != nil {
+		t.Fatalf("pausado tampoco debe reanudar una conversación a medias: err=%v ref=%+v", err, ref)
 	}
 	resumed, err := ResumeFlow(ctx, pool, bot.ID, flow.ID, "tester")
 	if err != nil || resumed == nil {
@@ -311,7 +314,7 @@ func TestFlowPausarYReactivar(t *testing.T) {
 	if *resumed.PublishedVersionID != pub.Version.ID {
 		t.Fatal("pausar no puede perder la versión publicada")
 	}
-	if def, err := PublishedFlowDefinition(ctx, pool, bot.ID, "message"); err != nil || def == nil {
-		t.Fatalf("tras reactivar debe volver a resolverse: err=%v", err)
+	if list, err := PublishedMessageFlows(ctx, pool, bot.ID); err != nil || len(list) != 1 {
+		t.Fatalf("tras reactivar debe volver a resolverse: err=%v list=%+v", err, list)
 	}
 }

@@ -12,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/Yzx7/sacs-chatbots/engine"
 )
 
 // Multiflujo (§3.1, §5.1 y §5.2 del plan). Un bot puede tener varios flujos: su
@@ -37,6 +39,16 @@ type Flow struct {
 	LastTickAt         *time.Time      `db:"last_tick_at" json:"lastTickAt,omitempty"`
 	CreatedAt          time.Time       `db:"created_at" json:"createdAt"`
 	UpdatedAt          time.Time       `db:"updated_at" json:"updatedAt"`
+
+	// UnpublishedChanges: el borrador no coincide con la versión que el bot
+	// ejecuta. No sale de la base —se calcula comparando checksums— y por eso
+	// lleva `db:"-"`.
+	//
+	// Existe porque el editor no tenía forma de decirlo: mostraba el estado del
+	// flujo ("Publicado") junto a un lienzo que **siempre** edita el borrador, así
+	// que un flujo publicado con cambios pendientes se veía exactamente igual que
+	// uno al día. Se puede editar, guardar y creer que el bot ya lo usa.
+	UnpublishedChanges bool `db:"-" json:"unpublishedChanges"`
 }
 
 // FlowVersion es una definición publicada e inmutable.
@@ -128,7 +140,63 @@ func ListFlows(ctx context.Context, p *pgxpool.Pool, botID string, includeArchiv
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, pgx.RowToStructByName[Flow])
+	flows, err := pgx.CollectRows(rows, pgx.RowToStructByName[Flow])
+	if err != nil {
+		return nil, err
+	}
+	annotateUnpublished(ctx, p, flows)
+	return flows, nil
+}
+
+// annotateUnpublished marca los flujos cuyo borrador difiere de lo publicado.
+//
+// Compara por **checksum canónico**, la misma normalización que usa `PublishFlow`
+// para detectar un publicado sin cambios. Así el editor y el publicador coinciden
+// en qué significa "es lo mismo": si aquí dijera que hay cambios y publicar los
+// declarara no-op, el aviso se volvería ruido y se aprendería a ignorarlo.
+//
+// Un flujo sin versión publicada tiene cambios por definición: nada de lo que
+// está escrito se está ejecutando.
+func annotateUnpublished(ctx context.Context, p *pgxpool.Pool, flows []Flow) {
+	ids := make([]string, 0, len(flows))
+	for i := range flows {
+		if flows[i].PublishedVersionID != nil {
+			ids = append(ids, *flows[i].PublishedVersionID)
+		} else {
+			flows[i].UnpublishedChanges = len(flows[i].Draft) > 0
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	rows, err := p.Query(ctx, `SELECT id::text, checksum FROM flow_versions WHERE id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	checksums := make(map[string]string, len(ids))
+	for rows.Next() {
+		var id, checksum string
+		if rows.Scan(&id, &checksum) == nil {
+			checksums[id] = checksum
+		}
+	}
+	for i := range flows {
+		if flows[i].PublishedVersionID == nil {
+			continue
+		}
+		published, ok := checksums[*flows[i].PublishedVersionID]
+		if !ok {
+			continue
+		}
+		_, draft, err := engine.CanonicalChecksum(flows[i].Draft)
+		if err != nil {
+			// Un borrador que ni siquiera normaliza no es lo publicado.
+			flows[i].UnpublishedChanges = true
+			continue
+		}
+		flows[i].UnpublishedChanges = draft != published
+	}
 }
 
 // GetFlow devuelve un flujo del bot (nil si no existe o es de otro bot). El
@@ -147,7 +215,9 @@ func GetFlow(ctx context.Context, p *pgxpool.Pool, botID, flowID string) (*Flow,
 	if err != nil {
 		return nil, err
 	}
-	return &f, nil
+	single := []Flow{f}
+	annotateUnpublished(ctx, p, single)
+	return &single[0], nil
 }
 
 // NewFlow son los datos de creación de un flujo.
@@ -208,8 +278,28 @@ func UpdateFlowDraft(ctx context.Context, p *pgxpool.Pool, botID, flowID string,
 }
 
 // UpdateFlowMeta renombra o cambia prioridad/fallback sin tocar el grafo.
+//
+// Marcar el fallback **desmarca al anterior en la misma transacción**. El índice
+// uq_flows_bot_fallback solo admite uno vivo por bot, así que sin ese paso previo
+// elegir otro fallback obligaría a desmarcar a mano el actual: dos operaciones
+// para una sola decisión, con el bot sin red de seguridad en medio.
 func UpdateFlowMeta(ctx context.Context, p *pgxpool.Pool, botID, flowID, name string, priority int, isFallback bool, userID string) (*Flow, error) {
-	rows, err := p.Query(ctx,
+	tx, err := p.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	if isFallback {
+		if _, err := tx.Exec(ctx,
+			`UPDATE flows SET is_fallback = FALSE, updated_by = COALESCE(NULLIF($3,''), updated_by)
+			 WHERE bot_id = $1::uuid AND id <> $2::uuid AND is_fallback
+			   AND archived_at IS NULL AND trigger_type = 'message'`,
+			botID, flowID, userID); err != nil {
+			return nil, err
+		}
+	}
+	rows, err := tx.Query(ctx,
 		`UPDATE flows SET name = $3, priority = $4, is_fallback = $5,
 		        updated_by = COALESCE(NULLIF($6,''), updated_by)
 		 WHERE id = $1::uuid AND bot_id = $2::uuid AND archived_at IS NULL
@@ -222,6 +312,9 @@ func UpdateFlowMeta(ctx context.Context, p *pgxpool.Pool, botID, flowID, name st
 		return nil, nil
 	}
 	if err != nil {
+		return nil, translateFlowConflict(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, translateFlowConflict(err)
 	}
 	return &f, nil
@@ -513,27 +606,64 @@ func RestoreFlowVersion(ctx context.Context, p *pgxpool.Pool, botID, flowID, ver
 	return UpdateFlowDraft(ctx, p, botID, flowID, version.Definition, userID)
 }
 
-// PublishedFlowDefinition devuelve la definición publicada del flujo de ese tipo
-// con mayor prioridad (menor `priority`). Es la lectura compatible de §12: el
-// llamador cae a `bots.flow` si esto devuelve nil.
+// PublishedFlowRef es un flujo publicado junto a su grafo vigente. Lo consume el
+// dispatcher del webhook, que necesita saber **cuál** flujo eligió (para poder
+// reanudar la conversación en ese mismo grafo), no solo su definición.
+type PublishedFlowRef struct {
+	FlowID     string          `db:"flow_id"`
+	Key        string          `db:"key"`
+	Name       string          `db:"name"`
+	Priority   int             `db:"priority"`
+	IsFallback bool            `db:"is_fallback"`
+	Definition json.RawMessage `db:"definition"`
+}
+
+// PublishedMessageFlows devuelve todos los flujos `message` publicados del bot,
+// en el orden en que el dispatcher debe probarlos: primero los que declaran
+// palabras clave (por prioridad), y el fallback al final.
 //
-// Los flujos pausados quedan fuera a propósito: pausar debe dejar de ejecutar.
-func PublishedFlowDefinition(ctx context.Context, p *pgxpool.Pool, botID, triggerType string) (json.RawMessage, error) {
-	var def json.RawMessage
-	err := p.QueryRow(ctx,
-		`SELECT v.definition FROM flows f
+// El orden por `is_fallback` no es cosmético: el fallback es el que atiende
+// cuando ninguno reconoce el mensaje, así que probarlo antes lo convertiría en el
+// único flujo que se ejecuta jamás.
+func PublishedMessageFlows(ctx context.Context, p *pgxpool.Pool, botID string) ([]PublishedFlowRef, error) {
+	rows, err := p.Query(ctx,
+		`SELECT f.id::text AS flow_id, f.key, f.name, f.priority, f.is_fallback, v.definition
+		 FROM flows f
 		 JOIN flow_versions v ON v.id = f.published_version_id
-		 WHERE f.bot_id = $1::uuid AND f.trigger_type = $2
+		 WHERE f.bot_id = $1::uuid AND f.trigger_type = 'message'
 		   AND f.status = 'published' AND f.archived_at IS NULL
-		 ORDER BY f.is_fallback, f.priority, f.id
-		 LIMIT 1`, botID, triggerType).Scan(&def)
+		 ORDER BY f.is_fallback, f.priority, f.id`, botID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByName[PublishedFlowRef])
+}
+
+// PublishedFlowByID devuelve el grafo publicado de un flujo concreto (nil si no
+// existe, no es del bot, está archivado, pausado o sin versión publicada).
+//
+// Reanudar exige esto: una conversación a medias tiene que seguir en el grafo en
+// el que empezó aunque el mensaje siguiente ya no case con su trigger. Si el
+// flujo dejó de estar publicado, devolver nil es lo correcto — el llamador vuelve
+// a despachar en vez de ejecutar algo que el operador pausó.
+func PublishedFlowByID(ctx context.Context, p *pgxpool.Pool, botID, flowID string) (*PublishedFlowRef, error) {
+	rows, err := p.Query(ctx,
+		`SELECT f.id::text AS flow_id, f.key, f.name, f.priority, f.is_fallback, v.definition
+		 FROM flows f
+		 JOIN flow_versions v ON v.id = f.published_version_id
+		 WHERE f.bot_id = $1::uuid AND f.id = $2::uuid
+		   AND f.status = 'published' AND f.archived_at IS NULL`, botID, flowID)
+	if err != nil {
+		return nil, err
+	}
+	ref, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[PublishedFlowRef])
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return def, nil
+	return &ref, nil
 }
 
 // translateFlowConflict convierte los conflictos de índice en errores de dominio,

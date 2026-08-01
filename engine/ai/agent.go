@@ -80,6 +80,10 @@ type Usage struct {
 	CacheReadInputTokens     int64
 	CacheCreationInputTokens int64
 	Rates                    Rates
+	// Steps son las peticiones al modelo que costó el turno. 1 en el camino
+	// clásico; en el agéntico crece con las herramientas que decidió llamar, y es
+	// el número que explica una factura que sube sin que cambie el tráfico.
+	Steps int
 }
 
 func (u Usage) EstimatedCostUSD() float64 {
@@ -166,6 +170,7 @@ func (a *Agent) RunWithHistoryUsage(ctx context.Context, instruction string, var
 
 	usage = Usage{
 		Provider:                 a.provider,
+		Steps:                    1,
 		Model:                    string(resp.Model),
 		RequestID:                resp.ID,
 		InputTokens:              resp.Usage.InputTokens,

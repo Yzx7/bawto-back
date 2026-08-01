@@ -74,6 +74,31 @@ func ListPublishedScheduleFlows(ctx context.Context, p *pgxpool.Pool) ([]Schedul
 	return pgx.CollectRows(rows, pgx.RowToStructByName[ScheduledFlow])
 }
 
+// PublishedScheduleFlow devuelve **un** flujo programado concreto del bot.
+//
+// Existe porque encolar a mano tiene que decir cuál: la variante que lista todos
+// y se queda con el primero deja de servir en cuanto el bot tiene dos
+// recordatorios, que es justo lo que el multiflujo habilita. nil = no existe, no
+// es de ese bot, está archivado, pausado o sin versión publicada.
+func PublishedScheduleFlow(ctx context.Context, p *pgxpool.Pool, botID, flowID string) (*ScheduledFlow, error) {
+	rows, err := p.Query(ctx, `SELECT f.id::text AS flow_id, f.bot_id::text AS bot_id,
+		v.id::text AS flow_version_id, v.definition, f.last_tick_at
+		FROM flows f JOIN flow_versions v ON v.id=f.published_version_id
+		WHERE f.id=$2::uuid AND f.bot_id=$1::uuid AND f.trigger_type='schedule'
+		  AND f.status='published' AND f.archived_at IS NULL`, botID, flowID)
+	if err != nil {
+		return nil, err
+	}
+	f, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[ScheduledFlow])
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
 func AdvanceFlowTick(ctx context.Context, p *pgxpool.Pool, flowID string, at time.Time) error {
 	_, err := p.Exec(ctx, `UPDATE flows SET last_tick_at=$2 WHERE id=$1::uuid`, flowID, at.UTC())
 	return err
@@ -89,15 +114,22 @@ func RecordScheduleOccurrence(ctx context.Context, p *pgxpool.Pool, flowID, vers
 	return err
 }
 
-func CreateFlowRun(ctx context.Context, p *pgxpool.Pool, botID, flowID, versionID, recordID, contactID, key string, scheduledFor time.Time, flowContext json.RawMessage) (*FlowRun, bool, error) {
+// CreateFlowRun encola una ejecución. `source` distingue lo que salió del cron
+// (`schedule`) de lo que alguien disparó a mano (`manual`): sin esa marca, el
+// historial no permite explicar por qué un cliente recibió un mensaje fuera de
+// horario.
+func CreateFlowRun(ctx context.Context, p *pgxpool.Pool, botID, flowID, versionID, recordID, contactID, key, source string, scheduledFor time.Time, flowContext json.RawMessage) (*FlowRun, bool, error) {
 	if len(flowContext) == 0 {
 		flowContext = json.RawMessage(`{}`)
 	}
+	if source == "" {
+		source = "schedule"
+	}
 	rows, err := p.Query(ctx, `INSERT INTO flow_runs
-		(bot_id,flow_id,flow_version_id,data_record_id,contact_id,run_key,scheduled_for,context)
-		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6,$7,$8::jsonb)
+		(bot_id,flow_id,flow_version_id,data_record_id,contact_id,run_key,source,scheduled_for,context)
+		VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6,$7,$8,$9::jsonb)
 		ON CONFLICT(run_key) DO NOTHING RETURNING `+flowRunCols,
-		botID, flowID, versionID, recordID, contactID, key, scheduledFor.UTC(), flowContext)
+		botID, flowID, versionID, recordID, contactID, key, source, scheduledFor.UTC(), flowContext)
 	if err != nil {
 		return nil, false, err
 	}

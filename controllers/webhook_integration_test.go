@@ -198,3 +198,110 @@ func TestWhatsAppFlowEngineIntegration(t *testing.T) {
 		t.Fatalf("secuencia del flujo incorrecta: %v", sent)
 	}
 }
+
+// Con varios flujos `message` publicados el webhook tiene que elegir uno, y esa
+// elección tiene tres reglas que solo se ven juntas: gana el que reconoce el
+// mensaje, una conversación a medias se queda en el suyo aunque el turno
+// siguiente case con otro, y si nadie reconoce atiende el fallback.
+//
+//	DATABASE_URL=... go test ./controllers -run VariosFlujos -v
+func TestWebhookVariosFlujosMessageEligeYReanuda(t *testing.T) {
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		t.Skip("DATABASE_URL no seteada")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	var mu sync.Mutex
+	var sent []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		_ = json.Unmarshal(b, &body)
+		if txt, ok := body["text"].(map[string]any); ok {
+			mu.Lock()
+			sent = append(sent, txt["body"].(string))
+			mu.Unlock()
+		}
+		_, _ = w.Write([]byte(`{"messages":[{"id":"wamid.out"}]}`))
+	}))
+	defer srv.Close()
+
+	key := make([]byte, 32)
+	_, _ = rand.Read(key)
+	cph, _ := helpers.NewCipher(hex.EncodeToString(key))
+	con := New(&env.Env{
+		Postgres: pool,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Cipher:   cph,
+		Config:   &config.Config{WhatsAppAPIBase: srv.URL, WhatsAppAPIVersion: "v21.0"},
+	})
+
+	uid := randHex("disp_")
+	_, _ = pool.Exec(ctx, `INSERT INTO "user"(id,name,email,"emailVerified") VALUES ($1,$2,$3,false)`, uid, "D", uid+"@test.local")
+	defer pool.Exec(ctx, `DELETE FROM "user" WHERE id = $1`, uid)
+	org, _ := models.CreateOrganization(ctx, pool, uid, "Disp Org", nil, nil)
+	defer models.DeleteOrganization(ctx, pool, org.ID)
+	bot, _ := models.CreateBot(ctx, pool, org.ID, "Disp Bot", "wsp")
+	enc, _ := cph.Encrypt("TKN")
+	_ = models.UpdateBotChannel(ctx, pool, bot.ID, "wsp", "PNIDD", "", enc)
+
+	publicar := func(flowKey, name string, priority int, fallback bool, graph string) {
+		t.Helper()
+		flow, err := models.CreateFlow(ctx, pool, bot.ID, models.NewFlow{
+			Key: flowKey, Name: name, TriggerType: "message",
+			Priority: priority, IsFallback: fallback, UserID: uid,
+		})
+		if err != nil {
+			t.Fatalf("CreateFlow %s: %v", flowKey, err)
+		}
+		canonical, checksum, err := engine.CanonicalChecksum(json.RawMessage(graph))
+		if err != nil {
+			t.Fatalf("CanonicalChecksum %s: %v", flowKey, err)
+		}
+		if _, err := models.PublishFlow(ctx, pool, bot.ID, flow.ID, canonical, checksum, uid); err != nil {
+			t.Fatalf("PublishFlow %s: %v", flowKey, err)
+		}
+	}
+
+	// El de cobranza reconoce "pago" y deja la conversación esperando; el general
+	// atiende cualquier cosa y es el fallback.
+	publicar("cobranza", "Cobranza", 10, false, `{"id":"fc","name":"Cobranza",
+		"trigger":{"type":"message","match":"keyword","keywords":["pago"]},
+		"nodes":[{"id":"c1","kind":"send","body":"COBRANZA"},{"id":"cw","kind":"wait","expect":"any"},
+		         {"id":"c2","kind":"send","body":"COBRANZA-FIN"},{"id":"cend","kind":"action","action":"end"}],
+		"edges":[{"id":"ce0","source":"trigger","target":"c1"},{"id":"ce1","source":"c1","target":"cw"},
+		         {"id":"ce2","source":"cw","target":"c2"},{"id":"ce3","source":"c2","target":"cend"}]}`)
+	publicar("general", "General", 50, true, `{"id":"fg","name":"General",
+		"trigger":{"type":"message","match":"any"},
+		"nodes":[{"id":"g1","kind":"send","body":"GENERAL"},{"id":"gend","kind":"action","action":"end"}],
+		"edges":[{"id":"ge0","source":"trigger","target":"g1"},{"id":"ge1","source":"g1","target":"gend"}]}`)
+
+	inbound := func(waID, text string) []byte {
+		return []byte(`{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"PNIDD"},"messages":[{"from":"51999111222","id":"` + waID + `","type":"text","text":{"body":"` + text + `"}}]}}]}]}`)
+	}
+
+	con.processWhatsApp(inbound("wamid.d1", "quiero hacer un pago"))
+	// "hola" casaría con el trigger del general, pero la conversación está a
+	// medias en cobranza: reanudar allí es la regla que se está probando.
+	con.processWhatsApp(inbound("wamid.d2", "hola"))
+	// Ya terminó: ahora sí atiende el fallback.
+	con.processWhatsApp(inbound("wamid.d3", "hola"))
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"COBRANZA", "COBRANZA-FIN", "GENERAL"}
+	if len(sent) != len(want) {
+		t.Fatalf("mensajes inesperados: %v (esperado %v)", sent, want)
+	}
+	for i := range want {
+		if sent[i] != want[i] {
+			t.Fatalf("mensaje %d = %q, esperado %q (secuencia %v)", i+1, sent[i], want[i], sent)
+		}
+	}
+}

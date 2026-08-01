@@ -232,6 +232,16 @@ func (con *Controller) LinkOrgDataRecordContact(c *fiber.Ctx) error {
 	}
 	return con.ok(c, "relación creada", nil)
 }
+func (con *Controller) UnlinkOrgDataRecordContact(c *fiber.Ctx) error {
+	org := c.Params("orgId")
+	if _, e := con.requireOrgRole(c, org, "owner", "admin", "member"); e != nil {
+		return con.failErr(c, e)
+	}
+	if e := models.UnlinkRecordContactByOrg(c.Context(), con.Env.Postgres, org, c.Params("recordId"), c.Params("contactId")); e != nil {
+		return con.fail(c, 400, e.Error())
+	}
+	return con.ok(c, "relación eliminada", nil)
+}
 func (con *Controller) ListOrgDataViews(c *fiber.Ctx) error {
 	org := c.Params("orgId")
 	if _, e := con.requireOrgRole(c, org); e != nil {

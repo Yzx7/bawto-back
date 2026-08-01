@@ -88,3 +88,82 @@ func TestValidateRejectsLoopbackWithoutWait(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+// Las herramientas del agente no tienen ramas que validar —su resultado vuelve
+// al modelo, no a una arista—, pero sí alcance: el motor solo ejecuta las de su
+// registro, y la configuración que acota ese alcance es obligatoria. Fallar aquí
+// y no al publicar es la diferencia entre un aviso en el bloque y un rechazo.
+func TestValidateHerramientasDelAgente(t *testing.T) {
+	tests := []struct {
+		name  string
+		tools []NodeTool
+		want  string
+	}{
+		{
+			name:  "válida con su configuración",
+			tools: []NodeTool{{Ref: "search_data", Config: map[string]string{"object": "servicios"}}},
+		},
+		{
+			name:  "inexistente",
+			tools: []NodeTool{{Ref: "buscar_en_google"}},
+			want:  "no implementada",
+		},
+		{
+			name:  "existe pero no es para agentes",
+			tools: []NodeTool{{Ref: "record_payment_receipt"}},
+			want:  "no está disponible para agentes",
+		},
+		{
+			name:  "sin la configuración obligatoria",
+			tools: []NodeTool{{Ref: "search_data"}},
+			want:  "requiere Objeto de datos",
+		},
+		{
+			name: "duplicada",
+			tools: []NodeTool{
+				{Ref: "search_data", Config: map[string]string{"object": "servicios"}},
+				{Ref: "search_data", Config: map[string]string{"object": "facturas"}},
+			},
+			want: "duplicada",
+		},
+		{
+			name: "configuración que la herramienta no admite",
+			tools: []NodeTool{{Ref: "search_data", Config: map[string]string{
+				"object": "servicios", "limite": "100",
+			}}},
+			want: "no admite la configuración",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			flow := validAgentFlow()
+			flow.Nodes[0].Tools = tc.tools
+			err := Validate(flow)
+			switch {
+			case tc.want == "" && err != nil:
+				t.Fatalf("debería ser válido: %v", err)
+			case tc.want != "" && err == nil:
+				t.Fatalf("debería fallar con %q", tc.want)
+			case tc.want != "" && !strings.Contains(err.Error(), tc.want):
+				t.Fatalf("error %q no menciona %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// El bloque `tool` del grafo y el agente no comparten catálogo: una herramienta
+// pensada para que la llame el modelo no puede colgarse de una arista.
+func TestValidateBloqueToolRechazaHerramientaDeAgente(t *testing.T) {
+	flow := validAgentFlow()
+	flow.Nodes = append(flow.Nodes, Node{ID: "t1", Kind: "tool", ToolRef: "search_data"})
+	flow.Edges = append(flow.Edges,
+		Edge{ID: "ok-t1", Source: "ok", Target: "t1"},
+		Edge{ID: "t1-ok", Source: "t1", SourceHandle: "ok", Target: "ok"},
+		Edge{ID: "t1-err", Source: "t1", SourceHandle: "error", Target: "ok"},
+	)
+	err := Validate(flow)
+	if err == nil || !strings.Contains(err.Error(), "solo puede usarla un agente") {
+		t.Fatalf("se esperaba el rechazo por consumidor equivocado, got %v", err)
+	}
+}

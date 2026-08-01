@@ -34,7 +34,9 @@ func TestRutasDeLaInterfazOperativaRegistradas(t *testing.T) {
 	esperadas := []string{
 		http.MethodPost + " /bots/:botId/flows/:flowId/duplicate",
 		http.MethodPost + " /bots/:botId/flows/:flowId/schedule/preview",
+		http.MethodPost + " /bots/:botId/flows/:flowId/schedule/queue",
 		http.MethodGet + " /bots/:botId/flows/:flowId/occurrences",
+		http.MethodPost + " /chats/:chatId/reset",
 		http.MethodPost + " /bots/:botId/schedule/validate-cron",
 		http.MethodGet + " /bots/:botId/flow-runs",
 		http.MethodGet + " /bots/:botId/flow-runs/:runId",

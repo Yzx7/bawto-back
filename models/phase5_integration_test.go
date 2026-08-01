@@ -42,7 +42,7 @@ func TestPhase5HistorialDeRuns(t *testing.T) {
 
 	at := time.Now().UTC().Truncate(time.Minute)
 	run, created, err := CreateFlowRun(ctx, pool, bot.ID, flow.ID, version.Version.ID,
-		record.ID, contact.ID, "ph5-run-1", at, json.RawMessage(`{"record_monto":"90"}`))
+		record.ID, contact.ID, "ph5-run-1", "schedule", at, json.RawMessage(`{"record_monto":"90"}`))
 	if err != nil || !created {
 		t.Fatalf("CreateFlowRun: created=%v err=%v", created, err)
 	}

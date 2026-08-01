@@ -106,7 +106,8 @@ func TestBOTIPaymentAndSupportJourneys(t *testing.T) {
 	if err = json.Unmarshal(raw, &flow); err != nil {
 		t.Fatal(err)
 	}
-	agent := func(_, _ string, vars map[string]string, outputs []string, _ bool) (string, string, error) {
+	agent := func(request AgentRequest) (string, string, error) {
+		vars, outputs := request.Vars, request.Outputs
 		if contains(outputs, "pago") {
 			if vars["input"] == "1" {
 				return "Registraré tu pago.", "pago", nil
@@ -169,7 +170,8 @@ func TestAdvanceAgentBranch(t *testing.T) {
 		},
 	}
 	deps := Deps{
-		Agent: func(nodeID, instr string, vars map[string]string, outs []string, _ bool) (string, string, error) {
+		Agent: func(request AgentRequest) (string, string, error) {
+			nodeID, instr := request.NodeID, request.Instruction
 			if nodeID != "a1" {
 				t.Fatalf("node id inesperado: %q", nodeID)
 			}
@@ -217,7 +219,8 @@ func TestAgentHistoryPersistsAcrossLoopback(t *testing.T) {
 
 	calls := 0
 	deps := Deps{InputType: "text"}
-	deps.AgentWithHistory = func(_, _ string, _ map[string]string, _ []string, history []ChatMessage, _ bool) (string, string, error) {
+	deps.Agent = func(request AgentRequest) (string, string, error) {
+		history := request.History
 		calls++
 		switch calls {
 		case 1:
@@ -275,7 +278,8 @@ func TestAgentWithoutContextReceivesEmptyHistory(t *testing.T) {
 
 	called := false
 	deps := Deps{InputType: "text"}
-	deps.AgentWithHistory = func(_, _ string, vars map[string]string, _ []string, history []ChatMessage, _ bool) (string, string, error) {
+	deps.Agent = func(request AgentRequest) (string, string, error) {
+		vars, history := request.Vars, request.History
 		called = true
 		if vars["input"] != "mensaje actual" {
 			t.Fatalf("input ausente: %+v", vars)
@@ -352,7 +356,8 @@ func TestSistemuinoDiscoveryUsesConversationalLoopback(t *testing.T) {
 
 	routerCalls := 0
 	deps := Deps{InputType: "text"}
-	deps.AgentWithHistory = func(_, _ string, _ map[string]string, outputs []string, history []ChatMessage, _ bool) (string, string, error) {
+	deps.Agent = func(request AgentRequest) (string, string, error) {
+		outputs, history := request.Outputs, request.History
 		if !contains(outputs, "conversar") {
 			t.Fatalf("el orientador no expone conversar: %v", outputs)
 		}
@@ -419,7 +424,8 @@ func TestSistemuinoOptionLeadsToWaitThenSpecialistAgent(t *testing.T) {
 
 	var visited []string
 	deps := Deps{InputType: "text"}
-	deps.AgentWithHistory = func(nodeID, _ string, _ map[string]string, outputs []string, _ []ChatMessage, silent bool) (string, string, error) {
+	deps.Agent = func(request AgentRequest) (string, string, error) {
+		nodeID, outputs, silent := request.NodeID, request.Outputs, request.Silent
 		visited = append(visited, nodeID)
 		if silent {
 			t.Fatalf("%s no debe ser silencioso: es el único mensaje del turno", nodeID)
@@ -496,7 +502,8 @@ func TestAgentReceivesOnlyExplicitContext(t *testing.T) {
 			"contact_name":         "Ana",
 			"data_facturas_numero": "F-001",
 		},
-		Agent: func(_ string, instruction string, vars map[string]string, _ []string, _ bool) (string, string, error) {
+		Agent: func(request AgentRequest) (string, string, error) {
+			instruction, vars := request.Instruction, request.Vars
 			if instruction != "Atiende a Ana; entrada text" {
 				t.Fatalf("variables explícitas no interpoladas: %q", instruction)
 			}
@@ -534,7 +541,8 @@ func TestAgentErrorPersistsDirectRetryState(t *testing.T) {
 
 	calls := 0
 	deps := Deps{InputType: "text"}
-	deps.AgentWithHistory = func(_, _ string, _ map[string]string, _ []string, history []ChatMessage, _ bool) (string, string, error) {
+	deps.Agent = func(request AgentRequest) (string, string, error) {
+		history := request.History
 		calls++
 		if calls == 1 {
 			return "", "", errors.New("proveedor temporalmente no disponible")

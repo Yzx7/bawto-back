@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/Yzx7/sacs-chatbots/engine/tools"
 )
 
 var branchNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
@@ -158,6 +160,9 @@ func validateNode(n *Node, triggerType string) error {
 		if n.ContextMode == "recent" && strings.Contains(n.Instruction, "{input}") {
 			return fmt.Errorf("contextMode recent ya recibe el mensaje actual en el historial; no uses {input} en la instrucción")
 		}
+		if err := validateAgentTools(n.Tools); err != nil {
+			return err
+		}
 		seenOutputs := make(map[string]struct{}, len(n.Outputs))
 		for _, output := range n.Outputs {
 			if !branchNameRe.MatchString(output) {
@@ -177,8 +182,15 @@ func validateNode(n *Node, triggerType string) error {
 			return fmt.Errorf("tipo de espera inválido")
 		}
 	case "tool":
-		if n.ToolRef != "record_payment_receipt" {
+		spec := tools.Get(n.ToolRef)
+		if spec == nil {
 			return fmt.Errorf("herramienta %q no implementada", n.ToolRef)
+		}
+		if !spec.ForGraph {
+			return fmt.Errorf("la herramienta %q solo puede usarla un agente, no un bloque del grafo", n.ToolRef)
+		}
+		if len(n.Tools) > 0 {
+			return fmt.Errorf("`tools` es del bloque agente; este ejecuta una sola herramienta con `toolRef`")
 		}
 	case "condition":
 		if strings.TrimSpace(n.Expression) == "" {
@@ -192,6 +204,52 @@ func validateNode(n *Node, triggerType string) error {
 		return fmt.Errorf("tipo %q inválido", n.Kind)
 	}
 	return nil
+}
+
+// validateAgentTools comprueba las herramientas que el nodo le ofrece al modelo.
+//
+// No hay ramas que validar aquí, a diferencia del bloque `tool`: el resultado de
+// una llamada vuelve al contexto del modelo, no a una arista. Lo que sí hay que
+// garantizar es que la herramienta existe, que está pensada para un agente y que
+// el autor fijó la configuración que el modelo no puede elegir.
+func validateAgentTools(nodeTools []NodeTool) error {
+	if len(nodeTools) > 16 {
+		return fmt.Errorf("demasiadas herramientas (%d): el modelo elige peor cuantas más tenga", len(nodeTools))
+	}
+	seen := make(map[string]struct{}, len(nodeTools))
+	for _, nodeTool := range nodeTools {
+		spec := tools.Get(nodeTool.Ref)
+		if spec == nil {
+			return fmt.Errorf("herramienta %q no implementada", nodeTool.Ref)
+		}
+		if !spec.ForAgent {
+			return fmt.Errorf("la herramienta %q no está disponible para agentes", nodeTool.Ref)
+		}
+		if _, exists := seen[nodeTool.Ref]; exists {
+			return fmt.Errorf("herramienta duplicada %q", nodeTool.Ref)
+		}
+		seen[nodeTool.Ref] = struct{}{}
+		for _, key := range spec.Config {
+			if key.Required && strings.TrimSpace(nodeTool.Config[key.Key]) == "" {
+				return fmt.Errorf("la herramienta %q requiere %s", nodeTool.Ref, key.Label)
+			}
+		}
+		for key := range nodeTool.Config {
+			if !specHasConfig(spec, key) {
+				return fmt.Errorf("la herramienta %q no admite la configuración %q", nodeTool.Ref, key)
+			}
+		}
+	}
+	return nil
+}
+
+func specHasConfig(spec *tools.Spec, key string) bool {
+	for _, item := range spec.Config {
+		if item.Key == key {
+			return true
+		}
+	}
+	return false
 }
 
 func requiredHandles(n *Node) []string {

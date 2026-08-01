@@ -42,7 +42,7 @@ func TestPhase3StatusDurableYCorrelacionSegura(t *testing.T) {
 	published := publica(t, ctx, pool, bot.ID, flow.ID, raw)
 
 	run, created, err := CreateFlowRun(ctx, pool, bot.ID, flow.ID, published.Version.ID,
-		record.ID, contact.ID, "p3:"+randID(""), time.Now().UTC(), json.RawMessage(`{}`))
+		record.ID, contact.ID, "p3:"+randID(""), "schedule", time.Now().UTC(), json.RawMessage(`{}`))
 	if err != nil || !created {
 		t.Fatalf("CreateFlowRun: created=%v err=%v", created, err)
 	}
@@ -125,7 +125,7 @@ func TestPhase3StatusDurableYCorrelacionSegura(t *testing.T) {
 		t.Fatal(err)
 	}
 	secondRun, created, err := CreateFlowRun(ctx, pool, bot.ID, flow.ID, published.Version.ID,
-		secondRecord.ID, contact.ID, "p3:"+randID(""), time.Now().UTC(), json.RawMessage(`{}`))
+		secondRecord.ID, contact.ID, "p3:"+randID(""), "schedule", time.Now().UTC(), json.RawMessage(`{}`))
 	if err != nil || !created {
 		t.Fatalf("segundo CreateFlowRun: created=%v err=%v", created, err)
 	}

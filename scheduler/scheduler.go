@@ -51,7 +51,8 @@ func Occurrences(expression string, loc *time.Location, lastTick, now time.Time)
 }
 
 // QueueFlow resuelve la vista de la versión publicada y congela el contexto.
-func QueueFlow(ctx context.Context, pool *pgxpool.Pool, scheduled models.ScheduledFlow, at time.Time) (Report, error) {
+// `source` marca de dónde vino el disparo: "schedule" el cron, "manual" el panel.
+func QueueFlow(ctx context.Context, pool *pgxpool.Pool, scheduled models.ScheduledFlow, at time.Time, source string) (Report, error) {
 	var flow engine.Flow
 	if err := json.Unmarshal(scheduled.Definition, &flow); err != nil || flow.Trigger.Type != "schedule" || flow.Trigger.ViewID == "" {
 		return Report{}, fmt.Errorf("flujo schedule inválido o sin viewId")
@@ -88,7 +89,7 @@ func QueueFlow(ctx context.Context, pool *pgxpool.Pool, scheduled models.Schedul
 		key := fmt.Sprintf("%s:%s:%s:%s:%s", scheduled.FlowID, scheduled.FlowVersionID,
 			record.ID, contact.ID, at.UTC().Truncate(time.Minute).Format(time.RFC3339))
 		_, created, err := models.CreateFlowRun(ctx, pool, scheduled.BotID, scheduled.FlowID,
-			scheduled.FlowVersionID, record.ID, contact.ID, key, at, raw)
+			scheduled.FlowVersionID, record.ID, contact.ID, key, source, at, raw)
 		if err != nil {
 			return report, err
 		}
@@ -166,7 +167,7 @@ func process(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config, log *s
 					occurrence, "skipped", "fuera de ventana de catch-up", 0, 0)
 				continue
 			}
-			report, qerr := QueueFlow(ctx, pool, scheduled, occurrence)
+			report, qerr := QueueFlow(ctx, pool, scheduled, occurrence, "schedule")
 			if qerr != nil {
 				ok = false
 				_ = models.RecordScheduleOccurrence(ctx, pool, scheduled.FlowID, scheduled.FlowVersionID,

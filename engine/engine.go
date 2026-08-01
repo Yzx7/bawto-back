@@ -9,6 +9,11 @@ import (
 
 // State es el estado persistido de una conversación (dónde quedó + variables).
 type State struct {
+	// FlowID identifica el flujo dueño de esta conversación. El motor no lo lee
+	// ni lo escribe —ejecuta el grafo que le pasen—; lo rellena el webhook al
+	// persistir, porque con varios flujos `message` publicados hay que reanudar
+	// en el mismo grafo en que se empezó y no en el que case con el turno actual.
+	FlowID       string            `json:"flowId,omitempty"`
 	NodeID       string            `json:"nodeId"`
 	Vars         map[string]string `json:"vars"`
 	History      []ChatMessage     `json:"history,omitempty"`
@@ -41,6 +46,22 @@ type TemplateSend struct {
 	Params         []string
 }
 
+// AgentRequest describe una ejecución del nodo `agent`. Es una estructura y no
+// una lista de parámetros porque el nodo ha ido ganando dimensiones —historial,
+// silencio, herramientas— y cada una obligaba a tocar todos los llamadores.
+type AgentRequest struct {
+	NodeID      string
+	Instruction string
+	Vars        map[string]string
+	Outputs     []string
+	// History llega solo con contextMode=recent; vacío en el resto.
+	History []ChatMessage
+	Silent  bool
+	// Tools son las herramientas que el modelo puede llamar en este turno. Vacío
+	// significa una sola petición al proveedor, sin bucle.
+	Tools []NodeTool
+}
+
 // Deps inyecta las capacidades que dependen de servicios externos.
 type Deps struct {
 	// Context aporta datos del contacto/cobro asociado al mensaje entrante.
@@ -50,11 +71,9 @@ type Deps struct {
 	MediaID   string
 	WaID      string
 	// Agent ejecuta un nodo IA: devuelve el texto a enviar y la rama de salida.
-	Agent func(nodeID, instruction string, vars map[string]string, outputs []string, silent bool) (reply, branch string, err error)
-	// AgentWithHistory es la variante conversacional. Los nodos con
-	// contextMode=recent reciben una copia del historial visible acumulado; los
-	// demás pueden usar el mismo adaptador con historial vacío.
-	AgentWithHistory func(nodeID, instruction string, vars map[string]string, outputs []string, history []ChatMessage, silent bool) (reply, branch string, err error)
+	// El motor no sabe si por debajo hubo una llamada o un bucle de herramientas;
+	// eso lo decide el adaptador según lo que el nodo declare.
+	Agent func(AgentRequest) (reply, branch string, err error)
 	// Tool ejecuta una función/API externa y devuelve un resultado (string).
 	Tool func(ref string, args, vars map[string]string) (result string, err error)
 }
@@ -201,32 +220,24 @@ func Advance(flow *Flow, state *State, userInput string, deps Deps) (Result, err
 			}, Handoff: handoff}, nil
 
 		case "agent":
-			var reply, branch string
-			var err error
-			instruction := interpolate(n.Instruction, vars)
-			contextVars := agentContextVars(vars)
-			switch n.ContextMode {
-			case "recent":
-				if deps.AgentWithHistory == nil {
-					return Result{Sends: sends, Templates: templates, Handoff: handoff},
-						fmt.Errorf("agente IA con contexto no configurado")
-				}
-				reply, branch, err = deps.AgentWithHistory(
-					n.ID, instruction, contextVars, n.Outputs,
-					append([]ChatMessage(nil), history...), n.Silent,
-				)
-			default:
-				switch {
-				case deps.Agent != nil:
-					reply, branch, err = deps.Agent(n.ID, instruction, contextVars, n.Outputs, n.Silent)
-				case deps.AgentWithHistory != nil:
-					reply, branch, err = deps.AgentWithHistory(
-						n.ID, instruction, contextVars, n.Outputs, nil, n.Silent,
-					)
-				default:
-					return Result{Sends: sends, Templates: templates, Handoff: handoff}, fmt.Errorf("agente IA no configurado")
-				}
+			if deps.Agent == nil {
+				return Result{Sends: sends, Templates: templates, Handoff: handoff},
+					fmt.Errorf("agente IA no configurado")
 			}
+			request := AgentRequest{
+				NodeID:      n.ID,
+				Instruction: interpolate(n.Instruction, vars),
+				Vars:        agentContextVars(vars),
+				Outputs:     n.Outputs,
+				Silent:      n.Silent,
+				Tools:       n.Tools,
+			}
+			// Solo los nodos con memoria reciben la conversación; se copia para que
+			// el adaptador no pueda alterar el historial del motor.
+			if n.ContextMode == "recent" {
+				request.History = append([]ChatMessage(nil), history...)
+			}
+			reply, branch, err := deps.Agent(request)
 			if err != nil {
 				return Result{
 					Sends: sends, Templates: templates, Handoff: handoff,

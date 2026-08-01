@@ -39,6 +39,23 @@ type DataRecord struct {
 	CreatedAt time.Time       `db:"created_at" json:"createdAt"`
 	UpdatedAt time.Time       `db:"updated_at" json:"updatedAt"`
 }
+
+// DataRecordWithContact es un registro junto al contacto primario vinculado, si
+// lo tiene. Es un tipo aparte y no campos extra en `DataRecord` a propósito: el
+// vínculo no está en `data_records`, y el camino del scheduler
+// (`ResolveDataView`) resuelve el destinatario con `PrimaryContactForRecord`, sin
+// necesitar el JOIN. Mezclarlos obligaría a arrastrar columnas nulas por consultas
+// que no las usan.
+type DataRecordWithContact struct {
+	ID           string          `db:"id" json:"id"`
+	ObjectID     string          `db:"object_id" json:"objectId"`
+	Data         json.RawMessage `db:"data" json:"data"`
+	ContactID    *string         `db:"contact_id" json:"contactId,omitempty"`
+	ContactName  *string         `db:"contact_name" json:"contactName,omitempty"`
+	ContactPhone *string         `db:"contact_phone" json:"contactPhone,omitempty"`
+	CreatedAt    time.Time       `db:"created_at" json:"createdAt"`
+	UpdatedAt    time.Time       `db:"updated_at" json:"updatedAt"`
+}
 type DataView struct {
 	ID        string          `db:"id" json:"id"`
 	ObjectID  string          `db:"object_id" json:"objectId"`
@@ -303,12 +320,19 @@ func DataRecordContext(ctx context.Context, p *pgxpool.Pool, botID, recordID str
 
 // PrimaryContactForRecord encuentra el destinatario del registro, sin conocer
 // su dominio (factura, pedido, cita, etc.).
+//
+// El desempate por `created_at DESC` no es cosmético: `LinkRecordContactByOrg`
+// ya impide que convivan dos `primary`, pero la interfaz pudo crearlos antes de
+// ese arreglo. Sin desempate Postgres elegiría uno arbitrariamente y el
+// recordatorio se iría a un destinatario u otro entre ejecuciones. Gana el
+// vínculo más reciente, que es el que el operador quiso al corregir.
 func PrimaryContactForRecord(ctx context.Context, p *pgxpool.Pool, botID, recordID string) (*Contact, error) {
 	rows, err := p.Query(ctx, `SELECT `+contactColsC+` FROM contacts c
         JOIN data_record_contacts rc ON rc.contact_id = c.id
         JOIN data_records r ON r.id = rc.record_id
         JOIN data_objects o ON o.id = r.object_id
-        WHERE o.org_id = (SELECT org_id FROM bots WHERE id=$1::uuid) AND r.id = $2::uuid ORDER BY CASE WHEN rc.role = 'primary' THEN 0 ELSE 1 END LIMIT 1`, botID, recordID)
+        WHERE o.org_id = (SELECT org_id FROM bots WHERE id=$1::uuid) AND r.id = $2::uuid
+        ORDER BY CASE WHEN rc.role = 'primary' THEN 0 ELSE 1 END, rc.created_at DESC, c.id LIMIT 1`, botID, recordID)
 	if err != nil {
 		return nil, err
 	}

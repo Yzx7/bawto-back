@@ -54,6 +54,7 @@ func RegisterHTTP(app *fiber.App, e *env.Env) {
 	org.Get("/:orgId/contact-fields", con.ListOrgContactFields)
 	org.Post("/:orgId/contact-fields", con.UpsertOrgContactField)
 	org.Post("/:orgId/data-records/:recordId/contacts/:contactId", con.LinkOrgDataRecordContact)
+	org.Delete("/:orgId/data-records/:recordId/contacts/:contactId", con.UnlinkOrgDataRecordContact)
 	org.Get("/:orgId/data-objects/:objectId/views", con.ListOrgDataViews)
 	org.Post("/:orgId/data-objects/:objectId/views", con.CreateOrgDataView)
 	org.Put("/:orgId/data-objects/:objectId/views/:viewId", con.UpdateOrgDataView)
@@ -70,6 +71,7 @@ func RegisterHTTP(app *fiber.App, e *env.Env) {
 	bots.Get("/:botId/flows", con.ListBotFlows)
 	bots.Post("/:botId/flows", con.CreateBotFlow)
 	bots.Get("/:botId/flows/:flowId", con.GetBotFlowByID)
+	bots.Patch("/:botId/flows/:flowId", con.UpdateBotFlowMeta)
 	bots.Get("/:botId/flows/:flowId/draft", con.GetBotFlowDraft)
 	bots.Put("/:botId/flows/:flowId/draft", con.UpdateBotFlowDraft)
 	bots.Post("/:botId/flows/:flowId/validate", con.ValidateBotFlow)
@@ -103,7 +105,7 @@ func RegisterHTTP(app *fiber.App, e *env.Env) {
 	bots.Post("/:botId/audiences", con.CreateAudience)
 	bots.Get("/:botId/audiences/:audienceId/contacts", con.ResolveAudience)
 	bots.Post("/:botId/audiences/:audienceId/contacts/:contactId", con.AddAudienceContact)
-	bots.Post("/:botId/schedule/queue", con.QueueScheduledFlow)
+	bots.Post("/:botId/flows/:flowId/schedule/queue", con.QueueBotFlowSchedule)
 	bots.Get("/:botId/chats", con.ListBotChats)
 	bots.Get("/:botId/stream", con.StreamBotEvents)
 
@@ -113,6 +115,7 @@ func RegisterHTTP(app *fiber.App, e *env.Env) {
 	chats.Get("/:chatId/messages", con.ListChatMessages)
 	chats.Post("/:chatId/messages", con.SendChatMessage)
 	chats.Put("/:chatId/mode", con.SetChatMode)
+	chats.Post("/:chatId/reset", con.ResetChatFlowState)
 	chats.Post("/:chatId/read", con.MarkChatRead)
 
 	msgs := app.Group("/messages", authmw.VerifyToken)

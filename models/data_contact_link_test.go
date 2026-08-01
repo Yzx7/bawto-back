@@ -1,8 +1,11 @@
 package models
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Regresión de dos fallos que solo aparecen contra Postgres de verdad y que se
@@ -25,6 +28,15 @@ import (
 //     42P10 ("there is no unique or exclusion constraint matching the ON
 //     CONFLICT specification"), así que vincular fallaba desde el primer intento,
 //     no solo al repetir.
+//
+//  4. `ListDataRecordsByOrg` no leía `data_record_contacts`, así que la pantalla
+//     de datos mostraba "Contacto vinculado" y al recargar el selector volvía a
+//     estar vacío: el vínculo se guardaba y nadie lo devolvía nunca.
+//
+//  5. La clave primaria es `(record_id, contact_id, role)`, así que elegir otro
+//     contacto insertaba un segundo `primary` en vez de reemplazar. Con dos,
+//     `PrimaryContactForRecord` elegía uno arbitrariamente y el recordatorio podía
+//     irse al contacto viejo.
 //
 //     DATABASE_URL=... go test ./models -run VinculoRegistroContacto -v
 func TestVinculoRegistroContactoResuelveDestinatario(t *testing.T) {
@@ -71,6 +83,63 @@ func TestVinculoRegistroContactoResuelveDestinatario(t *testing.T) {
 	if ajeno, err := PrimaryContactForRecord(ctx, pool, otro.ID, record.ID); err != nil || ajeno != nil {
 		t.Fatalf("el registro no debería verse desde otro bot: %+v (%v)", ajeno, err)
 	}
+
+	// Lo que la pantalla necesita para no perder el vínculo al recargar.
+	listado := registroEnLista(t, ctx, pool, bot.OrgID, object.ID, record.ID)
+	if listado.ContactID == nil || *listado.ContactID != contact.ID {
+		t.Fatalf("la lista no devolvió el contacto vinculado: %+v", listado)
+	}
+	if listado.ContactPhone == nil || *listado.ContactPhone != "51900111222" {
+		t.Fatalf("teléfono del contacto ausente en la lista: %+v", listado)
+	}
+
+	// Corregir el contacto reemplaza; no deja dos primarios compitiendo.
+	otroContacto, err := SaveContactByOrg(ctx, pool, bot.OrgID, "", "51900555666", "Corregido", "active", nil)
+	if err != nil {
+		t.Fatalf("SaveContactByOrg: %v", err)
+	}
+	if err := LinkRecordContactByOrg(ctx, pool, bot.OrgID, record.ID, otroContacto.ID, "primary"); err != nil {
+		t.Fatalf("revincular a otro contacto: %v", err)
+	}
+	var primarios int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM data_record_contacts
+		WHERE record_id=$1::uuid AND role='primary'`, record.ID).Scan(&primarios); err != nil {
+		t.Fatalf("contar primarios: %v", err)
+	}
+	if primarios != 1 {
+		t.Fatalf("un registro debe tener un solo contacto primario, hay %d", primarios)
+	}
+	if got, err := PrimaryContactForRecord(ctx, pool, bot.ID, record.ID); err != nil || got == nil || got.ID != otroContacto.ID {
+		t.Fatalf("el destinatario debería ser el contacto corregido: %+v (%v)", got, err)
+	}
+
+	// Desvincular deja el registro en la lista, sin contacto: es el estado que el
+	// operador tiene que poder ver para saber que le falta vincularlo.
+	if err := UnlinkRecordContactByOrg(ctx, pool, bot.OrgID, record.ID, otroContacto.ID); err != nil {
+		t.Fatalf("UnlinkRecordContactByOrg: %v", err)
+	}
+	suelto := registroEnLista(t, ctx, pool, bot.OrgID, object.ID, record.ID)
+	if suelto.ContactID != nil {
+		t.Fatalf("el vínculo no se eliminó: %+v", suelto)
+	}
+	if err := UnlinkRecordContactByOrg(ctx, pool, bot.OrgID, record.ID, otroContacto.ID); err == nil {
+		t.Error("desvincular lo que ya no está vinculado debería fallar")
+	}
+}
+
+func registroEnLista(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, objectID, recordID string) DataRecordWithContact {
+	t.Helper()
+	records, err := ListDataRecordsByOrg(ctx, pool, orgID, objectID)
+	if err != nil {
+		t.Fatalf("ListDataRecordsByOrg: %v", err)
+	}
+	for _, r := range records {
+		if r.ID == recordID {
+			return r
+		}
+	}
+	t.Fatalf("el registro %s desapareció de la lista (%d registros)", recordID, len(records))
+	return DataRecordWithContact{}
 }
 
 // Misma clase de fallo en la otra consulta con JOIN sobre contactos.

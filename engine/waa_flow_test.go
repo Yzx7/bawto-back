@@ -21,7 +21,8 @@ func loadWAAFlow(t *testing.T) *Flow {
 	return &flow
 }
 
-func waaTestAgent(_, _ string, vars map[string]string, outputs []string, _ bool) (string, string, error) {
+func waaTestAgent(request AgentRequest) (string, string, error) {
+	vars, outputs := request.Vars, request.Outputs
 	if contains(outputs, "billing") {
 		switch vars["input"] {
 		case "pago":

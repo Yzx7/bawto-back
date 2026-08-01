@@ -131,6 +131,35 @@ func (con *Controller) SendChatMessage(c *fiber.Ctx) error {
 	return con.ok(c, "enviado", msg)
 }
 
+// POST /chats/:chatId/reset — olvida en qué punto del flujo quedó la conversación.
+//
+// El estado (`chats.current_layer`) solo lo escribía el webhook, así que una
+// conversación abandonada a medias se quedaba ahí para siempre. Eso no es
+// cosmético: `ReminderChatBlock` la trata como conversación activa y **pospone
+// los recordatorios** de ese contacto —dos horas, tres veces, y luego los
+// cancela—. Sin esta acción, el propio cliente se bloqueaba sus avisos y no había
+// forma de destrabarlo desde el panel.
+//
+// No toca el modo: si el chat está en atención manual, sigue estándolo. Son dos
+// decisiones distintas y mezclarlas haría que reiniciar el flujo devolviera el
+// chat al bot sin que nadie lo pidiera.
+func (con *Controller) ResetChatFlowState(c *fiber.Ctx) error {
+	meta, err := con.chatWithRole(c, "owner", "admin", "member")
+	if err != nil {
+		return con.failErr(c, err)
+	}
+	if err := models.SetChatState(c.Context(), con.Env.Postgres, meta.ID, json.RawMessage("null")); err != nil {
+		con.Env.Logger.Error("reset estado de chat", "chat", meta.ID, "err", err.Error())
+		return con.fail(c, fiber.StatusInternalServerError, "no se pudo reiniciar la conversación")
+	}
+	fresh, _ := models.GetChatMeta(c.Context(), con.Env.Postgres, meta.ID)
+	if fresh == nil {
+		fresh = meta
+	}
+	con.publishChat(c.Context(), "mode", fresh.BotID, fresh.ID, chatView(fresh))
+	return con.ok(c, "conversación reiniciada", chatView(fresh))
+}
+
 // PUT /chats/:chatId/mode — alterna quién atiende: el bot o una persona.
 // `hours` (opcional) limita el handoff; 0 = indefinido.
 func (con *Controller) SetChatMode(c *fiber.Ctx) error {

@@ -299,11 +299,27 @@ func (con *Controller) handleEchoes(ctx context.Context, body []byte) {
 func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel, chatID string, inboundMessageID int64, m channels.InboundMessage, correlation *models.ReminderCorrelation, beforeProcess func()) ([]string, json.RawMessage, bool) {
 	pool := con.Env.Postgres
 
-	definition := con.messageFlowDefinition(ctx, bot.ID)
+	// Estado previo de la conversación (chats.current_layer). Se lee **antes** de
+	// elegir el flujo: una conversación a medias manda sobre el despacho.
+	var st *engine.State
+	if raw, err := models.GetChatState(ctx, pool, chatID); err == nil && len(raw) > 0 {
+		if s := string(raw); s != "null" && s != "[]" && s != "{}" {
+			var parsed engine.State
+			if json.Unmarshal(raw, &parsed) == nil && parsed.NodeID != "" {
+				st = &parsed
+			}
+		}
+	}
+	stateFlowID := ""
+	if st != nil {
+		stateFlowID = st.FlowID
+	}
+
+	selected := con.messageFlowForInput(ctx, bot.ID, stateFlowID, m.Text)
 
 	var flow engine.Flow
-	hasFlow := len(definition) > 0 &&
-		json.Unmarshal(definition, &flow) == nil &&
+	hasFlow := selected != nil &&
+		json.Unmarshal(selected.Definition, &flow) == nil &&
 		len(flow.Nodes) > 0 && flow.Trigger.Type == "message"
 	if !hasFlow {
 		if m.Type == channels.MsgText {
@@ -313,15 +329,10 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 		return nil, nil, false
 	}
 
-	// Estado previo de la conversación (chats.current_layer).
-	var st *engine.State
-	if raw, err := models.GetChatState(ctx, pool, chatID); err == nil && len(raw) > 0 {
-		if s := string(raw); s != "null" && s != "[]" && s != "{}" {
-			var parsed engine.State
-			if json.Unmarshal(raw, &parsed) == nil && parsed.NodeID != "" {
-				st = &parsed
-			}
-		}
+	// Un estado de otro flujo no se reanuda: sus nodeId y variables pertenecen a
+	// un grafo distinto. Se arranca de cero en el flujo elegido.
+	if st != nil && st.FlowID != "" && st.FlowID != selected.FlowID {
+		st = nil
 	}
 	if st == nil && !engine.TriggerMatches(flow.Trigger, m.Text) {
 		return nil, nil, false
@@ -344,10 +355,17 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 	}
 	deps := engine.Deps{Context: flowContext, InputType: string(m.Type), MediaID: m.MediaID, WaID: m.WaID}
 	if con.Env.Agent != nil {
-		deps.AgentWithHistory = func(nodeID, instruction string, vars map[string]string, outputs []string, history []engine.ChatMessage, silent bool) (string, string, error) {
+		deps.Agent = func(request engine.AgentRequest) (string, string, error) {
+			nodeID := request.NodeID
+			agentTools, toolExec, toolErr := con.agentTooling(ctx, bot, request.Tools)
+			if toolErr != nil {
+				return "", "", toolErr
+			}
 			for attempt := 1; attempt <= 2; attempt++ {
 				startedAt := time.Now()
-				reply, branch, usage, runErr := con.Env.Agent.RunWithHistoryUsage(ctx, instruction, vars, outputs, history, silent)
+				// Sin herramientas se conserva el camino de una sola petición: un
+				// bucle para un nodo que no puede llamar nada solo añadiría coste.
+				reply, branch, usage, runErr := con.runAgent(ctx, request, agentTools, toolExec)
 				duration := time.Since(startedAt)
 				errorCode := ai.OutputErrorCode(runErr)
 				if usage.Provider != "" {
@@ -366,6 +384,12 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 					}
 					if branch != "" {
 						usageMetadata["branch"] = branch
+					}
+					// Cuántas peticiones costó el turno. Con herramientas deja de ser
+					// 1, y es el número que explica una factura que sube sin que
+					// cambie el tráfico.
+					if usage.Steps > 1 {
+						usageMetadata["steps"] = fmt.Sprint(usage.Steps)
 					}
 					metadata, _ := json.Marshal(usageMetadata)
 					if err := models.RecordAIUsage(ctx, pool, models.AIUsageEventInput{
@@ -393,7 +417,8 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 					"duration_ms", duration.Milliseconds(),
 					"model", usage.Model,
 					"branch", branch,
-					"silent", silent,
+					"silent", request.Silent,
+					"tools", len(agentTools),
 				}
 				if runErr == nil || attempt == 2 || !retryableAgentOutput(errorCode) {
 					if runErr == nil {
@@ -428,6 +453,9 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 	res, err := engine.Advance(&flow, st, m.Text, deps)
 	stateRaw := json.RawMessage("null")
 	if res.State != nil {
+		// El motor no conoce la tabla `flows`: el dueño del estado lo sella aquí,
+		// para que el siguiente mensaje reanude en este mismo grafo.
+		res.State.FlowID = selected.FlowID
 		if b, marshalErr := json.Marshal(res.State); marshalErr == nil {
 			stateRaw = b
 		}

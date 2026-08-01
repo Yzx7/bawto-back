@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -57,13 +58,57 @@ func CreateDataRecordByOrg(ctx context.Context, p *pgxpool.Pool, orgID, objectID
 	v, e := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[DataRecord])
 	return &v, e
 }
-func ListDataRecordsByOrg(ctx context.Context, p *pgxpool.Pool, orgID, objectID string) ([]DataRecord, error) {
-	rows, e := p.Query(ctx, `SELECT r.id::text AS id,r.object_id::text AS object_id,r.data,r.created_at,r.updated_at FROM data_records r JOIN data_objects o ON o.id=r.object_id WHERE o.org_id=$1::uuid AND r.object_id=$2::uuid ORDER BY r.created_at DESC`, orgID, objectID)
+
+// ListDataRecordsByOrg devuelve los registros con su contacto primario.
+//
+// El `LEFT JOIN` es la corrección del fallo por el que vincular un contacto
+// parecía no guardarse: el vínculo se escribía en `data_record_contacts` pero
+// esta consulta nunca lo leía, así que al recargar la pantalla el selector volvía
+// a estar vacío. Es `LEFT` y no `INNER` porque un registro sin vincular tiene que
+// seguir apareciendo: es justo el que el operador necesita ver antes de publicar
+// un recordatorio.
+func ListDataRecordsByOrg(ctx context.Context, p *pgxpool.Pool, orgID, objectID string) ([]DataRecordWithContact, error) {
+	rows, e := p.Query(ctx, `SELECT r.id::text AS id,r.object_id::text AS object_id,r.data,
+			c.id::text AS contact_id, c.name AS contact_name, c.phone_normalized AS contact_phone,
+			r.created_at,r.updated_at
+		FROM data_records r
+		JOIN data_objects o ON o.id=r.object_id
+		LEFT JOIN data_record_contacts rc ON rc.record_id=r.id AND rc.role='primary'
+		LEFT JOIN contacts c ON c.id=rc.contact_id
+		WHERE o.org_id=$1::uuid AND r.object_id=$2::uuid
+		ORDER BY r.created_at DESC`, orgID, objectID)
+	if e != nil {
+		return nil, e
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByName[DataRecordWithContact])
+}
+
+// SearchDataRecordsByOrg busca registros de un objeto por su clave técnica.
+//
+// La consulta es un `ILIKE` sobre el JSON completo del registro, no una búsqueda
+// por campo: quien la usa es un modelo que escribe términos sueltos ("tienda
+// online", "sensores") sin saber en qué columna viven. Para un catálogo de
+// decenas de filas es suficiente y es honesto; si algún día se aplica a miles de
+// registros habrá que cambiarlo por un índice de texto, no por más `ILIKE`.
+//
+// El objeto se resuelve **por clave dentro de la organización**, que es el límite
+// de alcance: un agente configurado sobre `servicios` no puede leer `facturas`.
+func SearchDataRecordsByOrg(ctx context.Context, p *pgxpool.Pool, orgID, objectKey, query string, limit int) ([]DataRecord, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 10
+	}
+	rows, e := p.Query(ctx, `SELECT `+dataRecordCols+`
+		FROM data_records r
+		WHERE r.object_id = (SELECT id FROM data_objects WHERE org_id=$1::uuid AND key=$2)
+		  AND ($3 = '' OR r.data::text ILIKE '%' || $3 || '%')
+		ORDER BY r.created_at DESC
+		LIMIT $4`, orgID, objectKey, strings.TrimSpace(query), limit)
 	if e != nil {
 		return nil, e
 	}
 	return pgx.CollectRows(rows, pgx.RowToStructByName[DataRecord])
 }
+
 func ListContactsByOrg(ctx context.Context, p *pgxpool.Pool, orgID string) ([]Contact, error) {
 	rows, e := p.Query(ctx, `SELECT `+contactCols+` FROM contacts WHERE org_id=$1::uuid ORDER BY created_at DESC`, orgID)
 	if e != nil {
@@ -137,17 +182,54 @@ func SaveContactByOrg(ctx context.Context, p *pgxpool.Pool, orgID, contactID, ph
 	return &v, nil
 }
 
-// Gemela de LinkRecordContact, resolviendo la organización directa en vez de a
-// través del bot. El `ON CONFLICT` nombra las tres columnas de la clave primaria
-// de `data_record_contacts`: con menos, Postgres rechaza la sentencia entera con
+// LinkRecordContactByOrg vincula un contacto a un registro.
+//
+// El `ON CONFLICT` nombra las tres columnas de la clave primaria de
+// `data_record_contacts`: con menos, Postgres rechaza la sentencia entera con
 // 42P10 porque ningún índice único coincide con la especificación.
+//
+// Elegir **otro** contacto reemplaza al anterior en la misma transacción. Sin
+// eso, la clave `(record_id, contact_id, role)` deja convivir dos `primary` para
+// el mismo registro y `PrimaryContactForRecord` acabaría eligiendo uno de los dos:
+// el recordatorio se iría a quien no toca, y sin patrón. Un registro tiene un
+// destinatario, no una colección.
 func LinkRecordContactByOrg(ctx context.Context, p *pgxpool.Pool, orgID, recordID, contactID, role string) error {
-	cmd, e := p.Exec(ctx, `INSERT INTO data_record_contacts(record_id,contact_id,role) SELECT r.id,c.id,$4 FROM data_records r JOIN data_objects o ON o.id=r.object_id JOIN contacts c ON c.org_id=o.org_id WHERE r.id=$2::uuid AND c.id=$3::uuid AND o.org_id=$1::uuid ON CONFLICT (record_id,contact_id,role) DO UPDATE SET role=EXCLUDED.role`, orgID, recordID, contactID, role)
+	tx, e := p.Begin(ctx)
+	if e != nil {
+		return e
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	if role == "primary" {
+		if _, e := tx.Exec(ctx, `DELETE FROM data_record_contacts rc
+			USING data_records r JOIN data_objects o ON o.id=r.object_id
+			WHERE rc.record_id=r.id AND r.id=$2::uuid AND o.org_id=$1::uuid
+			  AND rc.role='primary' AND rc.contact_id<>$3::uuid`, orgID, recordID, contactID); e != nil {
+			return e
+		}
+	}
+	cmd, e := tx.Exec(ctx, `INSERT INTO data_record_contacts(record_id,contact_id,role) SELECT r.id,c.id,$4 FROM data_records r JOIN data_objects o ON o.id=r.object_id JOIN contacts c ON c.org_id=o.org_id WHERE r.id=$2::uuid AND c.id=$3::uuid AND o.org_id=$1::uuid ON CONFLICT (record_id,contact_id,role) DO UPDATE SET role=EXCLUDED.role`, orgID, recordID, contactID, role)
 	if e != nil {
 		return e
 	}
 	if cmd.RowsAffected() == 0 {
 		return fmt.Errorf("registro o contacto no pertenece a la organización")
+	}
+	return tx.Commit(ctx)
+}
+
+// UnlinkRecordContactByOrg deshace el vínculo. Existe porque sin él un contacto
+// mal elegido no se puede corregir a "ninguno": solo sustituir por otro.
+func UnlinkRecordContactByOrg(ctx context.Context, p *pgxpool.Pool, orgID, recordID, contactID string) error {
+	cmd, e := p.Exec(ctx, `DELETE FROM data_record_contacts rc
+		USING data_records r JOIN data_objects o ON o.id=r.object_id
+		WHERE rc.record_id=r.id AND r.id=$2::uuid AND rc.contact_id=$3::uuid AND o.org_id=$1::uuid`,
+		orgID, recordID, contactID)
+	if e != nil {
+		return e
+	}
+	if cmd.RowsAffected() == 0 {
+		return fmt.Errorf("el registro no estaba vinculado a ese contacto")
 	}
 	return nil
 }

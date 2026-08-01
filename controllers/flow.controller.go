@@ -155,6 +155,57 @@ func (con *Controller) UpdateBotFlowDraft(c *fiber.Ctx) error {
 	return con.ok(c, "borrador guardado", updated)
 }
 
+// PATCH /bots/:botId/flows/:flowId — nombre, prioridad y fallback (owner/admin/member).
+//
+// No toca el grafo: renombrar o cambiar quién es el fallback no debe obligar a
+// republicar. Los campos ausentes conservan su valor, para que la pantalla pueda
+// mandar solo lo que el operador cambió.
+func (con *Controller) UpdateBotFlowMeta(c *fiber.Ctx) error {
+	bot, flow, err := con.flowWithRole(c, "owner", "admin", "member")
+	if err != nil {
+		return con.failErr(c, err)
+	}
+	if flow.ArchivedAt != nil {
+		return con.fail(c, fiber.StatusConflict, models.ErrFlowArchived.Error())
+	}
+	var b struct {
+		Name       *string `json:"name"`
+		Priority   *int    `json:"priority"`
+		IsFallback *bool   `json:"isFallback"`
+	}
+	if err := c.BodyParser(&b); err != nil {
+		return con.fail(c, fiber.StatusBadRequest, "input inválido")
+	}
+	name, priority, isFallback := flow.Name, flow.Priority, flow.IsFallback
+	if b.Name != nil {
+		if name = strings.TrimSpace(*b.Name); name == "" {
+			return con.fail(c, fiber.StatusBadRequest, "el nombre es obligatorio")
+		}
+	}
+	if b.Priority != nil {
+		if *b.Priority < 0 || *b.Priority > 1000 {
+			return con.fail(c, fiber.StatusBadRequest, "la prioridad va de 0 a 1000")
+		}
+		priority = *b.Priority
+	}
+	if b.IsFallback != nil {
+		if *b.IsFallback && flow.TriggerType != "message" {
+			return con.fail(c, fiber.StatusBadRequest, "solo un flujo de conversación puede ser el fallback")
+		}
+		isFallback = *b.IsFallback
+	}
+
+	updated, err := models.UpdateFlowMeta(c.Context(), con.Env.Postgres, bot.ID, flow.ID,
+		name, priority, isFallback, con.currentUserID(c))
+	if err != nil {
+		return con.failFlow(c, "UpdateFlowMeta", bot.ID, err, "no se pudo actualizar el flujo")
+	}
+	if updated == nil {
+		return con.fail(c, fiber.StatusNotFound, "flujo no encontrado")
+	}
+	return con.ok(c, "flujo actualizado", updated)
+}
+
 // POST /bots/:botId/flows/:flowId/validate — valida el grafo sin publicar.
 // Acepta un grafo en el cuerpo; si viene vacío, valida el borrador guardado.
 func (con *Controller) ValidateBotFlow(c *fiber.Ctx) error {
@@ -339,17 +390,47 @@ func (con *Controller) failFlow(c *fiber.Ctx, op, botID string, err error, fallb
 	return con.fail(c, fiber.StatusInternalServerError, fallback)
 }
 
-// messageFlowDefinition resuelve el grafo `message` a ejecutar en el webhook:
-// la versión publicada del flujo `message` de mayor prioridad.
+// messageFlowForInput elige qué flujo `message` atiende este turno.
 //
-// Sin versión publicada no hay grafo, y el webhook cae al eco. Es deliberado:
-// pausar o despublicar un flujo tiene que dejar de ejecutarlo, no revivir una
-// copia paralela.
-func (con *Controller) messageFlowDefinition(ctx context.Context, botID string) json.RawMessage {
-	def, err := models.PublishedFlowDefinition(ctx, con.Env.Postgres, botID, "message")
+//  1. Si la conversación venía a medias, sigue en **su** flujo. Cambiar de grafo
+//     a mitad de un wait perdería el nodo en el que estaba y las variables ya
+//     recogidas. Si ese flujo dejó de estar publicado se vuelve a despachar: el
+//     operador lo pausó y pausar tiene que surtir efecto.
+//  2. Si no, gana el primer flujo cuyo trigger reconozca el mensaje, por
+//     prioridad.
+//  3. Si ninguno lo reconoce, atiende el marcado como fallback.
+//
+// Sin versión publicada no hay grafo y el webhook cae al eco. Es deliberado:
+// despublicar tiene que dejar de ejecutar, no revivir una copia paralela.
+func (con *Controller) messageFlowForInput(ctx context.Context, botID, stateFlowID, input string) *models.PublishedFlowRef {
+	if stateFlowID != "" {
+		ref, err := models.PublishedFlowByID(ctx, con.Env.Postgres, botID, stateFlowID)
+		if err != nil {
+			con.Env.Logger.Error("PublishedFlowByID", "botId", botID, "flowId", stateFlowID, "err", err.Error())
+			return nil
+		}
+		if ref != nil {
+			return ref
+		}
+	}
+	flows, err := models.PublishedMessageFlows(ctx, con.Env.Postgres, botID)
 	if err != nil {
-		con.Env.Logger.Error("PublishedFlowDefinition", "botId", botID, "err", err.Error())
+		con.Env.Logger.Error("PublishedMessageFlows", "botId", botID, "err", err.Error())
 		return nil
 	}
-	return def
+	var fallback *models.PublishedFlowRef
+	for i := range flows {
+		ref := &flows[i]
+		if ref.IsFallback && fallback == nil {
+			fallback = ref
+		}
+		var graph engine.Flow
+		if json.Unmarshal(ref.Definition, &graph) != nil {
+			continue
+		}
+		if engine.TriggerMatches(graph.Trigger, input) {
+			return ref
+		}
+	}
+	return fallback
 }

@@ -31,6 +31,12 @@ type Node struct {
 	Instruction string   `json:"instruction,omitempty"`
 	Outputs     []string `json:"outputs,omitempty"`
 	AgentRef    string   `json:"agentRef,omitempty"`
+	// Tools son las herramientas que el modelo puede llamar durante el turno.
+	// Van en el nodo y no en el bot a propósito: la versión publicada del flujo es
+	// inmutable, así que queda registrado qué podía hacer el agente en el momento
+	// en que dijo lo que dijo. Colgarlas del bot cambiaría el comportamiento de
+	// todos los flujos publicados sin dejar rastro.
+	Tools []NodeTool `json:"tools,omitempty"`
 	// ContextMode controla si este agente recibe el historial del flujo.
 	// Vacío y "none" usan únicamente el mensaje/variables actuales.
 	ContextMode string `json:"contextMode,omitempty"` // none | recent
@@ -49,6 +55,16 @@ type Node struct {
 	// action
 	Action string            `json:"action,omitempty"`
 	Params map[string]string `json:"params,omitempty"`
+}
+
+// NodeTool es una herramienta habilitada en un nodo `agent`.
+//
+// `Config` es lo que fija el autor y el modelo no puede elegir —por ejemplo en
+// qué tabla busca—. Los argumentos de la llamada los redacta el modelo según el
+// esquema de la herramienta; aquí solo se acota su alcance.
+type NodeTool struct {
+	Ref    string            `json:"ref"`
+	Config map[string]string `json:"config,omitempty"`
 }
 
 type Edge struct {
