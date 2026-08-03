@@ -1,7 +1,7 @@
 # Deploy del backend (Bawto)
 
 Estado actual del despliegue en producción y cómo actualizarlo. Backend,
-frontend y topología final verificados el 2026-07-29.
+frontend y topología final verificados el 2026-08-02.
 
 ## Topología
 
@@ -38,7 +38,7 @@ Postgres 16 vive en el mismo server y escucha en 127.0.0.1 y 10.11.12.1.
 | Config | `/opt/bawto/.env` | `chmod 600`; Postgres por `127.0.0.1`; bindea `127.0.0.1:3009` |
 | Servicio | `/etc/systemd/system/bawto-backend.service` | `Restart=always`, enabled al boot |
 | Frontend | `/opt/bawto-frontend` | release, `.env` con `chmod 600` y contenedor `bawto-frontend` |
-| Imagen frontend | `bawto-frontend:20260801-2` | Next standalone, Node 22, límite de 512 MiB |
+| Imagen frontend | `bawto-frontend:20260802-1` | Next standalone, Node 22, límite de 512 MiB |
 | nginx | `/etc/nginx/sites-available/bawto.conf` | frontend `:3010` + webhook con failover; backup `bawto.conf.bak.20260728-081909` |
 | Swap | `/swapfile` | 2 GiB, persistente mediante `/etc/fstab` |
 
