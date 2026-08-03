@@ -215,60 +215,6 @@ func FlowContext(ctx context.Context, pool *pgxpool.Pool, botID, phone string) m
 	return vars
 }
 
-// RecordPaymentReceipt asocia la media durable del mensaje con la factura más
-// reciente vinculada al contacto y cambia su estado a validación.
-func RecordPaymentReceipt(ctx context.Context, pool *pgxpool.Pool, botID, phone, waID, mediaID, mimeType string) (string, error) {
-	return RecordPaymentReceiptForRecord(ctx, pool, botID, phone, waID, mediaID, mimeType, "")
-}
-
-// RecordPaymentReceiptForRecord usa primero la correlación genérica del
-// recordatorio. El fallback legado por objeto `facturas` se conserva mientras
-// el prototipo billing_records se migra, pero nunca reemplaza un ID explícito.
-func RecordPaymentReceiptForRecord(ctx context.Context, pool *pgxpool.Pool, botID, phone, waID, mediaID, mimeType, preferredRecordID string) (string, error) {
-	contact, err := GetContactByPhone(ctx, pool, botID, phone)
-	if err != nil || contact == nil {
-		return "", fmt.Errorf("contacto no encontrado")
-	}
-	if mediaID == "" || waID == "" {
-		return "", fmt.Errorf("comprobante sin media")
-	}
-	var stored bool
-	if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM messages m JOIN message_media mm ON mm.message_id=m.id WHERE m.wa_id=$1 AND mm.provider_id=$2)`, waID, mediaID).Scan(&stored); err != nil || !stored {
-		return "", fmt.Errorf("no se pudo conservar la imagen del comprobante")
-	}
-	var recordID string
-	if preferredRecordID != "" {
-		err = pool.QueryRow(ctx, `SELECT r.id::text FROM data_records r
-			JOIN data_objects o ON o.id=r.object_id
-			JOIN data_record_contacts rc ON rc.record_id=r.id
-			WHERE r.id=$1::uuid AND rc.contact_id=$2::uuid
-			  AND o.org_id=(SELECT org_id FROM bots WHERE id=$3::uuid)`,
-			preferredRecordID, contact.ID, botID).Scan(&recordID)
-	} else {
-		err = pool.QueryRow(ctx, `SELECT r.id::text FROM data_records r
-			JOIN data_objects o ON o.id=r.object_id
-			JOIN data_record_contacts rc ON rc.record_id=r.id
-			WHERE rc.contact_id=$1::uuid AND o.org_id=(SELECT org_id FROM bots WHERE id=$2::uuid)
-			  AND o.key IN ('facturas','factura')
-			  AND COALESCE(r.data->>'estado','') NOT IN ('pagado','cancelado')
-			ORDER BY CASE WHEN r.data->>'estado' IN ('pendiente','vencido') THEN 0 ELSE 1 END,r.created_at DESC LIMIT 1`, contact.ID, botID).Scan(&recordID)
-	}
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", fmt.Errorf("no hay una factura pendiente vinculada al contacto")
-	}
-	if err != nil {
-		return "", err
-	}
-	_, err = pool.Exec(ctx, `UPDATE data_records SET data=data || jsonb_build_object(
-		'estado','validacion','comprobante_message_id',$2,'comprobante_media_id',$3,
-		'comprobante_mime',$4,'comprobante_recibido_at',NOW()::text),updated_at=NOW()
-		WHERE id=$1::uuid`, recordID, waID, mediaID, mimeType)
-	if err != nil {
-		return "", err
-	}
-	return recordID, nil
-}
-
 // PendingBillingForContact devuelve el cobro más urgente que aún requiere pago.
 func PendingBillingForContact(ctx context.Context, pool *pgxpool.Pool, contactID string) (*BillingRecord, error) {
 	rows, err := pool.Query(ctx, `SELECT `+billingCols+` FROM billing_records

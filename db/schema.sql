@@ -194,6 +194,22 @@ CREATE TABLE IF NOT EXISTS data_records (
 CREATE INDEX IF NOT EXISTS idx_data_records_object ON data_records (object_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_data_records_data ON data_records USING GIN (data);
 
+-- IDEMPOTENCIA DE MUTACIONES GENERALES ----------------------
+CREATE TABLE IF NOT EXISTS data_record_mutations (
+    id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id        UUID        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    object_id     UUID        NOT NULL REFERENCES data_objects(id) ON DELETE CASCADE,
+    record_id     UUID        NOT NULL REFERENCES data_records(id) ON DELETE CASCADE,
+    mutation_key  TEXT        NOT NULL,
+    operation     TEXT        NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (org_id, object_id, mutation_key),
+    CHECK (length(mutation_key) BETWEEN 1 AND 200),
+    CHECK (operation IN ('create','update','upsert'))
+);
+CREATE INDEX IF NOT EXISTS idx_data_record_mutations_record
+    ON data_record_mutations (record_id, created_at DESC);
+
 -- Una relación puede unir cualquier registro a un contacto (destinatario), sin
 -- asumir que el objeto sea una factura, pedido o cita.
 CREATE TABLE IF NOT EXISTS data_record_contacts (

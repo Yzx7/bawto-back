@@ -74,7 +74,7 @@ func Build(ctx context.Context) (*Runtime, error) {
 	// cuatro tarifas. Si no se puede resolver, el arranque falla: el modo de
 	// fallo alternativo es un backend sano registrando consumo con la tarifa de
 	// otro modelo, y esas filas no se pueden corregir después.
-	var agent *ai.Agent
+	var textAgent *ai.Agent
 	if cfg.MinimaxAPIKey != "" {
 		var override *ai.Rates
 		if cfg.AIRatesExplicit {
@@ -89,10 +89,26 @@ func Build(ctx context.Context) (*Runtime, error) {
 		if err != nil {
 			return fail("bootstrap: tarifario de IA: %w", err)
 		}
-		agent = ai.NewWithPricing(cfg.MinimaxAPIKey, cfg.MinimaxBaseURL,
+		textAgent = ai.NewWithPricing(cfg.MinimaxAPIKey, cfg.MinimaxBaseURL,
 			pricing.Provider, cfg.MinimaxModel, pricing.Rates)
-		logs.General.Info("IA habilitada",
+		logs.General.Info("IA de texto habilitada",
 			"provider", pricing.Provider, "model", cfg.MinimaxModel,
+			"input_usd_per_million", pricing.Rates.InputPerMillion,
+			"output_usd_per_million", pricing.Rates.OutputPerMillion,
+			"cache_read_usd_per_million", pricing.Rates.CacheReadPerMillion,
+			"tarifario", pricing.Source)
+	}
+
+	var visionAgent *ai.Agent
+	if cfg.MinimaxM3APIKey != "" {
+		pricing, err := ai.ResolvePricing("minimax", cfg.MinimaxM3Model, nil)
+		if err != nil {
+			return fail("bootstrap: tarifario de IA visual: %w", err)
+		}
+		visionAgent = ai.NewWithPricing(cfg.MinimaxM3APIKey, cfg.MinimaxM3BaseURL,
+			pricing.Provider, cfg.MinimaxM3Model, pricing.Rates)
+		logs.General.Info("IA visual habilitada",
+			"provider", pricing.Provider, "model", cfg.MinimaxM3Model,
 			"input_usd_per_million", pricing.Rates.InputPerMillion,
 			"output_usd_per_million", pricing.Rates.OutputPerMillion,
 			"cache_read_usd_per_million", pricing.Rates.CacheReadPerMillion,
@@ -112,7 +128,8 @@ func Build(ctx context.Context) (*Runtime, error) {
 		WhatsAppLogger: logs.WhatsApp,
 		LogCloser:      logs,
 		Cipher:         cph,
-		Agent:          agent,
+		TextAgent:      textAgent,
+		VisionAgent:    visionAgent,
 		Events:         hub,
 	}
 

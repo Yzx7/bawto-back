@@ -1,72 +1,29 @@
 {
   "id": "flow_sistemuino_agente",
   "name": "Sistemuino — Agente único",
-  "trigger": {
-    "type": "message",
-    "match": "any",
-    "pos": {
-      "x": 0,
-      "y": 0
-    }
-  },
-  "nodes": [
-    {
-      "id": "n_agente",
-      "kind": "agent",
-      "pos": {
-        "x": 360,
-        "y": 0
-      },
-      "contextMode": "recent",
-      "silent": false,
-      "outputs": [
-        "conversar",
-        "asesor"
-      ],
-      "instruction": "Eres el orientador comercial de Energy Company (marca Sistemuino) y atiendes por WhatsApp. Redacta el único mensaje que el cliente recibirá en este turno, apoyándote en todo el historial reciente y sin repetir preguntas que ya te respondió.\n\nEl cliente se llama {contact_name}. Si ese dato llega vacío o todavía entre llaves, no uses ningún nombre.\n\nTONO. Escribes como un consultor con oficio, no como un vendedor entusiasta: profesional, directo y sobrio. Estas reglas de redacción son obligatorias y pesan más que cualquier otra indicación:\n- No uses signos de admiración, tampoco al saludar.\n- No abras el mensaje elogiando al cliente ni celebrando lo que acaba de decir. Quedan prohibidas fórmulas como «qué buen giro», «buen ojo», «excelente pregunta», «qué interesante» o «me encanta». Si quieres reconocer el tema, afirma algo sobre el tema y no sobre él: «interesante, este sector tiene mucho potencial», «así es, el IoT está tomando relevancia en la acuicultura».\n- Menciona su nombre una sola vez en toda la conversación, en el primer mensaje o al derivarlo. Repetirlo en cada turno suena impostado.\n- Escribe en español neutro del Perú. No uses jerga de otros países: nada de «te late», «chévere», «padrísimo», «ahorita», «platicar», «vale» ni «guay».\n- Validar es reformular en concreto lo que dijo, no declarar empatía. En vez de «te entiendo perfectamente», escribe «te comprendo: entonces el problema está en el seguimiento, no en conseguir clientes». Evita los intensificadores: perfectamente, totalmente, completamente, súper.\n- Mensajes breves, cuatro o cinco líneas de WhatsApp como máximo. Para explicar un servicio di lo esencial y ofrece ampliar; no vuelques todo el catálogo en un párrafo.\n- Nada de emojis, salvo que el cliente los use primero, y aun así como mucho uno.\n\nOBJETIVO. Entender a quién tienes delante y llevarlo, sin prisa y sin interrogatorio, hasta el servicio que de verdad le sirve. Ante un saludo sin intención evidente responde breve, del estilo de «Hola {contact_name}, ¿en qué puedo ayudarte?», y no enumeres servicios todavía. De ahí en adelante, en cada turno: reformula en una frase lo concreto que acaba de decir, aporta algo útil si ya tienes con qué, y cierra con una sola pregunta que te acerque a saber su rubro, el problema que tiene, cómo lo resuelve hoy o qué resultado espera. Cuando ya tengas contexto suficiente, nombra el servicio del catálogo que encaja y explica en una o dos frases por qué encaja con lo que él mismo te contó, sin listar los demás.\n\nCATÁLOGO. No ofrezcas nada que no esté en el catálogo de la empresa, y no lo cites de memoria: consúltalo con la herramienta search_data antes de nombrar o describir un servicio. Busca con términos del rubro o del problema del cliente («tienda online», «sensores», «recordatorios de pago»), no con frases completas. Si la búsqueda no devuelve nada que encaje, dilo con naturalidad en vez de suponer, y aprovecha para preguntar algo que te acerque a entender qué necesita.\n\nElige conversar mientras la conversación siga siendo útil por aquí: cuando todavía estés conociendo al cliente, cuando acabes de proponerle un servicio y quieras saber si le hace sentido, o cuando pregunte algo que puedas responder con el catálogo.\n\nElige asesor cuando pida hablar con una persona, cuando pida precios o una cotización, cuando esté frustrado, o cuando ya tengas contexto suficiente y él acepte continuar con el equipo. Ese mensaje es el último antes de la derivación: confirma en una frase que lo pasas con alguien del equipo y resume en otra lo que vas a transmitirle, para que no tenga que repetir su caso.\n\nNo inventes precios, plazos ni capacidades; que te los pidan es justamente una señal para derivar. Nunca pidas contraseñas, PIN, CVV, códigos, tokens ni claves privadas. No hagas más de una pregunta por mensaje.",
-      "tools": [
-        {
-          "ref": "search_data",
-          "config": {
-            "object": "servicios"
-          }
-        }
-      ]
-    },
-    {
-      "id": "n_espera",
-      "kind": "wait",
-      "pos": {
-        "x": 360,
-        "y": 260
-      },
-      "expect": "text",
-      "timeoutHours": 24
-    },
-    {
-      "id": "n_derivar",
-      "kind": "action",
-      "pos": {
-        "x": 760,
-        "y": 0
-      },
-      "action": "handoff"
-    },
-    {
-      "id": "n_fin",
-      "kind": "action",
-      "pos": {
-        "x": 1060,
-        "y": 0
-      },
-      "action": "end"
-    }
-  ],
   "edges": [
     {
-      "id": "e_trigger_agente",
+      "id": "e_trigger_router",
       "source": "trigger",
-      "target": "n_agente"
+      "target": "n_entry_router"
+    },
+    {
+      "id": "e_router_conversation",
+      "source": "n_entry_router",
+      "target": "n_agente",
+      "sourceHandle": "conversation"
+    },
+    {
+      "id": "e_router_image",
+      "source": "n_entry_router",
+      "target": "n_classify_payment",
+      "sourceHandle": "image"
+    },
+    {
+      "id": "e_router_default",
+      "source": "n_entry_router",
+      "target": "n_input_unsupported",
+      "sourceHandle": "default"
     },
     {
       "id": "e_agente_espera",
@@ -75,10 +32,101 @@
       "sourceHandle": "conversar"
     },
     {
+      "id": "e_agente_cobrar",
+      "source": "n_agente",
+      "target": "n_payment_wait",
+      "sourceHandle": "cobrar"
+    },
+    {
       "id": "e_espera_agente",
+      "role": "loopback",
       "source": "n_espera",
-      "target": "n_agente",
-      "role": "loopback"
+      "target": "n_entry_router"
+    },
+    {
+      "id": "e_payment_wait_router",
+      "source": "n_payment_wait",
+      "target": "n_payment_input_router"
+    },
+    {
+      "id": "e_payment_router_image",
+      "source": "n_payment_input_router",
+      "target": "n_classify_payment",
+      "sourceHandle": "image"
+    },
+    {
+      "id": "e_payment_router_default",
+      "source": "n_payment_input_router",
+      "target": "n_payment_need_image",
+      "sourceHandle": "default"
+    },
+    {
+      "id": "e_payment_valid_save",
+      "source": "n_classify_payment",
+      "target": "n_save_payment",
+      "sourceHandle": "valid"
+    },
+    {
+      "id": "e_payment_reviewable_save",
+      "source": "n_classify_payment",
+      "target": "n_save_payment",
+      "sourceHandle": "needs_review"
+    },
+    {
+      "id": "e_payment_unreadable_retry",
+      "source": "n_classify_payment",
+      "target": "n_payment_retry",
+      "sourceHandle": "unreadable"
+    },
+    {
+      "id": "e_payment_not_receipt",
+      "source": "n_classify_payment",
+      "target": "n_payment_not_receipt",
+      "sourceHandle": "not_receipt"
+    },
+    {
+      "id": "e_payment_saved",
+      "source": "n_save_payment",
+      "target": "n_payment_needs_review",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_payment_save_error",
+      "source": "n_save_payment",
+      "target": "n_payment_error",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_payment_review",
+      "source": "n_payment_needs_review",
+      "target": "n_payment_review",
+      "sourceHandle": "true"
+    },
+    {
+      "id": "e_payment_confirmed",
+      "source": "n_payment_needs_review",
+      "target": "n_payment_ok",
+      "sourceHandle": "false"
+    },
+    {
+      "id": "e_payment_ok_end",
+      "source": "n_payment_ok",
+      "target": "n_fin"
+    },
+    {
+      "id": "e_payment_review_handoff",
+      "source": "n_payment_review",
+      "target": "n_derivar"
+    },
+    {
+      "id": "e_payment_error_handoff",
+      "source": "n_payment_error",
+      "target": "n_derivar"
+    },
+    {
+      "id": "e_unsupported_wait",
+      "source": "n_input_unsupported",
+      "target": "n_espera"
     },
     {
       "id": "e_agente_derivar",
@@ -90,6 +138,286 @@
       "id": "e_derivar_fin",
       "source": "n_derivar",
       "target": "n_fin"
+    },
+    {
+      "id": "xy-edge__n_payment_need_imageout-n_espera",
+      "source": "n_payment_need_image",
+      "target": "n_espera",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "xy-edge__n_payment_not_receiptout-n_espera",
+      "source": "n_payment_not_receipt",
+      "target": "n_espera",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "xy-edge__n_payment_retryout-n_espera",
+      "source": "n_payment_retry",
+      "target": "n_espera",
+      "sourceHandle": "out"
     }
-  ]
+  ],
+  "nodes": [
+    {
+      "id": "n_entry_router",
+      "pos": {
+        "x": 395.42736881755036,
+        "y": -123.27448788033621
+      },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "conversation",
+          "label": "Texto o interacción",
+          "expression": "input.contentType in (text, interactive)"
+        },
+        {
+          "id": "image",
+          "label": "Imagen",
+          "expression": "input.contentType == image"
+        }
+      ]
+    },
+    {
+      "id": "n_agente",
+      "pos": {
+        "x": -1091.7110979974543,
+        "y": -572.9240275965121
+      },
+      "kind": "agent",
+      "tools": [
+        {
+          "ref": "search_data",
+          "config": {
+            "object": "servicios"
+          }
+        }
+      ],
+      "silent": false,
+      "outputs": [
+        "cobrar",
+        "asesor",
+        "conversar"
+      ],
+      "contextMode": "recent",
+      "instruction": "Eres el orientador comercial de Energy Company (marca Sistemuino) y atiendes por WhatsApp. Redacta el único mensaje que el cliente recibirá en este turno, apoyándote en todo el historial reciente y sin repetir preguntas que ya te respondió.\n\nEl cliente se llama {contact_name}. Si ese dato llega vacío o todavía entre llaves, no uses ningún nombre.\n\nTONO. Escribes como un consultor con oficio, no como un vendedor entusiasta: profesional, directo y sobrio. Estas reglas de redacción son obligatorias y pesan más que cualquier otra indicación:\n- No uses signos de admiración, tampoco al saludar.\n- No abras el mensaje elogiando al cliente ni celebrando lo que acaba de decir. Quedan prohibidas fórmulas como «qué buen giro», «buen ojo», «excelente pregunta», «qué interesante» o «me encanta». Si quieres reconocer el tema, afirma algo sobre el tema y no sobre él: «interesante, este sector tiene mucho potencial», «así es, el IoT está tomando relevancia en la acuicultura».\n- Menciona su nombre una sola vez en toda la conversación, en el primer mensaje o al derivarlo. Repetirlo en cada turno suena impostado.\n- Escribe en español neutro del Perú. No uses jerga de otros países: nada de «te late», «chévere», «padrísimo», «ahorita», «platicar», «vale» ni «guay».\n- Validar es reformular en concreto lo que dijo, no declarar empatía. En vez de «te entiendo perfectamente», escribe «te comprendo: entonces el problema está en el seguimiento, no en conseguir clientes». Evita los intensificadores: perfectamente, totalmente, completamente, súper.\n- Mensajes breves, cuatro o cinco líneas de WhatsApp como máximo. Para explicar un servicio di lo esencial y ofrece ampliar; no vuelques todo el catálogo en un párrafo.\n- Nada de emojis, salvo que el cliente los use primero, y aun así como mucho uno.\n\nOBJETIVO. Entender a quién tienes delante y llevarlo, sin prisa y sin interrogatorio, hasta el servicio que de verdad le sirve. Ante un saludo sin intención evidente responde breve, del estilo de «Hola {contact_name}, ¿en qué puedo ayudarte?», y no enumeres servicios todavía. De ahí en adelante, en cada turno: reformula en una frase lo concreto que acaba de decir, aporta algo útil si ya tienes con qué, y cierra con una sola pregunta que te acerque a saber su rubro, el problema que tiene, cómo lo resuelve hoy o qué resultado espera. Cuando ya tengas contexto suficiente, nombra el servicio del catálogo que encaja y explica en una o dos frases por qué encaja con lo que él mismo te contó, sin listar los demás.\n\nCATÁLOGO. No ofrezcas nada que no esté en el catálogo de la empresa, y no lo cites de memoria: consúltalo con la herramienta search_data antes de nombrar o describir un servicio. Busca con términos del rubro o del problema del cliente («tienda online», «sensores», «recordatorios de pago»), no con frases completas. Si la búsqueda no devuelve nada que encaje, dilo con naturalidad en vez de suponer, y aprovecha para preguntar algo que te acerque a entender qué necesita.\n\nCOBROS DE SISTEMUINO. Elige cobrar únicamente cuando el cliente diga que ya pagó a Sistemuino, quiera reportar ese pago, adjuntar su comprobante o pagar una factura que Sistemuino le emitió. No confundas esto con una consulta comercial sobre Meudim Tarjetas, Yape, Plin, QR o medios de cobro para el negocio del cliente: esas consultas siguen siendo sobre el catálogo. Cuando elijas cobrar, pide en tu único mensaje una foto o captura completa y nítida del comprobante, donde se vean fecha, importe y operación; aclara que se registrará pendiente de validación y no afirmes que la factura ya está pagada.\n\nElige conversar mientras la conversación siga siendo útil por aquí: cuando todavía estés conociendo al cliente, cuando acabes de proponerle un servicio y quieras saber si le hace sentido, o cuando pregunte algo que puedas responder con el catálogo.\n\nElige asesor cuando pida hablar con una persona, cuando pida precios o una cotización, cuando esté frustrado, o cuando ya tengas contexto suficiente y él acepte continuar con el equipo. Ese mensaje es el último antes de la derivación: confirma en una frase que lo pasas con alguien del equipo y resume en otra lo que vas a transmitirle, para que no tenga que repetir su caso.\n\nNo inventes precios, plazos ni capacidades; que te los pidan es justamente una señal para derivar. Nunca pidas contraseñas, PIN, CVV, códigos, tokens ni claves privadas. No hagas más de una pregunta por mensaje."
+    },
+    {
+      "id": "n_payment_wait",
+      "pos": {
+        "x": -708.7503060423994,
+        "y": -802.1029475137972
+      },
+      "kind": "wait",
+      "saveAs": "payment_receipt",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_payment_input_router",
+      "pos": {
+        "x": -338.94155278811274,
+        "y": -832.9084909166104
+      },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "image",
+          "label": "Imagen",
+          "expression": "input.contentType == image"
+        }
+      ]
+    },
+    {
+      "id": "n_payment_need_image",
+      "pos": {
+        "x": -557.995255424159,
+        "y": -492.95221408039845
+      },
+      "body": "Para registrar el cobro necesito una foto o captura completa del comprobante. Envíala nítida y sin recortes; deben verse fecha, importe y operación.",
+      "kind": "send"
+    },
+    {
+      "id": "n_classify_payment",
+      "pos": {
+        "x": 906.9022988854545,
+        "y": 41.41821991710471
+      },
+      "kind": "agent",
+      "saveAs": "receipt",
+      "silent": true,
+      "accepts": [
+        "text",
+        "interactive",
+        "image"
+      ],
+      "outputs": [
+        "valid",
+        "needs_review",
+        "unreadable",
+        "not_receipt"
+      ],
+      "contextMode": "none",
+      "instruction": "Analiza únicamente la imagen actual como posible comprobante de pago peruano enviado a Sistemuino. No uses el historial para completar datos que no aparezcan en la captura.\n\nElige valid solo si la imagen muestra una operación exitosa y se distinguen con claridad el importe, la fecha/hora y el número o código de operación. Elige needs_review si parece un comprobante exitoso pero falta algún dato, hay ambigüedad o la confianza no es suficiente. Elige unreadable si la captura no puede leerse. Elige not_receipt si la imagen no es un comprobante de pago.\n\nExtrae únicamente datos visibles y no inventes. provider debe ser exactamente uno de estos valores canónicos en minúsculas: yape, plin, bcp, interbank u other. El proveedor es el canal del comprobante, no la red del destinatario: si aparece el logo de Plin y dice Pago exitoso, usa plin aunque la app sea de Interbank; usa bcp para una transferencia emitida por BCP e interbank para una transferencia bancaria de Interbank que no sea Plin. amount es el importe transferido sin comisión; currency usa ISO 4217; occurredAt usa RFC3339 con la zona de Perú (-05:00); operationCode conserva ceros iniciales; recipient es el destinatario visible; confidence va de 0 a 1.",
+      "outputFields": [
+        {
+          "key": "provider",
+          "type": "string",
+          "description": "Canal canónico del comprobante; exactamente yape, plin, bcp, interbank u other."
+        },
+        {
+          "key": "amount",
+          "type": "number",
+          "description": "Importe transferido, sin comisión."
+        },
+        {
+          "key": "currency",
+          "type": "string",
+          "description": "Moneda en código ISO 4217, por ejemplo PEN."
+        },
+        {
+          "key": "occurredAt",
+          "type": "datetime",
+          "description": "Fecha y hora visibles de la operación, en RFC3339 y zona de Perú (-05:00)."
+        },
+        {
+          "key": "operationCode",
+          "type": "string",
+          "description": "Número o código de operación, conservando ceros iniciales."
+        },
+        {
+          "key": "recipient",
+          "type": "string",
+          "description": "Nombre del destinatario visible en el comprobante."
+        },
+        {
+          "key": "confidence",
+          "type": "number",
+          "description": "Confianza global de la extracción entre 0 y 1."
+        }
+      ]
+    },
+    {
+      "id": "n_save_payment",
+      "pos": {
+        "x": 1308.454164867365,
+        "y": -133.6322699422616
+      },
+      "args": {
+        "object": "cobros",
+        "operation": "create",
+        "linkCurrentContact": "false",
+        "idempotencyKey": "payment:{input.id}",
+        "field.proveedor": "{receipt.provider}",
+        "field.monto": "{receipt.amount}",
+        "field.moneda": "{receipt.currency}",
+        "field.fecha": "{receipt.occurredAt}",
+        "field.operacion": "{receipt.operationCode}",
+        "field.destinatario": "{receipt.recipient}",
+        "field.confianza": "{receipt.confidence}",
+        "field.estado": "{receipt.branch}"
+      },
+      "kind": "tool",
+      "saveAs": "payment_record",
+      "toolRef": "data_mutate"
+    },
+    {
+      "id": "n_payment_needs_review",
+      "pos": {
+        "x": 1724.76456749779,
+        "y": -196.8457288458531
+      },
+      "kind": "condition",
+      "expression": "payment_record.data.estado == needs_review"
+    },
+    {
+      "id": "n_payment_ok",
+      "pos": {
+        "x": 2255.2819933285946,
+        "y": 218.21791545424966
+      },
+      "body": "Recibí y registré tu comprobante. Quedó pendiente de validación; te confirmaremos por este medio cuando termine la revisión.",
+      "kind": "send"
+    },
+    {
+      "id": "n_payment_review",
+      "pos": {
+        "x": 2250.1656792424014,
+        "y": -137.37618529626
+      },
+      "body": "Guardé tu comprobante, pero requiere revisión antes de asociarlo o confirmar el pago. Lo derivaré con el equipo para que lo verifique.",
+      "kind": "send"
+    },
+    {
+      "id": "n_payment_retry",
+      "pos": {
+        "x": -581.8089209922914,
+        "y": 620.6149824230987
+      },
+      "body": "No pude leer el comprobante con suficiente claridad. Envía otra foto o captura completa, nítida y sin recortes; deben verse fecha, importe y operación.",
+      "kind": "send"
+    },
+    {
+      "id": "n_payment_not_receipt",
+      "pos": {
+        "x": -589.8106299307735,
+        "y": 427.50847856896183
+      },
+      "body": "La imagen no parece ser un comprobante de pago. Envía una captura de Yape, Plin o del depósito donde se vean fecha, importe y operación.",
+      "kind": "send"
+    },
+    {
+      "id": "n_payment_error",
+      "pos": {
+        "x": 2258.491935733253,
+        "y": 42.81198056189949
+      },
+      "body": "Conservé la imagen, pero no pude procesarla de forma segura. Lo derivaré con el equipo para que revise el comprobante.",
+      "kind": "send"
+    },
+    {
+      "id": "n_espera",
+      "pos": {
+        "x": -89.50665519520344,
+        "y": -120.85352296153866
+      },
+      "kind": "wait",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_input_unsupported",
+      "pos": {
+        "x": -586.9160262546275,
+        "y": 247.8327834242201
+      },
+      "body": "Recibí el archivo, pero todavía no puedo procesar ese formato en este flujo. Escríbeme el detalle en texto o envía una imagen.",
+      "kind": "send"
+    },
+    {
+      "id": "n_derivar",
+      "pos": {
+        "x": 2714.2232169366657,
+        "y": -81.73739016413288
+      },
+      "kind": "action",
+      "action": "handoff"
+    },
+    {
+      "id": "n_fin",
+      "pos": {
+        "x": 3134.287742578449,
+        "y": 126.6575933399933
+      },
+      "kind": "action",
+      "action": "end"
+    }
+  ],
+  "trigger": {
+    "pos": {
+      "x": 0,
+      "y": 0
+    },
+    "type": "message",
+    "match": "any"
+  }
 }

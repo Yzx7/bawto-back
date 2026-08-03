@@ -30,11 +30,13 @@ type Config struct {
 	WhatsAppAPIVersion  string // WHATSAPP_API_VERSION (default v21.0)
 	FacebookAppID       string // FACEBOOK_APP_ID      (Embedded Signup: intercambio del code)
 
-	// IA — MiniMax (endpoint compatible con Anthropic)
+	// IA de texto — configuración histórica compatible con Anthropic. Aunque los
+	// nombres MINIMAX_* se conservan para no romper los entornos existentes, hoy
+	// esta instancia corresponde a DeepSeek y atiende agentes sin visión.
 	MinimaxAPIKey             string  // MINIMAX_API_KEY
-	MinimaxBaseURL            string  // MINIMAX_BASE_URL (default https://api.minimax.io/anthropic)
-	MinimaxModel              string  // MINIMAX_MODEL   (default MiniMax-M3)
-	AIProvider                string  // AI_PROVIDER (default minimax)
+	MinimaxBaseURL            string  // MINIMAX_BASE_URL (default https://api.deepseek.com/anthropic)
+	MinimaxModel              string  // MINIMAX_MODEL   (default deepseek-v4-flash)
+	AIProvider                string  // AI_PROVIDER (default deepseek)
 	AIInputUSDPerMillion      float64 // AI_INPUT_USD_PER_MILLION
 	AIOutputUSDPerMillion     float64 // AI_OUTPUT_USD_PER_MILLION
 	AICacheReadUSDPerMillion  float64 // AI_CACHE_READ_USD_PER_MILLION
@@ -43,6 +45,13 @@ type Config struct {
 	// Sin esta marca, un override legítimo de $0 (la escritura de caché lo es)
 	// no se podría diferenciar de una variable ausente.
 	AIRatesExplicit bool
+
+	// IA visual — proveedor deliberadamente separado. Marcar `accepts: image` en
+	// un nodo selecciona esta instancia completa; el grafo nunca ve credenciales,
+	// endpoint ni nombre de modelo.
+	MinimaxM3APIKey  string // MINIMAX_M3_API_KEY
+	MinimaxM3BaseURL string // MINIMAX_M3_BASE_URL (default https://api.minimax.io/anthropic)
+	MinimaxM3Model   string // MINIMAX_M3_MODEL (default MiniMax-M3)
 
 	// CORS: orígenes permitidos, separados por coma.
 	CorsOrigins string // CORS_ORIGINS
@@ -85,9 +94,11 @@ func Load() (*Config, error) {
 	v.SetDefault("JWKS_URL", "http://localhost:3000/api/auth/jwks")
 	v.SetDefault("WHATSAPP_API_BASE", "https://graph.facebook.com")
 	v.SetDefault("WHATSAPP_API_VERSION", "v21.0")
-	v.SetDefault("MINIMAX_BASE_URL", "https://api.minimax.io/anthropic")
-	v.SetDefault("MINIMAX_MODEL", "MiniMax-M3")
-	v.SetDefault("AI_PROVIDER", "minimax")
+	v.SetDefault("MINIMAX_BASE_URL", "https://api.deepseek.com/anthropic")
+	v.SetDefault("MINIMAX_MODEL", "deepseek-v4-flash")
+	v.SetDefault("AI_PROVIDER", "deepseek")
+	v.SetDefault("MINIMAX_M3_BASE_URL", "https://api.minimax.io/anthropic")
+	v.SetDefault("MINIMAX_M3_MODEL", "MiniMax-M3")
 	// Las cuatro tarifas **no** llevan default a propósito. Antes lo tenían, con
 	// los precios de MiniMax-M3, y eso convertía un cambio de modelo sin cambio
 	// de precios en meses de consumo registrado con la tarifa de otro — sin un
@@ -122,6 +133,9 @@ func Load() (*Config, error) {
 		AIOutputUSDPerMillion:     v.GetFloat64("AI_OUTPUT_USD_PER_MILLION"),
 		AICacheReadUSDPerMillion:  v.GetFloat64("AI_CACHE_READ_USD_PER_MILLION"),
 		AICacheWriteUSDPerMillion: v.GetFloat64("AI_CACHE_WRITE_USD_PER_MILLION"),
+		MinimaxM3APIKey:           v.GetString("MINIMAX_M3_API_KEY"),
+		MinimaxM3BaseURL:          v.GetString("MINIMAX_M3_BASE_URL"),
+		MinimaxM3Model:            v.GetString("MINIMAX_M3_MODEL"),
 		CorsOrigins:               v.GetString("CORS_ORIGINS"),
 
 		SchedulerEnabled:          v.GetBool("SCHEDULER_ENABLED"),
@@ -141,6 +155,10 @@ func Load() (*Config, error) {
 	}
 	if strings.TrimSpace(cfg.AIProvider) == "" {
 		return nil, fmt.Errorf("config: AI_PROVIDER no puede estar vacío")
+	}
+	if !strings.EqualFold(strings.TrimSpace(cfg.AIProvider), "deepseek") {
+		return nil, fmt.Errorf(
+			"config: AI_PROVIDER debe ser deepseek; los nodos con visión usan MiniMax-M3 mediante MINIMAX_M3_API_KEY")
 	}
 	// Las cuatro tarifas van juntas o ninguna. Declarar solo algunas dejaría el
 	// resto en cero sin avisar, que es peor que no declarar nada: un costo

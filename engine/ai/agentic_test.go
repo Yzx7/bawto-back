@@ -119,37 +119,132 @@ func TestRunAgenticEncadenaHerramientaYConservaLosBloques(t *testing.T) {
 	}
 }
 
-// Un modelo que se atasca llamando herramientas no puede convertir un mensaje de
-// WhatsApp en una factura abierta: el bucle corta y lo dice.
-func TestRunAgenticCortaSiNuncaEligeRama(t *testing.T) {
-	calls := 0
+// Una consulta ambigua no debe terminar en el fallback genérico porque el
+// modelo repitió la misma búsqueda. La segunda repetición se responde desde la
+// memoria del turno y el paso siguiente queda reservado para cerrar la rama.
+func TestRunAgenticCierraTrasRepetirLaMismaHerramienta(t *testing.T) {
+	requests := 0
+	executions := 0
+	forcedTerminal := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		_, _ = io.ReadAll(r.Body)
+		requests++
+		body, _ := io.ReadAll(r.Body)
+		var parsed map[string]any
+		_ = json.Unmarshal(body, &parsed)
 		w.Header().Set("Content-Type", "application/json")
+		choice, _ := parsed["tool_choice"].(map[string]any)
+		if choice["name"] == branchToolName {
+			forcedTerminal = true
+			_, _ = w.Write([]byte(`{
+				"id":"msg_terminal","type":"message","role":"assistant","model":"MiniMax-M3",
+				"content":[{"type":"tool_use","id":"tu_terminal","name":"select_flow_branch",
+					"input":{"branch":"conversar","reply":"¿A qué tipo de mandos te refieres?"}}],
+				"stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":5}
+			}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{
 			"id":"msg","type":"message","role":"assistant","model":"MiniMax-M3",
-			"content":[{"type":"tool_use","id":"tu","name":"search_data","input":{"query":"x"}}],
+			"content":[{"type":"tool_use","id":"tu","name":"search_data","input":{"query":"mandos"}}],
 			"stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":5}
 		}`))
 	}))
 	defer srv.Close()
 
 	exec := func(_ context.Context, _ string, _ json.RawMessage) (string, error) {
-		return "nada", nil
+		executions++
+		return `Sin resultados para "mandos" en servicios. No hay información registrada sobre eso.`, nil
 	}
 	a := New("sk-test", srv.URL, "MiniMax-M3")
-	_, _, usage, err := a.RunAgenticUsage(context.Background(), "instrucción",
-		map[string]string{"input": "hola"}, []string{"conversar"}, nil, false,
+	reply, branch, usage, err := a.RunAgenticUsage(context.Background(), "instrucción",
+		map[string]string{"input": "Vendes mandos?"}, []string{"conversar"}, nil, false,
 		[]AgentTool{{Name: "search_data", Description: "Busca.", InputSchema: map[string]any{
 			"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}},
 		}}}, exec)
 
-	if OutputErrorCode(err) != "tool_loop_exhausted" {
-		t.Fatalf("se esperaba tool_loop_exhausted, got %v", err)
+	if err != nil {
+		t.Fatalf("el agente debía cerrar el turno: %v", err)
 	}
-	if calls != maxAgentSteps || usage.Steps != maxAgentSteps {
-		t.Fatalf("el tope no se respetó: llamadas=%d steps=%d", calls, usage.Steps)
+	if reply != "¿A qué tipo de mandos te refieres?" || branch != "conversar" {
+		t.Fatalf("salida inesperada: reply=%q branch=%q", reply, branch)
+	}
+	if !forcedTerminal {
+		t.Fatal("el runtime no forzó select_flow_branch después de la repetición")
+	}
+	if requests != 3 || usage.Steps != 3 {
+		t.Fatalf("se esperaban 3 pasos, requests=%d steps=%d", requests, usage.Steps)
+	}
+	if executions != 1 {
+		t.Fatalf("la consulta repetida no debía ejecutarse otra vez: %d ejecuciones", executions)
+	}
+	if len(usage.ToolTrace) != 3 || usage.ToolTrace[0].Name != "search_data" ||
+		usage.ToolTrace[0].Repeated || !usage.ToolTrace[1].Repeated ||
+		usage.ToolTrace[2].Name != branchToolName {
+		t.Fatalf("traza de herramientas inesperada: %+v", usage.ToolTrace)
+	}
+}
+
+// Aunque el modelo formule consultas distintas, el presupuesto no puede
+// agotarse sin producir la respuesta y la rama exigidas por el grafo.
+func TestRunAgenticReservaElUltimoPasoParaCerrar(t *testing.T) {
+	requests := 0
+	executions := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		body, _ := io.ReadAll(r.Body)
+		var parsed map[string]any
+		_ = json.Unmarshal(body, &parsed)
+		w.Header().Set("Content-Type", "application/json")
+		choice, _ := parsed["tool_choice"].(map[string]any)
+		if choice["name"] == branchToolName {
+			_, _ = w.Write([]byte(`{
+				"id":"terminal","type":"message","role":"assistant","model":"MiniMax-M3",
+				"content":[{"type":"tool_use","id":"tu_terminal","name":"select_flow_branch",
+					"input":{"branch":"conversar","reply":"Necesito precisar a qué tipo de mando te refieres."}}],
+				"stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":5}
+			}`))
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{
+			"id":"search_%d","type":"message","role":"assistant","model":"MiniMax-M3",
+			"content":[{"type":"tool_use","id":"tu_%d","name":"search_data",
+				"input":{"query":"consulta %d"}}],
+			"stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":5}
+		}`, requests, requests, requests)
+	}))
+	defer srv.Close()
+
+	exec := func(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+		executions++
+		return "Sin resultados.", nil
+	}
+	a := New("sk-test", srv.URL, "MiniMax-M3")
+	reply, branch, usage, err := a.RunAgenticUsage(context.Background(), "instrucción",
+		map[string]string{"input": "Vendes mandos?"}, []string{"conversar"}, nil, false,
+		[]AgentTool{{Name: "search_data", Description: "Busca.", InputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}},
+		}}}, exec)
+
+	if err != nil || reply == "" || branch != "conversar" {
+		t.Fatalf("el último paso debía cerrar: reply=%q branch=%q err=%v", reply, branch, err)
+	}
+	if requests != maxAgentSteps || usage.Steps != maxAgentSteps {
+		t.Fatalf("presupuesto inesperado: requests=%d steps=%d", requests, usage.Steps)
+	}
+	if executions != maxAgentSteps-1 {
+		t.Fatalf("el último paso no debía ejecutar otra búsqueda: %d", executions)
+	}
+	last := usage.ToolTrace[len(usage.ToolTrace)-1]
+	if last.Step != maxAgentSteps || last.Name != branchToolName {
+		t.Fatalf("el cierre no quedó auditado: %+v", usage.ToolTrace)
+	}
+}
+
+func TestToolCallKeyNormalizaJSON(t *testing.T) {
+	left := toolCallKey("search_data", []byte(`{"query":"mandos","limit":3}`))
+	right := toolCallKey("search_data", []byte(`{ "limit": 3, "query": "mandos" }`))
+	if left != right {
+		t.Fatalf("argumentos JSON equivalentes produjeron claves distintas: %q / %q", left, right)
 	}
 }
 

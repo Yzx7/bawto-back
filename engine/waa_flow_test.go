@@ -106,21 +106,75 @@ func TestWAAPaymentJourneys(t *testing.T) {
 		t.Fatalf("pago con factura: %+v err=%v", withInvoice, err)
 	}
 
-	toolCalled := false
+	toolCalls := []string{}
 	recorded, err := Advance(flow, withInvoice.State, "comprobante", Deps{
 		InputType: "image",
 		MediaID:   "media-waa",
 		WaID:      "wamid-waa",
 		Agent:     waaTestAgent,
 		Context:   invoiceContext,
-		Tool: func(ref string, _ map[string]string, vars map[string]string) (string, error) {
-			toolCalled = ref == "record_payment_receipt" &&
-				vars["payment_receipt"] == "media-waa" &&
-				vars["input_wa_id"] == "wamid-waa"
-			return "invoice-id", nil
+		AgentStructured: func(request AgentRequest) (AgentResult, error) {
+			if request.NodeID != "n_classify_receipt" || !containsInputType(request.Accepts, "image") {
+				t.Fatalf("agente visual inesperado: %+v", request)
+			}
+			return AgentResult{Branch: "valid", Data: map[string]any{
+				"provider": "yape", "amount": 89.9, "currency": "PEN",
+				"occurredAt": "2026-08-02T10:30:00-05:00", "operationCode": "WAA-1",
+				"recipient": "WAA", "confidence": 0.98,
+			}}, nil
+		},
+		Tool: func(ref string, args map[string]string, vars map[string]string) (string, error) {
+			toolCalls = append(toolCalls, ref)
+			if vars["payment_receipt"] != "media-waa" || vars["input_wa_id"] != "wamid-waa" {
+				t.Fatalf("variables de media inesperadas: %+v", vars)
+			}
+			if ref != "data_mutate" || args["field.estado"] != "valid" || args["field.proveedor"] != "yape" {
+				t.Fatalf("guardado inesperado: ref=%s args=%+v", ref, args)
+			}
+			return `{"recordId":"payment-id","objectKey":"cobros","operation":"create","created":true,"idempotent":false,"data":{"estado":"valid"}}`, nil
 		},
 	})
-	if err != nil || !toolCalled || !recorded.Done || recorded.Handoff || len(recorded.Sends) == 0 {
-		t.Fatalf("comprobante: called=%v result=%+v err=%v", toolCalled, recorded, err)
+	if err != nil || len(toolCalls) != 1 || toolCalls[0] != "data_mutate" ||
+		!recorded.Done || recorded.Handoff || len(recorded.Sends) == 0 {
+		t.Fatalf("comprobante: calls=%v result=%+v err=%v", toolCalls, recorded, err)
+	}
+
+	// Una captura también puede iniciar el flujo directamente desde el puerto
+	// image de la raíz; si no se puede atribuir con seguridad, se registra para
+	// revisión y se deriva sin pasar por el clasificador textual de intención.
+	directCalls := 0
+	direct, err := Advance(flow, nil, "", Deps{
+		InputType: "image", WaID: "wamid-direct",
+		AgentStructured: func(AgentRequest) (AgentResult, error) {
+			return AgentResult{Branch: "needs_review", Data: map[string]any{
+				"provider": "plin", "amount": 89.9, "confidence": 0.6,
+			}}, nil
+		},
+		Tool: func(ref string, args map[string]string, _ map[string]string) (string, error) {
+			directCalls++
+			if ref != "data_mutate" || args["field.estado"] != "needs_review" {
+				t.Fatalf("guardado de revisión inesperado: ref=%s args=%+v", ref, args)
+			}
+			return `{"recordId":"payment-review","objectKey":"cobros","operation":"create","created":true,"idempotent":false,"data":{"estado":"needs_review"}}`, nil
+		},
+	})
+	if err != nil || directCalls != 1 || !direct.Done || !direct.Handoff || len(direct.Sends) == 0 {
+		t.Fatalf("captura directa: calls=%d result=%+v err=%v", directCalls, direct, err)
+	}
+
+	for _, decision := range []string{"unreadable", "not_receipt"} {
+		retry, err := Advance(flow, nil, "", Deps{
+			InputType: "image",
+			AgentStructured: func(AgentRequest) (AgentResult, error) {
+				return AgentResult{Branch: decision}, nil
+			},
+			Tool: func(ref string, _ map[string]string, _ map[string]string) (string, error) {
+				t.Fatalf("%s no debe guardar con %s", decision, ref)
+				return "", nil
+			},
+		})
+		if err != nil || retry.State == nil || retry.State.NodeID != "n_wait_receipt" || len(retry.Sends) == 0 {
+			t.Fatalf("%s: result=%+v err=%v", decision, retry, err)
+		}
 	}
 }

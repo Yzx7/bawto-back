@@ -68,7 +68,9 @@ type webhookPayload struct {
 					ID      string `json:"id"`
 					Type    string `json:"type"`
 					Context struct {
-						ID string `json:"id"`
+						ID                  string `json:"id"`
+						Forwarded           bool   `json:"forwarded"`
+						FrequentlyForwarded bool   `json:"frequently_forwarded"`
 					} `json:"context"`
 					Text struct {
 						Body string `json:"body"`
@@ -77,7 +79,54 @@ type webhookPayload struct {
 						ID       string `json:"id"`
 						MimeType string `json:"mime_type"`
 						Caption  string `json:"caption"`
+						SHA256   string `json:"sha256"`
+						URL      string `json:"url"`
 					} `json:"image"`
+					Audio struct {
+						ID       string `json:"id"`
+						MimeType string `json:"mime_type"`
+						SHA256   string `json:"sha256"`
+						URL      string `json:"url"`
+						Voice    bool   `json:"voice"`
+					} `json:"audio"`
+					Document struct {
+						ID       string `json:"id"`
+						MimeType string `json:"mime_type"`
+						SHA256   string `json:"sha256"`
+						URL      string `json:"url"`
+						Caption  string `json:"caption"`
+						Filename string `json:"filename"`
+					} `json:"document"`
+					Video struct {
+						ID       string `json:"id"`
+						MimeType string `json:"mime_type"`
+						SHA256   string `json:"sha256"`
+						URL      string `json:"url"`
+						Caption  string `json:"caption"`
+					} `json:"video"`
+					Sticker struct {
+						ID       string `json:"id"`
+						MimeType string `json:"mime_type"`
+						SHA256   string `json:"sha256"`
+						URL      string `json:"url"`
+						Animated bool   `json:"animated"`
+					} `json:"sticker"`
+					Location struct {
+						Latitude  *float64 `json:"latitude"`
+						Longitude *float64 `json:"longitude"`
+						Name      string   `json:"name"`
+						Address   string   `json:"address"`
+					} `json:"location"`
+					Contacts json.RawMessage `json:"contacts"`
+					Order    json.RawMessage `json:"order"`
+					Reaction struct {
+						MessageID string  `json:"message_id"`
+						Emoji     *string `json:"emoji"`
+					} `json:"reaction"`
+					Button struct {
+						Payload string `json:"payload"`
+						Text    string `json:"text"`
+					} `json:"button"`
 					Interactive struct {
 						ButtonReply struct {
 							ID    string `json:"id"`
@@ -110,18 +159,23 @@ func Parse(body []byte) ([]channels.InboundMessage, error) {
 			}
 			for _, m := range v.Messages {
 				im := channels.InboundMessage{
-					ChannelID:   v.Metadata.PhoneNumberID,
-					WaID:        m.ID,
-					From:        m.From,
-					ContactName: name,
-					QuotedWaID:  m.Context.ID,
+					ChannelID:           v.Metadata.PhoneNumberID,
+					WaID:                m.ID,
+					From:                m.From,
+					ContactName:         name,
+					EventType:           channels.EventMessage,
+					QuotedWaID:          m.Context.ID,
+					Forwarded:           m.Context.Forwarded,
+					FrequentlyForwarded: m.Context.FrequentlyForwarded,
 				}
+				raw, _ := json.Marshal(m)
+				im.Raw = raw
 				switch m.Type {
 				case "text":
 					im.Type = channels.MsgText
 					im.Text = m.Text.Body
 				case "interactive":
-					im.Type = channels.MsgReply
+					im.Type = channels.MsgInteractive
 					if m.Interactive.ButtonReply.ID != "" {
 						im.ReplyID = m.Interactive.ButtonReply.ID
 						im.Text = m.Interactive.ButtonReply.Title
@@ -129,12 +183,72 @@ func Parse(body []byte) ([]channels.InboundMessage, error) {
 						im.ReplyID = m.Interactive.ListReply.ID
 						im.Text = m.Interactive.ListReply.Title
 					}
+				case "button":
+					im.Type = channels.MsgInteractive
+					im.ReplyID = m.Button.Payload
+					im.Text = m.Button.Text
 				case "image":
 					im.Type = channels.MsgImage
 					im.MediaID = m.Image.ID
 					im.MimeType = m.Image.MimeType
+					im.MediaSHA256 = m.Image.SHA256
+					im.MediaURL = m.Image.URL
 					im.Caption = m.Image.Caption
 					im.Text = m.Image.Caption
+				case "audio":
+					im.Type = channels.MsgAudio
+					im.MediaID = m.Audio.ID
+					im.MimeType = m.Audio.MimeType
+					im.MediaSHA256 = m.Audio.SHA256
+					im.MediaURL = m.Audio.URL
+					im.Voice = m.Audio.Voice
+				case "document":
+					im.Type = channels.MsgDocument
+					im.MediaID = m.Document.ID
+					im.MimeType = m.Document.MimeType
+					im.MediaSHA256 = m.Document.SHA256
+					im.MediaURL = m.Document.URL
+					im.FileName = m.Document.Filename
+					im.Caption = m.Document.Caption
+					im.Text = m.Document.Caption
+				case "video":
+					im.Type = channels.MsgVideo
+					im.MediaID = m.Video.ID
+					im.MimeType = m.Video.MimeType
+					im.MediaSHA256 = m.Video.SHA256
+					im.MediaURL = m.Video.URL
+					im.Caption = m.Video.Caption
+					im.Text = m.Video.Caption
+				case "sticker":
+					im.Type = channels.MsgSticker
+					im.MediaID = m.Sticker.ID
+					im.MimeType = m.Sticker.MimeType
+					im.MediaSHA256 = m.Sticker.SHA256
+					im.MediaURL = m.Sticker.URL
+					im.Animated = m.Sticker.Animated
+				case "location":
+					im.Type = channels.MsgLocation
+					im.Location = &channels.Location{
+						Latitude: m.Location.Latitude, Longitude: m.Location.Longitude,
+						Name: m.Location.Name, Address: m.Location.Address,
+					}
+				case "contacts":
+					im.Type = channels.MsgContacts
+					im.Contacts = m.Contacts
+				case "order":
+					im.Type = channels.MsgOrder
+					im.Order = m.Order
+				case "reaction":
+					im.EventType = channels.EventReaction
+					im.Type = channels.MsgReaction
+					im.ReactionMessageID = m.Reaction.MessageID
+					if m.Reaction.Emoji == nil {
+						im.ReactionRemoved = true
+					} else {
+						im.ReactionEmoji = *m.Reaction.Emoji
+					}
+				case "unsupported":
+					im.Type = channels.MsgUnsupported
 				default:
 					im.Type = channels.MsgOther
 				}

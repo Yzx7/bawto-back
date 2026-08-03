@@ -7,6 +7,23 @@
   },
   "nodes": [
     {
+      "id": "n_entry_router",
+      "kind": "router",
+      "pos": { "x": -620, "y": 40 },
+      "cases": [
+        {
+          "id": "conversation",
+          "label": "Texto o interacción",
+          "expression": "input.contentType in (text, interactive)"
+        },
+        {
+          "id": "image",
+          "label": "Imagen",
+          "expression": "input.contentType == image"
+        }
+      ]
+    },
+    {
       "id": "n_intent",
       "kind": "agent",
       "pos": {
@@ -198,27 +215,99 @@
         "x": 1200,
         "y": -1000
       },
-      "expect": "image",
       "saveAs": "payment_receipt",
       "timeoutHours": 24
     },
     {
-      "id": "n_record_receipt",
-      "kind": "tool",
+      "id": "n_receipt_input_router",
+      "kind": "router",
+      "pos": { "x": 1350, "y": -1000 },
+      "cases": [
+        {
+          "id": "image",
+          "label": "Imagen",
+          "expression": "input.contentType == image"
+        }
+      ]
+    },
+    {
+      "id": "n_receipt_need_image",
+      "kind": "send",
+      "pos": { "x": 1500, "y": -790 },
+      "body": "Para continuar necesito una foto o captura completa del comprobante. Envíala nítida y sin recortes; deben verse fecha, importe y operación."
+    },
+    {
+      "id": "n_classify_receipt",
+      "kind": "agent",
       "pos": {
         "x": 1500,
         "y": -1000
       },
-      "toolRef": "record_payment_receipt",
-      "args": {},
-      "saveAs": "invoice_id"
+      "instruction": "Analiza únicamente la imagen actual como comprobante de pago peruano. Elige valid si la operación es exitosa y se leen importe, fecha y código; needs_review si parece válida pero falta o es ambiguo algún dato; unreadable si no puede leerse; not_receipt si no es un comprobante. Extrae solo datos visibles. provider debe ser yape, plin, bcp, interbank u other; currency usa ISO 4217; occurredAt usa RFC3339; operationCode conserva ceros iniciales y confidence va de 0 a 1.",
+      "outputs": ["valid", "needs_review", "unreadable", "not_receipt"],
+      "accepts": ["image"],
+      "silent": true,
+      "contextMode": "none",
+      "saveAs": "receipt",
+      "outputFields": [
+        { "key": "provider", "type": "string", "description": "Canal canónico del comprobante." },
+        { "key": "amount", "type": "number", "description": "Importe transferido." },
+        { "key": "currency", "type": "string", "description": "Moneda ISO 4217." },
+        { "key": "occurredAt", "type": "datetime", "description": "Fecha y hora RFC3339." },
+        { "key": "operationCode", "type": "string", "description": "Código de operación." },
+        { "key": "recipient", "type": "string", "description": "Destinatario visible." },
+        { "key": "confidence", "type": "number", "description": "Confianza entre 0 y 1." }
+      ]
+    },
+    {
+      "id": "n_save_receipt",
+      "kind": "tool",
+      "pos": { "x": 2100, "y": -1080 },
+      "toolRef": "data_mutate",
+      "args": {
+        "object": "cobros",
+        "operation": "create",
+        "linkCurrentContact": "true",
+        "idempotencyKey": "payment:{input.id}",
+        "field.proveedor": "{receipt.provider}",
+        "field.monto": "{receipt.amount}",
+        "field.moneda": "{receipt.currency}",
+        "field.fecha": "{receipt.occurredAt}",
+        "field.operacion": "{receipt.operationCode}",
+        "field.estado": "{receipt.branch}"
+      },
+      "saveAs": "payment_record"
+    },
+    {
+      "id": "n_payment_status_review",
+      "kind": "condition",
+      "pos": { "x": 2400, "y": -1080 },
+      "expression": "payment_record.data.estado == needs_review"
+    },
+    {
+      "id": "n_payment_review",
+      "kind": "send",
+      "pos": { "x": 2700, "y": -970 },
+      "body": "✅ Guardé tu comprobante y quedó *pendiente de revisión*. Un asesor verificará el importe, la operación y la factura antes de confirmar el pago."
+    },
+    {
+      "id": "n_receipt_retry",
+      "kind": "send",
+      "pos": { "x": 2400, "y": -820 },
+      "body": "No pude leer el comprobante con suficiente claridad. Envíame otra foto o captura completa, nítida y sin recortes; deben verse fecha, importe y operación."
+    },
+    {
+      "id": "n_receipt_not_payment",
+      "kind": "send",
+      "pos": { "x": 2400, "y": -700 },
+      "body": "La imagen no parece ser un comprobante de pago. Envíame una captura de Yape, Plin o del depósito donde se vean fecha, importe y operación."
     },
     {
       "id": "n_payment_ok",
       "kind": "send",
       "pos": {
-        "x": 1800,
-        "y": -1070
+        "x": 2700,
+        "y": -1150
       },
       "body": "✅ Recibí y guardé tu comprobante. La factura quedó *pendiente de validación*. Te avisaremos por este medio cuando finalice la revisión."
     },
@@ -226,8 +315,8 @@
       "id": "n_payment_error",
       "kind": "send",
       "pos": {
-        "x": 1800,
-        "y": -930
+        "x": 2400,
+        "y": -580
       },
       "body": "Recibí la imagen, pero no pude asociarla de forma segura con una factura pendiente. Conservaré la conversación y te derivaré con facturación para revisarla."
     },
@@ -239,6 +328,12 @@
         "y": -850
       },
       "body": "Antes de recibir el comprobante necesito identificar la cuenta correcta. Envíame tu *código de cliente* o los *últimos 4 dígitos del documento del titular*."
+    },
+    {
+      "id": "n_input_unsupported",
+      "kind": "send",
+      "pos": { "x": -280, "y": 430 },
+      "body": "Recibí el archivo, pero todavía no puedo procesar ese formato. Escríbeme el detalle en texto o envía una imagen."
     },
     {
       "id": "n_wait_payment_identifier",
@@ -796,7 +891,30 @@
     {
       "id": "e_trigger",
       "source": "trigger",
+      "target": "n_entry_router"
+    },
+    {
+      "id": "e_entry_conversation",
+      "source": "n_entry_router",
+      "sourceHandle": "conversation",
       "target": "n_intent"
+    },
+    {
+      "id": "e_entry_image",
+      "source": "n_entry_router",
+      "sourceHandle": "image",
+      "target": "n_classify_receipt"
+    },
+    {
+      "id": "e_entry_default",
+      "source": "n_entry_router",
+      "sourceHandle": "default",
+      "target": "n_input_unsupported"
+    },
+    {
+      "id": "e_input_unsupported_wait",
+      "source": "n_input_unsupported",
+      "target": "n_wait_menu"
     },
     {
       "id": "e_intent_billing",
@@ -1003,21 +1121,90 @@
       "target": "n_wait_receipt"
     },
     {
-      "id": "e_receipt_tool",
+      "id": "e_receipt_router",
       "source": "n_wait_receipt",
-      "target": "n_record_receipt"
+      "target": "n_receipt_input_router"
     },
     {
-      "id": "e_receipt_ok",
-      "source": "n_record_receipt",
+      "id": "e_receipt_router_image",
+      "source": "n_receipt_input_router",
+      "sourceHandle": "image",
+      "target": "n_classify_receipt"
+    },
+    {
+      "id": "e_receipt_router_default",
+      "source": "n_receipt_input_router",
+      "sourceHandle": "default",
+      "target": "n_receipt_need_image"
+    },
+    {
+      "id": "e_receipt_need_image_wait",
+      "source": "n_receipt_need_image",
+      "target": "n_wait_receipt",
+      "role": "loopback"
+    },
+    {
+      "id": "e_receipt_valid_save",
+      "source": "n_classify_receipt",
+      "sourceHandle": "valid",
+      "target": "n_save_receipt"
+    },
+    {
+      "id": "e_receipt_review_save",
+      "source": "n_classify_receipt",
+      "sourceHandle": "needs_review",
+      "target": "n_save_receipt"
+    },
+    {
+      "id": "e_receipt_unreadable",
+      "source": "n_classify_receipt",
+      "sourceHandle": "unreadable",
+      "target": "n_receipt_retry"
+    },
+    {
+      "id": "e_receipt_not_payment",
+      "source": "n_classify_receipt",
+      "sourceHandle": "not_receipt",
+      "target": "n_receipt_not_payment"
+    },
+    {
+      "id": "e_receipt_retry_wait",
+      "source": "n_receipt_retry",
+      "target": "n_wait_receipt"
+    },
+    {
+      "id": "e_receipt_not_payment_wait",
+      "source": "n_receipt_not_payment",
+      "target": "n_wait_receipt"
+    },
+    {
+      "id": "e_receipt_saved",
+      "source": "n_save_receipt",
       "sourceHandle": "ok",
+      "target": "n_payment_status_review"
+    },
+    {
+      "id": "e_receipt_save_error",
+      "source": "n_save_receipt",
+      "sourceHandle": "error",
+      "target": "n_payment_error"
+    },
+    {
+      "id": "e_payment_requires_review",
+      "source": "n_payment_status_review",
+      "sourceHandle": "true",
+      "target": "n_payment_review"
+    },
+    {
+      "id": "e_payment_pending_validation",
+      "source": "n_payment_status_review",
+      "sourceHandle": "false",
       "target": "n_payment_ok"
     },
     {
-      "id": "e_receipt_error",
-      "source": "n_record_receipt",
-      "sourceHandle": "error",
-      "target": "n_payment_error"
+      "id": "e_payment_review_handoff",
+      "source": "n_payment_review",
+      "target": "n_handoff_billing"
     },
     {
       "id": "e_payment_ok_end",

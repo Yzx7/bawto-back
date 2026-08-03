@@ -78,6 +78,98 @@ func TestValidateAgentBranches(t *testing.T) {
 	}
 }
 
+func TestValidateAgentStructuredOutput(t *testing.T) {
+	valid := validAgentFlow()
+	valid.Nodes[0].SaveAs = "comprobante"
+	valid.Nodes[0].OutputFields = []AgentOutputField{
+		{Key: "provider", Type: "string", Description: "Yape, Plin o banco"},
+		{Key: "amount", Type: "number"},
+		{Key: "occurredAt", Type: "datetime"},
+	}
+	if err := Validate(valid); err != nil {
+		t.Fatalf("salida enriquecida válida rechazada: %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		field AgentOutputField
+		want  string
+	}{
+		{name: "reserved", field: AgentOutputField{Key: "branch", Type: "string"}, want: "reservada"},
+		{name: "duplicate", field: AgentOutputField{Key: "Amount", Type: "number"}, want: "duplicado"},
+		{name: "type", field: AgentOutputField{Key: "confidence", Type: "decimal"}, want: "tipo"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			flow := validAgentFlow()
+			flow.Nodes[0].SaveAs = "resultado"
+			flow.Nodes[0].OutputFields = []AgentOutputField{{Key: "amount", Type: "number"}, tt.field}
+			err := Validate(flow)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err=%v; se esperaba %q", err, tt.want)
+			}
+		})
+	}
+
+	missingNamespace := validAgentFlow()
+	missingNamespace.Nodes[0].OutputFields = []AgentOutputField{{Key: "amount", Type: "number"}}
+	if err := Validate(missingNamespace); err == nil || !strings.Contains(err.Error(), "saveAs") {
+		t.Fatalf("se esperaba exigir saveAs, err=%v", err)
+	}
+}
+
+func TestValidateVisionAgentAcceptsDirectImage(t *testing.T) {
+	flow := validAgentFlow()
+	flow.Trigger.Accepts = []string{"image"}
+	flow.Trigger.RouteBy = "content_type"
+	flow.Edges[0].SourceHandle = "image"
+	if err := Validate(flow); err == nil || !strings.Contains(err.Error(), "no declara entrada image") {
+		t.Fatalf("un agente de texto debía rechazar la imagen directa, err=%v", err)
+	}
+
+	flow.Nodes[0].Accepts = []string{"text", "interactive", "image"}
+	if err := Validate(flow); err != nil {
+		t.Fatalf("agente visual rechazado: %v", err)
+	}
+}
+
+func TestValidateTypedTrigger(t *testing.T) {
+	flow := &Flow{
+		ID: "typed", Name: "Tipado",
+		Trigger: Trigger{Type: "message", Match: "any", Accepts: []string{"text", "image"}, RouteBy: "content_type"},
+		Nodes:   []Node{{ID: "text", Kind: "action", Action: "end"}, {ID: "image", Kind: "action", Action: "end"}},
+		Edges: []Edge{
+			{ID: "t", Source: "trigger", SourceHandle: "text", Target: "text"},
+			{ID: "i", Source: "trigger", SourceHandle: "image", Target: "image"},
+		},
+	}
+	if err := Validate(flow); err != nil {
+		t.Fatalf("trigger tipado válido rechazado: %v", err)
+	}
+	flow.Edges = flow.Edges[:1]
+	if err := Validate(flow); err == nil || !strings.Contains(err.Error(), `salida "image"`) {
+		t.Fatalf("faltaba rechazo por puerto image: %v", err)
+	}
+}
+
+func TestValidateRejectsRawImageConnectedToTextAgent(t *testing.T) {
+	flow := &Flow{
+		ID: "raw-image", Name: "Imagen cruda",
+		Trigger: Trigger{Type: "message", Match: "any", Accepts: []string{"image"}, RouteBy: "content_type"},
+		Nodes: []Node{
+			{ID: "agent", Kind: "agent", Instruction: "Clasifica", Outputs: []string{"done"}},
+			{ID: "done", Kind: "action", Action: "end"},
+		},
+		Edges: []Edge{
+			{ID: "start", Source: "trigger", SourceHandle: "image", Target: "agent"},
+			{ID: "done", Source: "agent", SourceHandle: "done", Target: "done"},
+		},
+	}
+	if err := Validate(flow); err == nil || !strings.Contains(err.Error(), "herramienta de transformación") {
+		t.Fatalf("se esperaba incompatibilidad de imagen cruda, err=%v", err)
+	}
+}
+
 func TestValidateRejectsLoopbackWithoutWait(t *testing.T) {
 	flow := validAgentFlow()
 	flow.Nodes[2] = Node{
@@ -110,7 +202,7 @@ func TestValidateHerramientasDelAgente(t *testing.T) {
 		},
 		{
 			name:  "existe pero no es para agentes",
-			tools: []NodeTool{{Ref: "record_payment_receipt"}},
+			tools: []NodeTool{{Ref: "data_mutate"}},
 			want:  "no está disponible para agentes",
 		},
 		{
@@ -152,8 +244,8 @@ func TestValidateHerramientasDelAgente(t *testing.T) {
 	}
 }
 
-// El bloque `tool` del grafo y el agente no comparten catálogo: una herramienta
-// pensada para que la llame el modelo no puede colgarse de una arista.
+// Una herramienta puede declarar ambos consumidores, pero search_data es solo
+// agéntica y no puede colgarse de una arista.
 func TestValidateBloqueToolRechazaHerramientaDeAgente(t *testing.T) {
 	flow := validAgentFlow()
 	flow.Nodes = append(flow.Nodes, Node{ID: "t1", Kind: "tool", ToolRef: "search_data"})
@@ -165,5 +257,31 @@ func TestValidateBloqueToolRechazaHerramientaDeAgente(t *testing.T) {
 	err := Validate(flow)
 	if err == nil || !strings.Contains(err.Error(), "solo puede usarla un agente") {
 		t.Fatalf("se esperaba el rechazo por consumidor equivocado, got %v", err)
+	}
+}
+
+func TestValidateDataMutateRequiresSafeDeclarativeScope(t *testing.T) {
+	valid := &Flow{ID: "f", Name: "F", Trigger: Trigger{Type: "message", Match: "any"}, Nodes: []Node{
+		{ID: "mutate", Kind: "tool", ToolRef: "data_mutate", Args: map[string]string{
+			"object": "cobros", "operation": "upsert", "matchField": "operacion",
+			"matchValue": "{receipt.operationCode}", "field.operacion": "{receipt.operationCode}",
+			"idempotencyKey": "payment:{input.id}", "linkCurrentContact": "true",
+		}},
+		{ID: "ok", Kind: "action", Action: "end"}, {ID: "error", Kind: "action", Action: "end"},
+	}, Edges: []Edge{
+		{ID: "start", Source: "trigger", Target: "mutate"},
+		{ID: "ok", Source: "mutate", SourceHandle: "ok", Target: "ok"},
+		{ID: "error", Source: "mutate", SourceHandle: "error", Target: "error"},
+	}}
+	if err := Validate(valid); err != nil {
+		t.Fatalf("data_mutate válido rechazado: %v", err)
+	}
+	invalid := *valid
+	invalid.Nodes = append([]Node(nil), valid.Nodes...)
+	invalid.Nodes[0].Args = map[string]string{
+		"object": "{input.object}", "operation": "create", "field.valor": "1", "idempotencyKey": "k",
+	}
+	if err := Validate(&invalid); err == nil || !strings.Contains(err.Error(), "objeto fijo") {
+		t.Fatalf("se esperaba rechazar objeto dinámico: %v", err)
 	}
 }

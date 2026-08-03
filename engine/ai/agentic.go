@@ -64,19 +64,45 @@ func (a *Agent) RunAgenticUsage(
 	agentTools []AgentTool,
 	exec ToolExecutor,
 ) (reply, branch string, usage Usage, err error) {
+	result, usage, err := a.RunStructuredAgenticUsage(ctx, instruction, vars, outputs, history, silent, nil, nil, agentTools, exec)
+	return result.Reply, result.Branch, usage, err
+}
+
+// RunStructuredAgenticUsage conserva el mismo bucle de herramientas y amplía
+// únicamente su llamada terminal con los datos declarados por el autor.
+func (a *Agent) RunStructuredAgenticUsage(
+	ctx context.Context,
+	instruction string,
+	vars map[string]string,
+	outputs []string,
+	history []engine.ChatMessage,
+	silent bool,
+	outputFields []engine.AgentOutputField,
+	media *engine.AgentMedia,
+	agentTools []AgentTool,
+	exec ToolExecutor,
+) (result engine.AgentResult, usage Usage, err error) {
 	if len(outputs) == 0 {
-		return "", "", Usage{}, &OutputError{Code: "invalid_outputs", Detail: "un agente con herramientas necesita ramas"}
+		return result, Usage{}, &OutputError{Code: "invalid_outputs", Detail: "un agente con herramientas necesita ramas"}
 	}
-	branchToolParam, toolErr := branchTool(outputs, silent)
+	branchToolParam, toolErr := branchToolWithData(outputs, silent, outputFields)
 	if toolErr != nil {
-		return "", "", Usage{}, toolErr
+		return result, Usage{}, toolErr
+	}
+	systemPrompt := agenticSystemPrompt(instruction, silent, agentTools)
+	if len(outputFields) > 0 {
+		systemPrompt += "\nEn la llamada terminal, completa `data` solo con los campos declarados que puedas determinar. No inventes valores; omite los desconocidos."
 	}
 
+	messages, messageErr := anthropicMessagesWithMedia(history, vars, media)
+	if messageErr != nil {
+		return result, Usage{}, messageErr
+	}
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(a.model),
 		MaxTokens: 2048,
-		System:    []anthropic.TextBlockParam{{Text: agenticSystemPrompt(instruction, silent, agentTools)}},
-		Messages:  anthropicMessages(history, vars),
+		System:    []anthropic.TextBlockParam{{Text: systemPrompt}},
+		Messages:  messages,
 		Tools:     append(toolParams(agentTools), branchToolParam),
 		ToolChoice: anthropic.ToolChoiceUnionParam{
 			OfAny: &anthropic.ToolChoiceAnyParam{DisableParallelToolUse: anthropic.Bool(true)},
@@ -85,11 +111,33 @@ func (a *Agent) RunAgenticUsage(
 	}
 
 	usage = Usage{Provider: a.provider, Model: a.model, Rates: a.rates}
+	type rememberedToolResult struct {
+		text    string
+		isError bool
+	}
+	toolMemory := make(map[string]rememberedToolResult)
+	forceTerminal := false
 
 	for step := 0; step < maxAgentSteps; step++ {
+		mustClose := forceTerminal || step == maxAgentSteps-1
+		if mustClose {
+			// El último presupuesto del turno no puede gastarse en otra consulta:
+			// se reserva para que el modelo produzca la respuesta y rama que el
+			// grafo necesita. Una repetición adelanta esta compuerta.
+			params.ToolChoice = anthropic.ToolChoiceUnionParam{
+				OfTool: &anthropic.ToolChoiceToolParam{
+					Name:                   branchToolName,
+					DisableParallelToolUse: anthropic.Bool(true),
+				},
+			}
+		} else {
+			params.ToolChoice = anthropic.ToolChoiceUnionParam{
+				OfAny: &anthropic.ToolChoiceAnyParam{DisableParallelToolUse: anthropic.Bool(true)},
+			}
+		}
 		resp, callErr := a.client.Messages.New(ctx, params, a.tenantOptions()...)
 		if callErr != nil {
-			return "", "", usage, callErr
+			return result, usage, callErr
 		}
 		usage.accumulate(resp)
 		usage.Steps = step + 1
@@ -101,7 +149,7 @@ func (a *Agent) RunAgenticUsage(
 
 		calls := toolUses(resp.Content)
 		if len(calls) == 0 {
-			return "", "", usage, &OutputError{
+			return result, usage, &OutputError{
 				Code:   "missing_tool_call",
 				Detail: fmt.Sprintf("stop_reason=%s", resp.StopReason),
 			}
@@ -111,8 +159,20 @@ func (a *Agent) RunAgenticUsage(
 		// el modelo ya decidió y lo demás sobra.
 		for _, call := range calls {
 			if call.Name == branchToolName {
-				reply, branch, err = parseBranchTool(resp.Content, outputs, silent)
-				return reply, branch, usage, err
+				usage.ToolTrace = append(usage.ToolTrace, ToolTraceEntry{Step: step + 1, Name: call.Name})
+				result, err = parseBranchToolWithData(resp.Content, outputs, silent, outputFields)
+				return result, usage, err
+			}
+		}
+		if mustClose {
+			// Un proveedor que ignora tool_choice no debe ejecutar efectos fuera
+			// del presupuesto. Se devuelve un código reintentable y auditable.
+			for _, call := range calls {
+				usage.ToolTrace = append(usage.ToolTrace, ToolTraceEntry{Step: step + 1, Name: call.Name})
+			}
+			return result, usage, &OutputError{
+				Code:   "unexpected_tool",
+				Detail: "el proveedor ignoró el cierre obligatorio con select_flow_branch",
 			}
 		}
 
@@ -123,20 +183,38 @@ func (a *Agent) RunAgenticUsage(
 		// que el proveedor lo respete: el protocolo es quien manda.
 		results := make([]anthropic.ContentBlockParamUnion, 0, len(calls))
 		for _, call := range calls {
-			result, execErr := exec(ctx, call.Name, []byte(call.Input))
-			isError := execErr != nil
-			if isError {
-				// El texto del error va al modelo, no al cliente: es información
-				// para que decida, igual que cualquier otro resultado.
-				result = "Error al ejecutar la herramienta: " + execErr.Error()
+			key := toolCallKey(call.Name, []byte(call.Input))
+			remembered, repeated := toolMemory[key]
+			toolResult := remembered.text
+			isError := remembered.isError
+			if repeated {
+				// El resultado original ya está en el historial. Esta respuesta solo
+				// satisface el protocolo tool_use/tool_result y evita repetir I/O.
+				toolResult = "Esta misma herramienta ya se ejecutó con los mismos argumentos en este turno. " +
+					"Usa el resultado anterior y termina con select_flow_branch; no vuelvas a consultarla."
+				isError = false
+				forceTerminal = true
+			} else {
+				var execErr error
+				toolResult, execErr = exec(ctx, call.Name, []byte(call.Input))
+				isError = execErr != nil
+				if isError {
+					// El texto del error va al modelo, no al cliente: es información
+					// para que decida, igual que cualquier otro resultado.
+					toolResult = "Error al ejecutar la herramienta: " + execErr.Error()
+				}
+				toolMemory[key] = rememberedToolResult{text: toolResult, isError: isError}
 			}
+			usage.ToolTrace = append(usage.ToolTrace, ToolTraceEntry{
+				Step: step + 1, Name: call.Name, Repeated: repeated, Failed: isError,
+			})
 			results = append(results,
-				anthropic.NewToolResultBlock(call.ID, truncateRunes(result, maxToolResultRunes), isError))
+				anthropic.NewToolResultBlock(call.ID, truncateRunes(toolResult, maxToolResultRunes), isError))
 		}
 		params.Messages = append(params.Messages, anthropic.NewUserMessage(results...))
 	}
 
-	return "", "", usage, &OutputError{
+	return result, usage, &OutputError{
 		Code:   "tool_loop_exhausted",
 		Detail: fmt.Sprintf("el agente no eligió rama en %d pasos", maxAgentSteps),
 	}
@@ -195,7 +273,9 @@ func agenticSystemPrompt(instruction string, silent bool, agentTools []AgentTool
 	b.WriteString("Instrucción: " + instruction)
 	if len(agentTools) > 0 {
 		b.WriteString("\n\nTienes herramientas para consultar información real. Úsalas antes de afirmar " +
-			"datos concretos en vez de suponerlos; si una herramienta no devuelve lo que buscabas, dilo con naturalidad.")
+			"datos concretos en vez de suponerlos; si una herramienta no devuelve lo que buscabas, dilo con naturalidad. " +
+			"No repitas una herramienta con los mismos argumentos. Si un resultado no basta y no tienes información nueva " +
+			"para formular otra consulta útil, termina el turno haciendo una pregunta breve de aclaración.")
 	}
 	if silent {
 		b.WriteString("\nNo redactes una respuesta para el cliente; solo selecciona la rama.")
@@ -204,6 +284,18 @@ func agenticSystemPrompt(instruction string, silent bool, agentTools []AgentTool
 	}
 	b.WriteString("\nCuando tengas lo necesario, termina llamando a `select_flow_branch`. Esa llamada cierra el turno.")
 	return b.String()
+}
+
+// toolCallKey compara argumentos por su JSON semántico. Dos objetos con espacios
+// u orden de claves distinto representan la misma llamada y no deben repetir I/O.
+func toolCallKey(name string, input json.RawMessage) string {
+	var decoded any
+	if json.Unmarshal(input, &decoded) == nil {
+		if canonical, err := json.Marshal(decoded); err == nil {
+			return name + "\x00" + string(canonical)
+		}
+	}
+	return name + "\x00" + strings.TrimSpace(string(input))
 }
 
 func truncateRunes(s string, max int) string {

@@ -37,6 +37,19 @@ const (
 	EffectSend Effect = "send"
 )
 
+// PayloadType describe el contrato semántico de entrada/salida de una tool.
+// No es un MIME type ni el JSON Schema de sus argumentos: sirve para que el
+// editor y, más adelante, el validador del grafo puedan detectar conexiones
+// imposibles antes de ejecutar el flujo.
+type PayloadType string
+
+const (
+	PayloadDataQuery      PayloadType = "data_query"
+	PayloadDataRecords    PayloadType = "data_records"
+	PayloadStructuredData PayloadType = "structured_data"
+	PayloadDataRecord     PayloadType = "data_record"
+)
+
 // ConfigKey es un dato que **fija el autor del flujo** y el modelo no elige.
 // Existe para acotar el alcance: un agente comercial busca en el catálogo de
 // servicios, no en cualquier tabla de la organización.
@@ -62,8 +75,12 @@ type Spec struct {
 	Description string
 	// InputSchema es el JSON Schema de lo que el modelo debe rellenar.
 	InputSchema map[string]any
-	Config      []ConfigKey
-	Effect      Effect
+	// Accepts/Produces hacen visible el contrato de datos, independientemente de
+	// si la invocación ocurre desde el grafo o dentro de un agente.
+	Accepts  []PayloadType
+	Produces PayloadType
+	Config   []ConfigKey
+	Effect   Effect
 	// ForAgent: el modelo puede llamarla. ForGraph: puede ponerse en un nodo
 	// `tool`. No son excluyentes, pero tampoco automáticas: una herramienta sin
 	// `Description` decente no debería ofrecerse al modelo.
@@ -92,6 +109,8 @@ var registry = map[string]Spec{
 			"required":             []string{"query"},
 			"additionalProperties": false,
 		},
+		Accepts:  []PayloadType{PayloadDataQuery},
+		Produces: PayloadDataRecords,
 		Config: []ConfigKey{{
 			Key:      "object",
 			Label:    "Objeto de datos",
@@ -104,13 +123,14 @@ var registry = map[string]Spec{
 		ForGraph: false,
 	},
 
-	// La del comprobante es anterior al registro y solo la usa el grafo: resuelve
-	// sus entradas del mensaje en curso, así que no tiene esquema que ofrecerle a
-	// un modelo.
-	"record_payment_receipt": {
-		Name:     "record_payment_receipt",
-		Label:    "Registrar comprobante de pago",
-		Help:     "Adjunta la imagen recibida a la factura pendiente del contacto y la pasa a «validación».",
+	"data_mutate": {
+		Name:  "data_mutate",
+		Label: "Guardar en una tabla",
+		Help:  "Crea, actualiza o hace upsert de un registro usando únicamente el objeto y campos fijados en el bloque.",
+		Accepts: []PayloadType{
+			PayloadStructuredData, PayloadDataRecords,
+		},
+		Produces: PayloadDataRecord,
 		Effect:   EffectWrite,
 		ForAgent: false,
 		ForGraph: true,

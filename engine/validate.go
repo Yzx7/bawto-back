@@ -3,12 +3,14 @@ package engine
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Yzx7/sacs-chatbots/engine/tools"
 )
 
 var branchNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
+var variableNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 
 // Validate comprueba el contrato que el motor realmente puede ejecutar. Evita
 // publicar grafos que el editor puede dibujar pero el backend no sabe resolver.
@@ -26,6 +28,15 @@ func Validate(flow *Flow) error {
 	case "message":
 		if flow.Trigger.Match == "keyword" && len(flow.Trigger.Keywords) == 0 {
 			return fmt.Errorf("el trigger por palabras clave requiere al menos una palabra")
+		}
+		if flow.Trigger.RouteBy != "" && flow.Trigger.RouteBy != "single" && flow.Trigger.RouteBy != "content_type" {
+			return fmt.Errorf("modo de salida del trigger inválido")
+		}
+		if err := validateInputTypes(flow.Trigger.Accepts); err != nil {
+			return fmt.Errorf("trigger: %w", err)
+		}
+		if flow.Trigger.RouteBy == "content_type" && len(flow.Trigger.Accepts) == 0 {
+			return fmt.Errorf("el trigger separado por formato requiere al menos un tipo aceptado")
 		}
 	case "schedule":
 		if strings.TrimSpace(flow.Trigger.Cron) == "" || strings.TrimSpace(flow.Trigger.ViewID) == "" {
@@ -71,11 +82,25 @@ func Validate(flow *Flow) error {
 			return fmt.Errorf("%s tiene más de una salida para la rama %q", edge.Source, edge.SourceHandle)
 		}
 	}
-	if outgoingCount(out["trigger"]) != 1 {
+	if flow.Trigger.RouteBy == "content_type" {
+		allowed := make(map[string]struct{}, len(flow.Trigger.Accepts))
+		for _, inputType := range flow.Trigger.Accepts {
+			handle := normalizedInputType(inputType)
+			allowed[handle] = struct{}{}
+			if out["trigger"][handle] != 1 {
+				return fmt.Errorf("el trigger requiere una salida %q", handle)
+			}
+		}
+		for handle := range out["trigger"] {
+			if _, ok := allowed[handle]; !ok {
+				return fmt.Errorf("el trigger tiene una conexión para el formato no declarado %q", handle)
+			}
+		}
+	} else if outgoingCount(out["trigger"]) != 1 {
 		return fmt.Errorf("el trigger debe tener exactamente una salida")
 	}
 	for _, n := range flow.Nodes {
-		if isLinearNode(&n) && outgoingCount(out[n.ID]) != 1 {
+		if isLinearNode(&n) && !(n.Kind == "wait" && legacyTypedWait(&n) && len(n.Accepts) > 1) && outgoingCount(out[n.ID]) != 1 {
 			return fmt.Errorf("el nodo %s debe tener exactamente una salida", n.ID)
 		}
 		required := requiredHandles(&n)
@@ -84,9 +109,10 @@ func Validate(flow *Flow) error {
 				return fmt.Errorf("el nodo %s requiere una salida %q", n.ID, handle)
 			}
 		}
-		if n.Kind == "agent" {
-			allowed := make(map[string]struct{}, len(n.Outputs))
-			for _, handle := range n.Outputs {
+		if n.Kind == "agent" || n.Kind == "router" {
+			allowedHandles := requiredHandles(&n)
+			allowed := make(map[string]struct{}, len(allowedHandles))
+			for _, handle := range allowedHandles {
 				allowed[handle] = struct{}{}
 			}
 			for handle := range out[n.ID] {
@@ -96,9 +122,29 @@ func Validate(flow *Flow) error {
 			}
 		}
 	}
+	for _, edge := range flow.Edges {
+		if inputType := edgeInputType(flow, nodes, edge); inputType != "" {
+			if err := validateInputDestination(inputType, nodes[edge.Target]); err != nil {
+				return fmt.Errorf("conexión %s → %s: %w", edge.Source, edge.Target, err)
+			}
+		}
+		if edge.Source != "trigger" && edge.SourceHandle == "ok" {
+			source := nodes[edge.Source]
+			if source != nil && source.Kind == "tool" {
+				if err := validatePayloadDestination(tools.Get(source.ToolRef).Produces, nodes[edge.Target]); err != nil {
+					return fmt.Errorf("conexión %s → %s: %w", edge.Source, edge.Target, err)
+				}
+			}
+		}
+	}
 
 	seen := map[string]bool{}
-	queue := []string{flow.next("trigger", "")}
+	queue := make([]string, 0, len(flow.Edges))
+	for _, edge := range flow.Edges {
+		if edge.Source == "trigger" {
+			queue = append(queue, edge.Target)
+		}
+	}
 	for len(queue) > 0 {
 		id := queue[0]
 		queue = queue[1:]
@@ -132,6 +178,65 @@ func Validate(flow *Flow) error {
 	return nil
 }
 
+func edgeInputType(flow *Flow, nodes map[string]*Node, edge Edge) string {
+	if edge.Source == "trigger" && flow.Trigger.RouteBy == "content_type" {
+		return normalizedInputType(edge.SourceHandle)
+	}
+	source := nodes[edge.Source]
+	if source == nil || source.Kind != "wait" || !legacyTypedWait(source) {
+		return ""
+	}
+	if len(source.Accepts) > 1 {
+		return normalizedInputType(edge.SourceHandle)
+	}
+	if len(source.Accepts) == 1 {
+		return normalizedInputType(source.Accepts[0])
+	}
+	if source.Expect != "" && source.Expect != "any" {
+		return normalizedInputType(source.Expect)
+	}
+	return ""
+}
+
+func validateInputDestination(inputType string, destination *Node) error {
+	if destination == nil {
+		return nil
+	}
+	if destination.Kind == "agent" && !agentAcceptsInput(destination, inputType) {
+		return fmt.Errorf("el agente no declara entrada %s; habilita ese formato o inserta una herramienta de transformación", inputType)
+	}
+	if destination.Kind != "tool" {
+		return nil
+	}
+	payload := tools.PayloadType(inputType)
+	if !toolAccepts(tools.Get(destination.ToolRef), payload) {
+		return fmt.Errorf("la herramienta %q no acepta %s", destination.ToolRef, inputType)
+	}
+	return nil
+}
+
+func validatePayloadDestination(payload tools.PayloadType, destination *Node) error {
+	if destination == nil || destination.Kind != "tool" || payload == "" {
+		return nil
+	}
+	if !toolAccepts(tools.Get(destination.ToolRef), payload) {
+		return fmt.Errorf("la herramienta %q no acepta el resultado %s", destination.ToolRef, payload)
+	}
+	return nil
+}
+
+func toolAccepts(spec *tools.Spec, payload tools.PayloadType) bool {
+	if spec == nil {
+		return false
+	}
+	for _, accepted := range spec.Accepts {
+		if accepted == payload {
+			return true
+		}
+	}
+	return false
+}
+
 func validateNode(n *Node, triggerType string) error {
 	switch n.Kind {
 	case "send":
@@ -160,7 +265,18 @@ func validateNode(n *Node, triggerType string) error {
 		if n.ContextMode == "recent" && strings.Contains(n.Instruction, "{input}") {
 			return fmt.Errorf("contextMode recent ya recibe el mensaje actual en el historial; no uses {input} en la instrucción")
 		}
+		for _, inputType := range n.Accepts {
+			if inputType != "text" && inputType != "interactive" && inputType != "image" {
+				return fmt.Errorf("el agente todavía no admite entrada %q", inputType)
+			}
+		}
+		if err := validateInputTypes(n.Accepts); err != nil {
+			return err
+		}
 		if err := validateAgentTools(n.Tools); err != nil {
+			return err
+		}
+		if err := validateAgentOutput(n); err != nil {
 			return err
 		}
 		seenOutputs := make(map[string]struct{}, len(n.Outputs))
@@ -178,7 +294,11 @@ func validateNode(n *Node, triggerType string) error {
 		if triggerType != "message" {
 			return fmt.Errorf("solo se puede esperar en flujos de mensajes")
 		}
-		if n.Expect != "any" && n.Expect != "text" && n.Expect != "image" {
+		if len(n.Accepts) > 0 {
+			if err := validateInputTypes(n.Accepts); err != nil {
+				return err
+			}
+		} else if n.Expect != "" && n.Expect != "any" && n.Expect != "text" && n.Expect != "image" {
 			return fmt.Errorf("tipo de espera inválido")
 		}
 	case "tool":
@@ -192,9 +312,35 @@ func validateNode(n *Node, triggerType string) error {
 		if len(n.Tools) > 0 {
 			return fmt.Errorf("`tools` es del bloque agente; este ejecuta una sola herramienta con `toolRef`")
 		}
+		if n.ToolRef == "data_mutate" {
+			if err := validateDataMutateArgs(n.Args); err != nil {
+				return err
+			}
+		}
 	case "condition":
-		if strings.TrimSpace(n.Expression) == "" {
-			return fmt.Errorf("requiere una expresión")
+		if err := validateExpression(n.Expression); err != nil {
+			return fmt.Errorf("expresión inválida: %w", err)
+		}
+	case "router":
+		if len(n.Cases) == 0 {
+			return fmt.Errorf("requiere al menos un caso además de default")
+		}
+		if len(n.Cases) > 32 {
+			return fmt.Errorf("supera el máximo de 32 casos")
+		}
+		seenCases := make(map[string]struct{}, len(n.Cases))
+		for index, routeCase := range n.Cases {
+			if !branchNameRe.MatchString(routeCase.ID) || strings.EqualFold(routeCase.ID, "default") {
+				return fmt.Errorf("caso %d tiene id %q inválido", index+1, routeCase.ID)
+			}
+			key := strings.ToLower(routeCase.ID)
+			if _, exists := seenCases[key]; exists {
+				return fmt.Errorf("caso duplicado %q", routeCase.ID)
+			}
+			seenCases[key] = struct{}{}
+			if err := validateExpression(routeCase.Expression); err != nil {
+				return fmt.Errorf("caso %q: %w", routeCase.ID, err)
+			}
 		}
 	case "action":
 		if n.Action != "set" && n.Action != "handoff" && n.Action != "end" {
@@ -202,6 +348,96 @@ func validateNode(n *Node, triggerType string) error {
 		}
 	default:
 		return fmt.Errorf("tipo %q inválido", n.Kind)
+	}
+	return nil
+}
+
+func agentAcceptsInput(agent *Node, inputType string) bool {
+	if agent == nil || agent.Kind != "agent" {
+		return false
+	}
+	if len(agent.Accepts) == 0 {
+		return inputType == "text" || inputType == "interactive"
+	}
+	return containsInputType(agent.Accepts, inputType)
+}
+
+func validateAgentOutput(n *Node) error {
+	if n.SaveAs != "" && !variableNameRe.MatchString(n.SaveAs) {
+		return fmt.Errorf("guardar datos como %q es inválido: usa una variable de 1–64 letras ASCII, números o guion bajo", n.SaveAs)
+	}
+	if len(n.OutputFields) == 0 {
+		return nil
+	}
+	if n.SaveAs == "" {
+		return fmt.Errorf("los datos de salida requieren `saveAs`")
+	}
+	if len(n.OutputFields) > 32 {
+		return fmt.Errorf("los datos de salida superan el máximo de 32 campos")
+	}
+	seen := make(map[string]struct{}, len(n.OutputFields))
+	for index, field := range n.OutputFields {
+		if !variableNameRe.MatchString(field.Key) || strings.EqualFold(field.Key, "branch") {
+			return fmt.Errorf("campo de salida %d tiene clave %q inválida o reservada", index+1, field.Key)
+		}
+		key := strings.ToLower(field.Key)
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("campo de salida duplicado %q", field.Key)
+		}
+		seen[key] = struct{}{}
+		switch field.Type {
+		case "string", "number", "boolean", "datetime":
+		default:
+			return fmt.Errorf("campo de salida %q tiene tipo %q inválido", field.Key, field.Type)
+		}
+		if len([]rune(field.Description)) > 500 {
+			return fmt.Errorf("la descripción del campo de salida %q supera 500 caracteres", field.Key)
+		}
+	}
+	return nil
+}
+
+func validateDataMutateArgs(args map[string]string) error {
+	object := strings.TrimSpace(args["object"])
+	operation := strings.TrimSpace(args["operation"])
+	if object == "" || strings.Contains(object, "{") {
+		return fmt.Errorf("data_mutate requiere un objeto fijo elegido por el autor")
+	}
+	if operation != "create" && operation != "update" && operation != "upsert" {
+		return fmt.Errorf("data_mutate requiere operation create, update o upsert")
+	}
+	if strings.TrimSpace(args["idempotencyKey"]) == "" {
+		return fmt.Errorf("data_mutate requiere idempotencyKey")
+	}
+	if operation == "update" && strings.TrimSpace(args["recordId"]) == "" {
+		return fmt.Errorf("data_mutate update requiere recordId")
+	}
+	if operation == "upsert" && (strings.TrimSpace(args["matchField"]) == "" ||
+		strings.Contains(args["matchField"], "{") || strings.TrimSpace(args["matchValue"]) == "") {
+		return fmt.Errorf("data_mutate upsert requiere matchField fijo y matchValue")
+	}
+	if raw := strings.TrimSpace(args["linkCurrentContact"]); raw != "" {
+		if _, err := strconv.ParseBool(raw); err != nil {
+			return fmt.Errorf("data_mutate linkCurrentContact debe ser true o false")
+		}
+	}
+	allowed := map[string]bool{
+		"object": true, "operation": true, "recordId": true, "matchField": true,
+		"matchValue": true, "linkCurrentContact": true, "idempotencyKey": true,
+	}
+	fieldCount := 0
+	for key := range args {
+		if allowed[key] {
+			continue
+		}
+		if strings.HasPrefix(key, "field.") && branchNameRe.MatchString(strings.TrimPrefix(key, "field.")) {
+			fieldCount++
+			continue
+		}
+		return fmt.Errorf("data_mutate no admite el argumento %q", key)
+	}
+	if fieldCount == 0 {
+		return fmt.Errorf("data_mutate requiere al menos un argumento field.<campo>")
 	}
 	return nil
 }
@@ -252,12 +488,42 @@ func specHasConfig(spec *tools.Spec, key string) bool {
 	return false
 }
 
+func validateInputTypes(inputTypes []string) error {
+	valid := map[string]bool{
+		"text": true, "image": true, "audio": true, "document": true,
+		"video": true, "sticker": true, "location": true, "contacts": true,
+		"interactive": true, "order": true, "reaction": true, "unsupported": true,
+	}
+	seen := map[string]bool{}
+	for _, inputType := range inputTypes {
+		inputType = normalizedInputType(strings.TrimSpace(inputType))
+		if !valid[inputType] {
+			return fmt.Errorf("tipo de entrada %q inválido", inputType)
+		}
+		if seen[inputType] {
+			return fmt.Errorf("tipo de entrada duplicado %q", inputType)
+		}
+		seen[inputType] = true
+	}
+	return nil
+}
+
 func requiredHandles(n *Node) []string {
 	switch n.Kind {
 	case "agent":
 		return n.Outputs
+	case "wait":
+		if len(n.Accepts) > 1 {
+			return n.Accepts
+		}
 	case "condition":
 		return []string{"true", "false"}
+	case "router":
+		handles := make([]string, 0, len(n.Cases)+1)
+		for _, routeCase := range n.Cases {
+			handles = append(handles, routeCase.ID)
+		}
+		return append(handles, "default")
 	case "tool":
 		return []string{"ok", "error"}
 	case "action":

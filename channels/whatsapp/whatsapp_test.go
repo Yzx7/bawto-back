@@ -71,14 +71,77 @@ func TestParseStatuses(t *testing.T) {
 }
 
 func TestParseImageKeepsMediaMetadata(t *testing.T) {
-	payload := `{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"PNID"},"contacts":[{"profile":{"name":"Ana"}}],"messages":[{"from":"51999","id":"wamid.img","type":"image","image":{"id":"media-1","mime_type":"image/jpeg","caption":"voucher"}}]}}]}]}`
+	payload := `{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"PNID"},"contacts":[{"profile":{"name":"Ana"}}],"messages":[{"from":"51999","id":"wamid.img","type":"image","context":{"forwarded":true},"image":{"id":"media-1","mime_type":"image/jpeg","caption":"voucher","sha256":"hash","url":"https://media.example/image"}}]}}]}]}`
 	msgs, err := Parse([]byte(payload))
 	if err != nil || len(msgs) != 1 {
 		t.Fatalf("Parse: len=%d err=%v", len(msgs), err)
 	}
 	msg := msgs[0]
-	if msg.Type != channels.MsgImage || msg.MediaID != "media-1" || msg.MimeType != "image/jpeg" || msg.Text != "voucher" {
+	if msg.EventType != channels.EventMessage || msg.Type != channels.MsgImage ||
+		msg.MediaID != "media-1" || msg.MimeType != "image/jpeg" ||
+		msg.MediaSHA256 != "hash" || msg.MediaURL != "https://media.example/image" ||
+		msg.Caption != "voucher" || msg.Text != "voucher" || !msg.Forwarded || !msg.HasMedia() {
 		t.Fatalf("imagen mal normalizada: %+v", msg)
+	}
+}
+
+func TestParseMultimodalMessages(t *testing.T) {
+	payload := `{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"PNID"},"messages":[
+		{"from":"51999","id":"a1","type":"audio","audio":{"id":"media-a","mime_type":"audio/ogg","sha256":"ha","voice":true}},
+		{"from":"51999","id":"d1","type":"document","document":{"id":"media-d","mime_type":"application/pdf","sha256":"hd","filename":"recibo.pdf","caption":"julio"}},
+		{"from":"51999","id":"v1","type":"video","video":{"id":"media-v","mime_type":"video/mp4","caption":"prueba"}},
+		{"from":"51999","id":"s1","type":"sticker","sticker":{"id":"media-s","mime_type":"image/webp","animated":true}},
+		{"from":"51999","id":"l1","type":"location","location":{"latitude":-12.1,"longitude":-77.0,"name":"Local","address":"Lima"}},
+		{"from":"51999","id":"c1","type":"contacts","contacts":[{"name":{"formatted_name":"Ana"}}]},
+		{"from":"51999","id":"o1","type":"order","order":{"catalog_id":"cat-1"}},
+		{"from":"51999","id":"i1","type":"interactive","interactive":{"button_reply":{"id":"pay","title":"Pagar"}}}
+	]}}]}]}`
+
+	msgs, err := Parse([]byte(payload))
+	if err != nil || len(msgs) != 8 {
+		t.Fatalf("Parse multimodal: len=%d err=%v", len(msgs), err)
+	}
+	if msgs[0].Type != channels.MsgAudio || !msgs[0].Voice || !msgs[0].HasMedia() {
+		t.Fatalf("audio: %+v", msgs[0])
+	}
+	if msgs[1].Type != channels.MsgDocument || msgs[1].FileName != "recibo.pdf" || msgs[1].Caption != "julio" || msgs[1].Text != "julio" {
+		t.Fatalf("documento: %+v", msgs[1])
+	}
+	if msgs[2].Type != channels.MsgVideo || msgs[2].Caption != "prueba" || !msgs[2].HasMedia() {
+		t.Fatalf("video: %+v", msgs[2])
+	}
+	if msgs[3].Type != channels.MsgSticker || !msgs[3].Animated || !msgs[3].HasMedia() {
+		t.Fatalf("sticker: %+v", msgs[3])
+	}
+	if msgs[4].Type != channels.MsgLocation || msgs[4].Location == nil || msgs[4].Location.Latitude == nil || *msgs[4].Location.Latitude != -12.1 {
+		t.Fatalf("ubicación: %+v", msgs[4])
+	}
+	if msgs[5].Type != channels.MsgContacts || len(msgs[5].Contacts) == 0 {
+		t.Fatalf("contactos: %+v", msgs[5])
+	}
+	if msgs[6].Type != channels.MsgOrder || len(msgs[6].Order) == 0 {
+		t.Fatalf("pedido: %+v", msgs[6])
+	}
+	if msgs[7].Type != channels.MsgInteractive || msgs[7].ReplyID != "pay" || msgs[7].Text != "Pagar" {
+		t.Fatalf("interactivo: %+v", msgs[7])
+	}
+}
+
+func TestParseReactionAndRemoval(t *testing.T) {
+	payload := `{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"PNID"},"messages":[
+		{"from":"51999","id":"r1","type":"reaction","reaction":{"message_id":"out-1","emoji":"👍"}},
+		{"from":"51999","id":"r2","type":"reaction","reaction":{"message_id":"out-1"}}
+	]}}]}]}`
+	msgs, err := Parse([]byte(payload))
+	if err != nil || len(msgs) != 2 {
+		t.Fatalf("Parse reaction: len=%d err=%v", len(msgs), err)
+	}
+	if msgs[0].EventType != channels.EventReaction || msgs[0].Type != channels.MsgReaction ||
+		msgs[0].ReactionMessageID != "out-1" || msgs[0].ReactionEmoji != "👍" || msgs[0].ReactionRemoved {
+		t.Fatalf("reacción: %+v", msgs[0])
+	}
+	if !msgs[1].ReactionRemoved || msgs[1].ReactionEmoji != "" || msgs[1].ReactionMessageID != "out-1" {
+		t.Fatalf("reacción eliminada: %+v", msgs[1])
 	}
 }
 

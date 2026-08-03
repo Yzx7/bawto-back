@@ -82,7 +82,16 @@ func (con *Controller) processWhatsApp(body []byte) {
 			con.whatsAppLogger().Error("wa ensure contact", "err", err.Error())
 			continue
 		}
-		metadata, _ := json.Marshal(fiber.Map{"replyId": m.ReplyID, "quotedWaId": m.QuotedWaID, "mediaId": m.MediaID, "mimeType": m.MimeType, "caption": m.Caption})
+		metadata, _ := json.Marshal(fiber.Map{
+			"eventType": m.EventType, "replyId": m.ReplyID, "quotedWaId": m.QuotedWaID,
+			"mediaId": m.MediaID, "mimeType": m.MimeType, "mediaSha256": m.MediaSHA256,
+			"mediaUrl": m.MediaURL, "fileName": m.FileName, "caption": m.Caption,
+			"voice": m.Voice, "animated": m.Animated, "forwarded": m.Forwarded,
+			"frequentlyForwarded": m.FrequentlyForwarded, "location": m.Location,
+			"contacts": m.Contacts, "order": m.Order,
+			"reactionEmoji": m.ReactionEmoji, "reactionMessageId": m.ReactionMessageID,
+			"reactionRemoved": m.ReactionRemoved, "raw": m.Raw,
+		})
 		messageID, created, err := models.InsertInboundMessage(ctx, pool, chatID, m.WaID, string(m.Type), m.Text, metadata)
 		if err != nil {
 			con.whatsAppLogger().Error("wa insert message", "err", err.Error())
@@ -120,10 +129,10 @@ func (con *Controller) processWhatsApp(body []byte) {
 			// impedir que el bot procese o responda el mensaje.
 			con.whatsAppLogger().Warn("wa mark read", "message", m.WaID, "err", err.Error())
 		}
-		// El medio se descarga siempre (aunque atienda un humano): así el agente
-		// ve la imagen en la bandeja y no depende de un media_id que expira.
+		// El medio se descarga siempre (aunque atienda un humano): así la bandeja y
+		// las tools no dependen de un media_id que expira.
 		hasMedia := false
-		if m.Type == channels.MsgImage && m.MediaID != "" {
+		if m.HasMedia() {
 			data, mimeType, mediaErr := whatsapp.DownloadMedia(ctx, sendCfg, m.MediaID)
 			if mediaErr != nil {
 				con.whatsAppLogger().Error("wa download media", "err", mediaErr.Error())
@@ -334,7 +343,7 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 	if st != nil && st.FlowID != "" && st.FlowID != selected.FlowID {
 		st = nil
 	}
-	if st == nil && !engine.TriggerMatches(flow.Trigger, m.Text) {
+	if st == nil && !engine.TriggerMatchesInput(flow.Trigger, m.Text, string(m.Type)) {
 		return nil, nil, false
 	}
 	if shouldBlockAmbiguousReceipt(correlation, m.Type) {
@@ -343,7 +352,8 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 	}
 	beforeProcess()
 
-	// Inyecta el nodo IA (MiniMax) si está configurado.
+	// Inyecta el nodo IA si hay al menos un proveedor configurado. La capacidad
+	// declarada por cada nodo decide después: image → MiniMax-M3; resto → DeepSeek.
 	flowContext := models.FlowContext(ctx, pool, bot.ID, m.From)
 	flowContext["source_intent"] = ""
 	if correlated, err := models.CorrelationContext(ctx, pool, bot.ID, correlation); err != nil {
@@ -353,19 +363,36 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 			flowContext[key] = value
 		}
 	}
-	deps := engine.Deps{Context: flowContext, InputType: string(m.Type), MediaID: m.MediaID, WaID: m.WaID}
-	if con.Env.Agent != nil {
-		deps.Agent = func(request engine.AgentRequest) (string, string, error) {
+	mediaSource := &agentMediaSource{
+		MessageID: inboundMessageID,
+		Inbound:   m,
+	}
+	deps := engine.Deps{
+		Context: flowContext, InputType: string(m.Type), MediaID: m.MediaID, WaID: m.WaID,
+		Input: engine.InboundInput{
+			ID: m.WaID, EventType: string(m.EventType), ContentType: string(m.Type), Text: m.Text,
+			Caption: m.Caption, MediaID: m.MediaID, MimeType: m.MimeType,
+			MediaSHA256: m.MediaSHA256, ReplyTo: m.QuotedWaID,
+			Forwarded: m.Forwarded, FrequentlyForwarded: m.FrequentlyForwarded,
+			ReactionEmoji: m.ReactionEmoji, ReactionMessageID: m.ReactionMessageID,
+			ReactionRemoved: m.ReactionRemoved,
+		},
+	}
+	if con.Env.TextAgent != nil || con.Env.VisionAgent != nil {
+		deps.AgentStructured = func(request engine.AgentRequest) (engine.AgentResult, error) {
 			nodeID := request.NodeID
+			if mediaErr := con.attachCurrentAgentMedia(ctx, bot, &request, mediaSource); mediaErr != nil {
+				return engine.AgentResult{}, mediaErr
+			}
 			agentTools, toolExec, toolErr := con.agentTooling(ctx, bot, request.Tools)
 			if toolErr != nil {
-				return "", "", toolErr
+				return engine.AgentResult{}, toolErr
 			}
 			for attempt := 1; attempt <= 2; attempt++ {
 				startedAt := time.Now()
 				// Sin herramientas se conserva el camino de una sola petición: un
 				// bucle para un nodo que no puede llamar nada solo añadiría coste.
-				reply, branch, usage, runErr := con.runAgent(ctx, bot.OrgID, request, agentTools, toolExec)
+				agentResult, usage, runErr := con.runAgent(ctx, bot.OrgID, request, agentTools, toolExec)
 				duration := time.Since(startedAt)
 				errorCode := ai.OutputErrorCode(runErr)
 				if usage.Provider != "" {
@@ -373,7 +400,7 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 					if runErr != nil {
 						outcome = "invalid_output"
 					}
-					usageMetadata := map[string]string{
+					usageMetadata := map[string]any{
 						"source":      "flow_agent",
 						"node_id":     nodeID,
 						"attempt":     fmt.Sprint(attempt),
@@ -382,14 +409,20 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 					if errorCode != "" {
 						usageMetadata["error_code"] = errorCode
 					}
-					if branch != "" {
-						usageMetadata["branch"] = branch
+					if agentResult.Branch != "" {
+						usageMetadata["branch"] = agentResult.Branch
 					}
 					// Cuántas peticiones costó el turno. Con herramientas deja de ser
 					// 1, y es el número que explica una factura que sube sin que
 					// cambie el tráfico.
 					if usage.Steps > 1 {
 						usageMetadata["steps"] = fmt.Sprint(usage.Steps)
+					}
+					if len(usage.ToolTrace) > 0 {
+						// Solo se guardan nombres y resultado operativo. Los argumentos y
+						// resultados pueden contener datos del cliente y no pertenecen a
+						// la telemetría de consumo.
+						usageMetadata["tool_trace"] = usage.ToolTrace
 					}
 					metadata, _ := json.Marshal(usageMetadata)
 					if err := models.RecordAIUsage(ctx, pool, models.AIUsageEventInput{
@@ -416,7 +449,7 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 					"attempt", attempt,
 					"duration_ms", duration.Milliseconds(),
 					"model", usage.Model,
-					"branch", branch,
+					"branch", agentResult.Branch,
 					"silent", request.Silent,
 					"tools", len(agentTools),
 				}
@@ -426,7 +459,7 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 					} else {
 						con.whatsAppLogger().Warn("ai route failed", append(logArgs, "error_code", errorCode)...)
 					}
-					return reply, branch, runErr
+					return agentResult, runErr
 				}
 				con.whatsAppLogger().Warn(
 					"ai structured output retry",
@@ -438,14 +471,13 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 					"duration_ms", duration.Milliseconds(),
 				)
 			}
-			return "", "", fmt.Errorf("agente IA agotó sus intentos")
+			return engine.AgentResult{}, fmt.Errorf("agente IA agotó sus intentos")
 		}
 	}
-	deps.Tool = func(ref string, args, vars map[string]string) (string, error) {
+	deps.Tool = func(ref string, args, _ map[string]string) (string, error) {
 		switch ref {
-		case "record_payment_receipt":
-			return models.RecordPaymentReceiptForRecord(ctx, pool, bot.ID, m.From,
-				vars["input_wa_id"], vars["input_media_id"], m.MimeType, vars["correlated_record_id"])
+		case "data_mutate":
+			return con.execDataMutate(ctx, bot, m.From, m.WaID, args)
 		default:
 			return "", fmt.Errorf("herramienta %q no implementada", ref)
 		}
@@ -474,7 +506,8 @@ func shouldBlockAmbiguousReceipt(correlation *models.ReminderCorrelation, messag
 func retryableAgentOutput(errorCode string) bool {
 	switch errorCode {
 	case "missing_tool_call", "unexpected_tool", "multiple_tool_calls",
-		"invalid_tool_input", "invalid_branch", "empty_reply":
+		"invalid_tool_input", "invalid_branch", "empty_reply", "missing_data",
+		"invalid_data", "unknown_data_field", "invalid_data_type":
 		return true
 	default:
 		return false

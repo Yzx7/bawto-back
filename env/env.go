@@ -22,6 +22,7 @@ type Env struct {
 	WhatsAppLogger *slog.Logger
 	LogCloser      io.Closer
 	Cipher         *helpers.Cipher // cifrado de secretos de canal (nil si TOKEN_ENC_KEY no está)
-	Agent          *ai.Agent       // nodo IA (MiniMax); nil si MINIMAX_API_KEY no está
+	TextAgent      *ai.Agent       // DeepSeek para nodos sin `accepts: image`
+	VisionAgent    *ai.Agent       // MiniMax-M3 para nodos con `accepts: image`
 	Events         *events.Hub     // eventos de chat en vivo (SSE); nil deshabilita el stream
 }

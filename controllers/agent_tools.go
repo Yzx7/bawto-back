@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Yzx7/sacs-chatbots/channels"
 	"github.com/Yzx7/sacs-chatbots/engine"
 	"github.com/Yzx7/sacs-chatbots/engine/ai"
 	"github.com/Yzx7/sacs-chatbots/engine/tools"
@@ -24,7 +25,17 @@ import (
 // maxSearchResults acota lo que vuelve al modelo. Cada resultado se reenvía en
 // todas las iteraciones siguientes del turno, así que un catálogo entero encarece
 // el bucle completo, no solo el paso que lo pidió.
-const maxSearchResults = 8
+const (
+	maxSearchResults   = 8
+	maxAgentImageBytes = 10 * 1024 * 1024
+)
+
+// agentMediaSource identifica el mensaje durable que puede ver un agente.
+// El flujo habilita imagen, pero nunca elige IDs, organización, URL ni bytes.
+type agentMediaSource struct {
+	MessageID int64
+	Inbound   channels.InboundMessage
+}
 
 // agentTooling traduce las herramientas declaradas en el nodo a lo que el
 // adaptador de IA necesita: las fichas que ve el modelo y un ejecutor que
@@ -126,12 +137,56 @@ func renderRecord(raw json.RawMessage) string {
 // que es donde está el ahorro. Bajarlo al bot es cambiar el argumento en el
 // webhook, sin tocar nada de aquí para abajo.
 func (con *Controller) runAgent(ctx context.Context, tenantID string, request engine.AgentRequest,
-	agentTools []ai.AgentTool, exec ai.ToolExecutor) (string, string, ai.Usage, error) {
-	agent := con.Env.Agent.ForTenant(tenantID)
-	if len(agentTools) == 0 {
-		return agent.RunWithHistoryUsage(ctx, request.Instruction, request.Vars,
-			request.Outputs, request.History, request.Silent)
+	agentTools []ai.AgentTool, exec ai.ToolExecutor) (engine.AgentResult, ai.Usage, error) {
+	configured := con.Env.TextAgent
+	if containsString(request.Accepts, "image") {
+		configured = con.Env.VisionAgent
+		if configured == nil {
+			return engine.AgentResult{}, ai.Usage{}, fmt.Errorf("agente visual no configurado: falta MINIMAX_M3_API_KEY")
+		}
+	} else if configured == nil {
+		return engine.AgentResult{}, ai.Usage{}, fmt.Errorf("agente de texto no configurado")
 	}
-	return agent.RunAgenticUsage(ctx, request.Instruction, request.Vars,
-		request.Outputs, request.History, request.Silent, agentTools, exec)
+	agent := configured.ForTenant(tenantID)
+	if len(agentTools) == 0 {
+		return agent.RunStructuredWithHistoryUsage(ctx, request.Instruction, request.Vars,
+			request.Outputs, request.History, request.Silent, request.OutputFields, request.Media)
+	}
+	return agent.RunStructuredAgenticUsage(ctx, request.Instruction, request.Vars,
+		request.Outputs, request.History, request.Silent, request.OutputFields, request.Media, agentTools, exec)
+}
+
+// attachCurrentAgentMedia hidrata únicamente la imagen que disparó este turno.
+// La configuración del grafo solo puede habilitar el formato; nunca puede
+// elegir el messageID, bot, organización, URL ni bytes que se envían al modelo.
+func (con *Controller) attachCurrentAgentMedia(ctx context.Context, bot *models.BotChannel, request *engine.AgentRequest, session *agentMediaSource) error {
+	if request == nil || !containsString(request.Accepts, "image") || session == nil || session.Inbound.Type != channels.MsgImage {
+		return nil
+	}
+	if session.MessageID <= 0 {
+		return fmt.Errorf("el agente visual requiere la imagen del mensaje actual")
+	}
+	media, err := models.GetMessageMedia(ctx, con.Env.Postgres, session.MessageID)
+	if err != nil {
+		return err
+	}
+	if media == nil || media.OrgID != bot.OrgID || media.BotID != bot.ID || media.ProviderID != session.Inbound.MediaID {
+		return fmt.Errorf("la imagen del mensaje no existe o no pertenece al bot")
+	}
+	if len(media.Data) == 0 || len(media.Data) > maxAgentImageBytes {
+		return fmt.Errorf("la imagen del agente está vacía o supera %d bytes", maxAgentImageBytes)
+	}
+	request.Media = &engine.AgentMedia{
+		Data: media.Data, MIMEType: media.MimeType, Caption: session.Inbound.Caption,
+	}
+	return nil
+}
+
+func containsString(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }

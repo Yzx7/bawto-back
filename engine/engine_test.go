@@ -51,6 +51,45 @@ func TestAdvanceMessageFlow(t *testing.T) {
 	}
 }
 
+func TestAdvanceAgentProjectsDeclaredStructuredOutput(t *testing.T) {
+	flow := &Flow{
+		Trigger: Trigger{Type: "message", Match: "any"},
+		Nodes: []Node{
+			{
+				ID: "vision", Kind: "agent", Instruction: "Extrae el comprobante", Outputs: []string{"comprobante", "revision"},
+				SaveAs: "pago", OutputFields: []AgentOutputField{
+					{Key: "provider", Type: "string"},
+					{Key: "amount", Type: "number"},
+				},
+			},
+			{ID: "ok", Kind: "send", Body: "{pago.branch}: {pago.provider} S/{pago.amount} {pago.ignored}"},
+		},
+		Edges: []Edge{
+			{Source: "trigger", Target: "vision"},
+			{Source: "vision", SourceHandle: "comprobante", Target: "ok"},
+		},
+	}
+
+	result, err := Advance(flow, nil, "captura", Deps{
+		InputType: "image",
+		AgentStructured: func(request AgentRequest) (AgentResult, error) {
+			if len(request.OutputFields) != 2 || request.OutputFields[1].Key != "amount" {
+				t.Fatalf("esquema no propagado: %#v", request.OutputFields)
+			}
+			return AgentResult{
+				Branch: "comprobante",
+				Data:   map[string]any{"provider": "yape", "amount": 120.5, "ignored": "no declarado"},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Sends) != 1 || result.Sends[0] != "comprobante: yape S/120.5 {pago.ignored}" {
+		t.Fatalf("variables proyectadas=%#v", result.Sends)
+	}
+}
+
 func TestWaitRequiresExpectedInputAndPreservesMedia(t *testing.T) {
 	flow := &Flow{Trigger: Trigger{Type: "message"}, Nodes: []Node{
 		{ID: "wait", Kind: "wait", Expect: "image", SaveAs: "receipt", TimeoutHours: 2},
@@ -80,6 +119,139 @@ func TestTriggerMatchesKeywords(t *testing.T) {
 	trigger := Trigger{Type: "message", Match: "keyword", Keywords: []string{"soporte", "asesor"}}
 	if !TriggerMatches(trigger, "Necesito SOPORTE técnico") || TriggerMatches(trigger, "hola") {
 		t.Fatal("keyword matching incorrecto")
+	}
+}
+
+func TestTriggerMatchesInputType(t *testing.T) {
+	trigger := Trigger{Type: "message", Match: "any", Accepts: []string{"image", "audio"}}
+	if !TriggerMatchesInput(trigger, "caption", "image") || !TriggerMatchesInput(trigger, "", "audio") {
+		t.Fatal("los tipos admitidos deberían iniciar el flujo")
+	}
+	if TriggerMatchesInput(trigger, "hola", "text") {
+		t.Fatal("texto no debería iniciar un flujo que solo acepta media")
+	}
+}
+
+func TestTypedTriggerRoutesByContentType(t *testing.T) {
+	flow := &Flow{
+		Trigger: Trigger{Type: "message", Match: "any", Accepts: []string{"text", "image"}, RouteBy: "content_type"},
+		Nodes: []Node{
+			{ID: "text", Kind: "send", Body: "T"}, {ID: "image", Kind: "send", Body: "I"},
+			{ID: "end-text", Kind: "action", Action: "end"}, {ID: "end-image", Kind: "action", Action: "end"},
+		},
+		Edges: []Edge{
+			{Source: "trigger", SourceHandle: "text", Target: "text"},
+			{Source: "trigger", SourceHandle: "image", Target: "image"},
+			{Source: "text", Target: "end-text"}, {Source: "image", Target: "end-image"},
+		},
+	}
+	textResult, err := Advance(flow, nil, "hola", Deps{InputType: "text"})
+	if err != nil || len(textResult.Sends) != 1 || textResult.Sends[0] != "T" {
+		t.Fatalf("ruta texto: %+v err=%v", textResult, err)
+	}
+	imageResult, err := Advance(flow, nil, "caption", Deps{InputType: "image", MediaID: "m1"})
+	if err != nil || len(imageResult.Sends) != 1 || imageResult.Sends[0] != "I" {
+		t.Fatalf("ruta imagen: %+v err=%v", imageResult, err)
+	}
+}
+
+func TestWaitAcceptsMultipleInputTypes(t *testing.T) {
+	flow := &Flow{
+		Trigger: Trigger{Type: "message"},
+		Nodes: []Node{
+			{ID: "wait", Kind: "wait", Accepts: []string{"image", "document"}, SaveAs: "proof"},
+			{ID: "image", Kind: "send", Body: "imagen"}, {ID: "document", Kind: "send", Body: "documento"},
+		},
+		Edges: []Edge{
+			{Source: "trigger", Target: "wait"},
+			{Source: "wait", SourceHandle: "image", Target: "image"},
+			{Source: "wait", SourceHandle: "document", Target: "document"},
+		},
+	}
+	waiting, err := Advance(flow, nil, "inicio", Deps{InputType: "text"})
+	if err != nil || waiting.State == nil {
+		t.Fatalf("inicio: %+v err=%v", waiting, err)
+	}
+	wrong, _ := Advance(flow, waiting.State, "texto", Deps{InputType: "text"})
+	if wrong.State == nil || len(wrong.Sends) != 1 {
+		t.Fatalf("formato incorrecto: %+v", wrong)
+	}
+	document, err := Advance(flow, waiting.State, "", Deps{InputType: "document", MediaID: "doc-1"})
+	if err != nil || len(document.Sends) != 1 || document.Sends[0] != "documento" {
+		t.Fatalf("documento: %+v err=%v", document, err)
+	}
+}
+
+func TestWaitCapturesAnyNextEventAndSaveAsIsOptional(t *testing.T) {
+	flow := &Flow{
+		Trigger: Trigger{Type: "message"},
+		Nodes: []Node{
+			{ID: "wait", Kind: "wait", TimeoutHours: 24},
+			{ID: "router", Kind: "router", Cases: []RouterCase{{ID: "image", Expression: `input.contentType == image`}}},
+			{ID: "image", Kind: "send", Body: "imagen {input.media.id}"},
+			{ID: "other", Kind: "send", Body: "otro {input.contentType}"},
+		},
+		Edges: []Edge{
+			{Source: "trigger", Target: "wait"},
+			{Source: "wait", Target: "router"},
+			{Source: "router", SourceHandle: "image", Target: "image"},
+			{Source: "router", SourceHandle: "default", Target: "other"},
+		},
+	}
+	waiting, err := Advance(flow, nil, "inicio", Deps{InputType: "text"})
+	if err != nil || waiting.State == nil {
+		t.Fatalf("inicio: %+v err=%v", waiting, err)
+	}
+	result, err := Advance(flow, waiting.State, "captura", Deps{Input: InboundInput{
+		ID: "wamid-2", ContentType: "image", MediaID: "media-2", Caption: "captura",
+	}})
+	if err != nil || len(result.Sends) != 1 || result.Sends[0] != "imagen media-2" {
+		t.Fatalf("imagen: %+v err=%v", result, err)
+	}
+}
+
+func TestWaitSaveAsProjectsStructuredEnvelope(t *testing.T) {
+	flow := &Flow{
+		Trigger: Trigger{Type: "message"},
+		Nodes: []Node{
+			{ID: "wait", Kind: "wait", SaveAs: "respuesta"},
+			{ID: "send", Kind: "send", Body: "{respuesta.contentType}:{respuesta.media.id}:{respuesta.caption}"},
+		},
+		Edges: []Edge{{Source: "trigger", Target: "wait"}, {Source: "wait", Target: "send"}},
+	}
+	waiting, _ := Advance(flow, nil, "inicio", Deps{InputType: "text"})
+	result, err := Advance(flow, waiting.State, "foto", Deps{Input: InboundInput{
+		ContentType: "image", MediaID: "m-10", Caption: "foto",
+	}})
+	if err != nil || len(result.Sends) != 1 || result.Sends[0] != "image:m-10:foto" {
+		t.Fatalf("sobre guardado: %+v err=%v", result, err)
+	}
+}
+
+func TestToolArgumentsAreInterpolated(t *testing.T) {
+	flow := &Flow{
+		Trigger: Trigger{Type: "message"},
+		Nodes: []Node{
+			{ID: "tool", Kind: "tool", ToolRef: "data_mutate", Args: map[string]string{
+				"field.message": "{input.text}", "idempotencyKey": "message:{input.id}",
+			}},
+			{ID: "ok", Kind: "action", Action: "end"},
+			{ID: "error", Kind: "action", Action: "end"},
+		},
+		Edges: []Edge{
+			{Source: "trigger", Target: "tool"},
+			{Source: "tool", SourceHandle: "ok", Target: "ok"},
+			{Source: "tool", SourceHandle: "error", Target: "error"},
+		},
+	}
+	var got map[string]string
+	_, err := Advance(flow, nil, "hola", Deps{Input: InboundInput{ID: "wamid-1", ContentType: "text"},
+		Tool: func(_ string, args, _ map[string]string) (string, error) {
+			got = args
+			return `{}`, nil
+		}})
+	if err != nil || got["field.message"] != "hola" || got["idempotencyKey"] != "message:wamid-1" {
+		t.Fatalf("args=%v err=%v", got, err)
 	}
 }
 
@@ -131,7 +303,25 @@ func TestBOTIPaymentAndSupportJourneys(t *testing.T) {
 	if wrong.State == nil || wrong.State.NodeID != "n_espera_comprobante" {
 		t.Fatalf("pago aceptó texto: %+v", wrong)
 	}
-	paid, err := Advance(&flow, payment.State, "voucher", Deps{InputType: "image", MediaID: "media", WaID: "wamid", Agent: agent, Tool: func(_ string, _ map[string]string, _ map[string]string) (string, error) { return "invoice", nil }})
+	paid, err := Advance(&flow, payment.State, "voucher", Deps{
+		InputType: "image", MediaID: "media", WaID: "wamid", Agent: agent,
+		AgentStructured: func(request AgentRequest) (AgentResult, error) {
+			if request.NodeID != "n_clasifica_comprobante" {
+				t.Fatalf("agente visual inesperado: %+v", request)
+			}
+			return AgentResult{Branch: "valid", Data: map[string]any{
+				"provider": "yape", "amount": 50, "currency": "PEN",
+				"occurredAt": "2026-08-02T10:30:00-05:00", "operationCode": "B-1",
+				"recipient": "BOTI", "confidence": .98,
+			}}, nil
+		},
+		Tool: func(ref string, args map[string]string, _ map[string]string) (string, error) {
+			if ref != "data_mutate" || args["field.estado"] != "valid" {
+				t.Fatalf("guardado inesperado: ref=%s args=%+v", ref, args)
+			}
+			return `{"recordId":"payment","objectKey":"cobros","operation":"create","created":true,"idempotent":false,"data":{"estado":"valid"}}`, nil
+		},
+	})
 	if err != nil || !paid.Done || len(paid.Sends) == 0 || paid.Handoff {
 		t.Fatalf("pago final: %+v err=%v", paid, err)
 	}
@@ -516,6 +706,33 @@ func TestAgentReceivesOnlyExplicitContext(t *testing.T) {
 
 	result, err := Advance(flow, nil, "hola", deps)
 	if err != nil || !result.Done {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestToolJSONResultCreatesTypedVariables(t *testing.T) {
+	flow := &Flow{
+		Trigger: Trigger{Type: "message", Match: "any"},
+		Nodes: []Node{
+			{ID: "tool", Kind: "tool", ToolRef: "data_mutate", SaveAs: "receipt", Args: map[string]string{
+				"object": "cobros", "operation": "create", "idempotencyKey": "payment:{input.id}",
+				"field.estado": "valid", "field.monto": "45.5",
+			}},
+			{ID: "valid", Kind: "condition", Expression: "receipt.data.estado == valid"},
+			{ID: "ok", Kind: "send", Body: "importe {receipt.data.monto}"},
+			{ID: "bad", Kind: "send", Body: "revisar"},
+		},
+		Edges: []Edge{
+			{Source: "trigger", Target: "tool"},
+			{Source: "tool", SourceHandle: "ok", Target: "valid"},
+			{Source: "valid", SourceHandle: "true", Target: "ok"},
+			{Source: "valid", SourceHandle: "false", Target: "bad"},
+		},
+	}
+	result, err := Advance(flow, nil, "", Deps{InputType: "image", Tool: func(string, map[string]string, map[string]string) (string, error) {
+		return `{"data":{"estado":"valid","monto":45.5}}`, nil
+	}})
+	if err != nil || len(result.Sends) != 1 || result.Sends[0] != "importe 45.5" {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }

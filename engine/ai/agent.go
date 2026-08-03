@@ -5,11 +5,13 @@ package ai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -90,8 +92,9 @@ func OutputErrorCode(err error) string {
 }
 
 type branchToolInput struct {
-	Branch string `json:"branch"`
-	Reply  string `json:"reply,omitempty"`
+	Branch string          `json:"branch"`
+	Reply  string          `json:"reply,omitempty"`
+	Data   json.RawMessage `json:"data,omitempty"`
 }
 
 // Rates son precios en USD por un millón de tokens. Se inyectan por
@@ -118,7 +121,18 @@ type Usage struct {
 	// Steps son las peticiones al modelo que costó el turno. 1 en el camino
 	// clásico; en el agéntico crece con las herramientas que decidió llamar, y es
 	// el número que explica una factura que sube sin que cambie el tráfico.
-	Steps int
+	Steps     int
+	ToolTrace []ToolTraceEntry
+}
+
+// ToolTraceEntry conserva la secuencia operativa sin copiar argumentos ni
+// resultados, que pueden contener datos del cliente. Permite distinguir una
+// búsqueda repetida de una tool fallida al diagnosticar ai_usage_events.
+type ToolTraceEntry struct {
+	Step     int    `json:"step"`
+	Name     string `json:"name"`
+	Repeated bool   `json:"repeated,omitempty"`
+	Failed   bool   `json:"failed,omitempty"`
 }
 
 func (u Usage) EstimatedCostUSD() float64 {
@@ -185,7 +199,8 @@ func providerRequestOptions(provider string) []option.RequestOption {
 
 // Run ejecuta el nodo agent: responde al usuario y, si hay `outputs`, decide una rama.
 func (a *Agent) Run(ctx context.Context, instruction string, vars map[string]string, outputs []string) (reply, branch string, err error) {
-	reply, branch, _, err = a.RunWithHistoryUsage(ctx, instruction, vars, outputs, nil, false)
+	result, _, err := a.RunStructuredWithHistoryUsage(ctx, instruction, vars, outputs, nil, false, nil, nil)
+	reply, branch = result.Reply, result.Branch
 	return reply, branch, err
 }
 
@@ -201,6 +216,14 @@ func (a *Agent) RunWithUsage(ctx context.Context, instruction string, vars map[s
 // el system prompt, por lo que cada nodo puede orientar el mismo diálogo hacia
 // una decisión distinta sin perder lo conversado en los loopbacks.
 func (a *Agent) RunWithHistoryUsage(ctx context.Context, instruction string, vars map[string]string, outputs []string, history []engine.ChatMessage, silent bool) (reply, branch string, usage Usage, err error) {
+	result, usage, err := a.RunStructuredWithHistoryUsage(ctx, instruction, vars, outputs, history, silent, nil, nil)
+	return result.Reply, result.Branch, usage, err
+}
+
+// RunStructuredWithHistoryUsage amplía la salida sin debilitar el enrutamiento:
+// la rama continúa siendo obligatoria y `data` solo contiene el esquema que el
+// autor declaró en el nodo.
+func (a *Agent) RunStructuredWithHistoryUsage(ctx context.Context, instruction string, vars map[string]string, outputs []string, history []engine.ChatMessage, silent bool, outputFields []engine.AgentOutputField, media *engine.AgentMedia) (result engine.AgentResult, usage Usage, err error) {
 	sys := "Eres el asistente de un chatbot de atención al cliente por WhatsApp. " +
 		"Sigue la instrucción del flujo y responde al usuario en español natural para Perú, breve y claro. " +
 		"No uses voseo, no mezcles idiomas y no agregues preguntas que la instrucción no solicite.\n" +
@@ -213,17 +236,24 @@ func (a *Agent) RunWithHistoryUsage(ctx context.Context, instruction string, var
 	if len(outputs) > 0 {
 		sys += "\nDebes terminar llamando exactamente a `select_flow_branch`. No respondas fuera de esa función."
 	}
+	if len(outputFields) > 0 {
+		sys += "\nAdemás de la rama obligatoria, completa `data` solo con los campos declarados que puedas determinar. No inventes valores; omite los desconocidos."
+	}
 
+	messages, messageErr := anthropicMessagesWithMedia(history, vars, media)
+	if messageErr != nil {
+		return engine.AgentResult{}, Usage{}, messageErr
+	}
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(a.model),
 		MaxTokens: 1024,
 		System:    []anthropic.TextBlockParam{{Text: sys}},
-		Messages:  anthropicMessages(history, vars),
+		Messages:  messages,
 	}
 	if len(outputs) > 0 {
-		tool, toolErr := branchTool(outputs, silent)
+		tool, toolErr := branchToolWithData(outputs, silent, outputFields)
 		if toolErr != nil {
-			return "", "", Usage{}, toolErr
+			return engine.AgentResult{}, Usage{}, toolErr
 		}
 		params.Tools = []anthropic.ToolUnionParam{tool}
 		params.ToolChoice = anthropic.ToolChoiceParamOfTool(branchToolName)
@@ -233,7 +263,7 @@ func (a *Agent) RunWithHistoryUsage(ctx context.Context, instruction string, var
 
 	resp, err := a.client.Messages.New(ctx, params, a.tenantOptions()...)
 	if err != nil {
-		return "", "", Usage{}, err
+		return engine.AgentResult{}, Usage{}, err
 	}
 
 	usage = Usage{
@@ -252,7 +282,7 @@ func (a *Agent) RunWithHistoryUsage(ctx context.Context, instruction string, var
 	}
 
 	if len(outputs) > 0 {
-		reply, branch, err = parseBranchTool(resp.Content, outputs, silent)
+		result, err = parseBranchToolWithData(resp.Content, outputs, silent, outputFields)
 		if err != nil {
 			if outputErr, ok := err.(*OutputError); ok {
 				stopDetail := fmt.Sprintf("stop_reason=%s", resp.StopReason)
@@ -262,9 +292,9 @@ func (a *Agent) RunWithHistoryUsage(ctx context.Context, instruction string, var
 					outputErr.Detail += " " + stopDetail
 				}
 			}
-			return reply, branch, usage, err
+			return result, usage, err
 		}
-		return reply, branch, usage, nil
+		return result, usage, nil
 	}
 
 	var text strings.Builder
@@ -273,11 +303,11 @@ func (a *Agent) RunWithHistoryUsage(ctx context.Context, instruction string, var
 			text.WriteString(t.Text)
 		}
 	}
-	reply = strings.TrimSpace(text.String())
-	if !silent && reply == "" {
-		return "", "", usage, &OutputError{Code: "empty_reply"}
+	result.Reply = strings.TrimSpace(text.String())
+	if !silent && result.Reply == "" {
+		return engine.AgentResult{}, usage, &OutputError{Code: "empty_reply"}
 	}
-	return reply, "", usage, nil
+	return result, usage, nil
 }
 
 // anthropicMessages envía cada decisión como una petición de herramienta nueva.
@@ -334,6 +364,33 @@ func anthropicMessages(history []engine.ChatMessage, vars map[string]string) []a
 	}
 }
 
+func anthropicMessagesWithMedia(history []engine.ChatMessage, vars map[string]string, media *engine.AgentMedia) ([]anthropic.MessageParam, error) {
+	messages := anthropicMessages(history, vars)
+	if media == nil {
+		return messages, nil
+	}
+	mimeType := strings.ToLower(strings.TrimSpace(media.MIMEType))
+	switch mimeType {
+	case "image/jpeg", "image/png", "image/gif", "image/webp":
+	default:
+		return nil, &OutputError{Code: "unsupported_media_type", Detail: mimeType}
+	}
+	if len(media.Data) == 0 {
+		return nil, &OutputError{Code: "empty_media"}
+	}
+	if len(messages) != 1 || messages[0].Role != anthropic.MessageParamRoleUser {
+		return nil, &OutputError{Code: "invalid_media_message"}
+	}
+	blocks := make([]anthropic.ContentBlockParamUnion, 0, len(messages[0].Content)+2)
+	blocks = append(blocks, anthropic.NewImageBlockBase64(mimeType, base64.StdEncoding.EncodeToString(media.Data)))
+	blocks = append(blocks, messages[0].Content...)
+	if caption := strings.TrimSpace(media.Caption); caption != "" {
+		blocks = append(blocks, anthropic.NewTextBlock("Texto que acompaña la imagen: "+caption))
+	}
+	messages[0].Content = blocks
+	return messages, nil
+}
+
 // formatCurrentInput mantiene fuera del prompt los datos estructurados que el
 // nodo no pidió. Las variables necesarias ya fueron interpoladas explícitamente
 // en la instrucción por el motor.
@@ -356,6 +413,10 @@ func formatCurrentInput(vars map[string]string) string {
 }
 
 func branchTool(outputs []string, silent bool) (anthropic.ToolUnionParam, error) {
+	return branchToolWithData(outputs, silent, nil)
+}
+
+func branchToolWithData(outputs []string, silent bool, outputFields []engine.AgentOutputField) (anthropic.ToolUnionParam, error) {
 	seen := make(map[string]struct{}, len(outputs))
 	for _, output := range outputs {
 		if output == "" {
@@ -387,6 +448,31 @@ func branchTool(outputs []string, silent bool) (anthropic.ToolUnionParam, error)
 		}
 		required = append(required, "reply")
 	}
+	if len(outputFields) > 0 {
+		dataProperties := make(map[string]any, len(outputFields))
+		for _, field := range outputFields {
+			property := map[string]any{"description": field.Description}
+			switch field.Type {
+			case "number":
+				property["type"] = "number"
+			case "boolean":
+				property["type"] = "boolean"
+			case "datetime":
+				property["type"] = "string"
+				property["format"] = "date-time"
+			default:
+				property["type"] = "string"
+			}
+			dataProperties[field.Key] = property
+		}
+		properties["data"] = map[string]any{
+			"type":                 "object",
+			"properties":           dataProperties,
+			"additionalProperties": false,
+			"description":          "Datos extraídos; omite los campos cuyo valor no puedas determinar.",
+		}
+		required = append(required, "data")
+	}
 	schema := anthropic.ToolInputSchemaParam{
 		Properties: properties,
 		Required:   required,
@@ -402,6 +488,11 @@ func branchTool(outputs []string, silent bool) (anthropic.ToolUnionParam, error)
 }
 
 func parseBranchTool(content []anthropic.ContentBlockUnion, outputs []string, silent bool) (reply, branch string, err error) {
+	result, err := parseBranchToolWithData(content, outputs, silent, nil)
+	return result.Reply, result.Branch, err
+}
+
+func parseBranchToolWithData(content []anthropic.ContentBlockUnion, outputs []string, silent bool, outputFields []engine.AgentOutputField) (result engine.AgentResult, err error) {
 	var selected *anthropic.ToolUseBlock
 	blockTypes := make([]string, 0, len(content))
 	for _, block := range content {
@@ -410,48 +501,106 @@ func parseBranchTool(content []anthropic.ContentBlockUnion, outputs []string, si
 			continue
 		}
 		if selected != nil {
-			return "", "", &OutputError{Code: "multiple_tool_calls"}
+			return result, &OutputError{Code: "multiple_tool_calls"}
 		}
 		toolUse := block.AsToolUse()
 		selected = &toolUse
 	}
 
 	if selected == nil {
-		return "", "", &OutputError{
+		return result, &OutputError{
 			Code:   "missing_tool_call",
 			Detail: "blocks=" + strings.Join(blockTypes, ","),
 		}
 	}
 	if selected.Name != branchToolName {
-		return "", "", &OutputError{Code: "unexpected_tool", Detail: selected.Name}
+		return result, &OutputError{Code: "unexpected_tool", Detail: selected.Name}
 	}
 
 	var input branchToolInput
 	decoder := json.NewDecoder(bytes.NewReader(selected.Input))
 	decoder.DisallowUnknownFields()
 	if decodeErr := decoder.Decode(&input); decodeErr != nil {
-		return "", "", &OutputError{Code: "invalid_tool_input", Detail: decodeErr.Error()}
+		return result, &OutputError{Code: "invalid_tool_input", Detail: decodeErr.Error()}
 	}
 	var extra any
 	if trailingErr := decoder.Decode(&extra); trailingErr != io.EOF {
-		return "", "", &OutputError{Code: "invalid_tool_input", Detail: "contenido JSON adicional"}
+		return result, &OutputError{Code: "invalid_tool_input", Detail: "contenido JSON adicional"}
 	}
 
 	for _, output := range outputs {
 		if input.Branch == output {
-			branch = output
+			result.Branch = output
 			break
 		}
 	}
-	if branch == "" {
-		return "", "", &OutputError{Code: "invalid_branch", Detail: input.Branch}
+	if result.Branch == "" {
+		return result, &OutputError{Code: "invalid_branch", Detail: input.Branch}
 	}
-	reply = strings.TrimSpace(input.Reply)
-	if !silent && reply == "" {
-		return "", "", &OutputError{Code: "empty_reply"}
+	result.Reply = strings.TrimSpace(input.Reply)
+	if !silent && result.Reply == "" {
+		return result, &OutputError{Code: "empty_reply"}
 	}
 	if silent {
-		reply = ""
+		result.Reply = ""
 	}
-	return reply, branch, nil
+	if len(outputFields) > 0 {
+		data, dataErr := parseAgentData(input.Data, outputFields)
+		if dataErr != nil {
+			return result, dataErr
+		}
+		result.Data = data
+	}
+	return result, nil
+}
+
+func parseAgentData(raw json.RawMessage, fields []engine.AgentOutputField) (map[string]any, error) {
+	if len(raw) == 0 {
+		return nil, &OutputError{Code: "missing_data"}
+	}
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &values); err != nil || values == nil {
+		detail := "data debe ser un objeto"
+		if err != nil {
+			detail = err.Error()
+		}
+		return nil, &OutputError{Code: "invalid_data", Detail: detail}
+	}
+	allowed := make(map[string]engine.AgentOutputField, len(fields))
+	for _, field := range fields {
+		allowed[field.Key] = field
+	}
+	result := make(map[string]any, len(values))
+	for key, rawValue := range values {
+		field, ok := allowed[key]
+		if !ok {
+			return nil, &OutputError{Code: "unknown_data_field", Detail: key}
+		}
+		var value any
+		decoder := json.NewDecoder(bytes.NewReader(rawValue))
+		decoder.UseNumber()
+		if err := decoder.Decode(&value); err != nil {
+			return nil, &OutputError{Code: "invalid_data", Detail: key + ": " + err.Error()}
+		}
+		valid := false
+		switch field.Type {
+		case "string":
+			_, valid = value.(string)
+		case "datetime":
+			dateTime, isString := value.(string)
+			if isString {
+				_, parseErr := time.Parse(time.RFC3339, dateTime)
+				valid = parseErr == nil
+			}
+		case "number":
+			_, valid = value.(json.Number)
+		case "boolean":
+			_, valid = value.(bool)
+		}
+		if !valid {
+			return nil, &OutputError{Code: "invalid_data_type", Detail: fmt.Sprintf("%s debe ser %s", key, field.Type)}
+		}
+		result[key] = value
+	}
+	return result, nil
 }

@@ -13,11 +13,13 @@ import (
 // editor la consume en vez de replicarla.
 
 type FlowVariable struct {
-	Name   string `json:"name"`
-	Group  string `json:"group"`            // mensaje | contacto | datos | registro
-	Label  string `json:"label"`            // descripción legible
-	Type   string `json:"type,omitempty"`   // text | number | date… (campos definidos)
-	Source string `json:"source,omitempty"` // objeto del que proviene
+	Name      string `json:"name"`
+	Group     string `json:"group"`               // mensaje | contacto | datos | registro
+	Label     string `json:"label"`               // descripción legible
+	Type      string `json:"type,omitempty"`      // text | number | date… (campos definidos)
+	Source    string `json:"source,omitempty"`    // nombre visible del objeto
+	ObjectKey string `json:"objectKey,omitempty"` // clave técnica del objeto de datos
+	FieldKey  string `json:"fieldKey,omitempty"`  // clave técnica del campo
 }
 
 // fixedVariables son las que inyecta el runtime en cada ejecución.
@@ -26,6 +28,20 @@ var fixedVariables = []FlowVariable{
 	{Name: "input_type", Group: "mensaje", Label: "Tipo del mensaje (text, image…)"},
 	{Name: "input_media_id", Group: "mensaje", Label: "Id del archivo recibido"},
 	{Name: "input_wa_id", Group: "mensaje", Label: "Id del mensaje en WhatsApp"},
+	{Name: "input.id", Group: "mensaje", Label: "Id del evento recibido"},
+	{Name: "input.eventType", Group: "mensaje", Label: "Tipo de evento"},
+	{Name: "input.contentType", Group: "mensaje", Label: "Formato del contenido"},
+	{Name: "input.text", Group: "mensaje", Label: "Texto principal"},
+	{Name: "input.caption", Group: "mensaje", Label: "Texto adjunto a la media"},
+	{Name: "input.media.id", Group: "mensaje", Label: "Id del archivo recibido"},
+	{Name: "input.media.mimeType", Group: "mensaje", Label: "MIME del archivo recibido"},
+	{Name: "input.media.sha256", Group: "mensaje", Label: "Hash SHA-256 informado por el canal"},
+	{Name: "input.replyTo", Group: "mensaje", Label: "Id del mensaje citado"},
+	{Name: "input.forwarded", Group: "mensaje", Label: "El mensaje fue reenviado"},
+	{Name: "input.frequentlyForwarded", Group: "mensaje", Label: "El mensaje fue reenviado muchas veces"},
+	{Name: "input.reaction.emoji", Group: "mensaje", Label: "Emoji de la reacción"},
+	{Name: "input.reaction.targetMessageId", Group: "mensaje", Label: "Mensaje al que se reaccionó"},
+	{Name: "input.reaction.removed", Group: "mensaje", Label: "La reacción fue retirada"},
 	{Name: "contact_id", Group: "contacto", Label: "Id interno del contacto"},
 	{Name: "contact_name", Group: "contacto", Label: "Nombre del contacto"},
 	{Name: "contact_phone", Group: "contacto", Label: "Teléfono normalizado"},
@@ -74,11 +90,13 @@ func FlowVariables(ctx context.Context, pool *pgxpool.Pool, botID string) ([]Flo
 	}
 	for _, f := range dataFields {
 		out = append(out, FlowVariable{
-			Name:   "data_" + f.ObjectKey + "_" + f.Key,
-			Group:  "datos",
-			Label:  f.Label,
-			Type:   f.Type,
-			Source: f.ObjectName,
+			Name:      "data_" + f.ObjectKey + "_" + f.Key,
+			Group:     "datos",
+			Label:     f.Label,
+			Type:      f.Type,
+			Source:    f.ObjectName,
+			ObjectKey: f.ObjectKey,
+			FieldKey:  f.Key,
 		})
 	}
 	return out, nil

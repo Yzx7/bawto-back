@@ -190,15 +190,19 @@ func InsertOutboundMessageWithMetadata(ctx context.Context, pool *pgxpool.Pool, 
 
 // MessageMedia es una copia durable del archivo (los media_id de Meta expiran).
 type MessageMedia struct {
-	MimeType string `db:"mime_type"`
-	Data     []byte `db:"data"`
-	OrgID    string `db:"org_id"`
+	MessageID  int64  `db:"message_id"`
+	ProviderID string `db:"provider_id"`
+	MimeType   string `db:"mime_type"`
+	Data       []byte `db:"data"`
+	BotID      string `db:"bot_id"`
+	OrgID      string `db:"org_id"`
 }
 
 // GetMessageMedia trae el archivo junto a la org dueña, para autorizar.
 func GetMessageMedia(ctx context.Context, pool *pgxpool.Pool, messageID int64) (*MessageMedia, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT md.mime_type, md.data, b.org_id::text AS org_id
+		SELECT md.message_id,md.provider_id,md.mime_type,md.data,
+		       b.id::text AS bot_id,b.org_id::text AS org_id
 		  FROM message_media md
 		  JOIN messages m ON m.id = md.message_id
 		  JOIN chats c ON c.id = m.chat_id

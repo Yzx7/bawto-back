@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -299,6 +300,74 @@ func TestBranchToolRejectsInvalidOutputs(t *testing.T) {
 			OutputErrorCode(err) != "invalid_outputs" {
 			t.Fatalf("outputs=%q err=%v", outputs, err)
 		}
+	}
+}
+
+func TestParseBranchToolWithDeclaredData(t *testing.T) {
+	fields := []engine.AgentOutputField{
+		{Key: "provider", Type: "string"},
+		{Key: "amount", Type: "number"},
+		{Key: "valid", Type: "boolean"},
+		{Key: "occurredAt", Type: "datetime"},
+	}
+	parse := func(raw string) (engine.AgentResult, error) {
+		t.Helper()
+		var content []anthropic.ContentBlockUnion
+		if err := json.Unmarshal([]byte(raw), &content); err != nil {
+			t.Fatal(err)
+		}
+		return parseBranchToolWithData(content, []string{"comprobante", "revision"}, true, fields)
+	}
+
+	result, err := parse(`[{"type":"tool_use","id":"x","name":"select_flow_branch","input":{"branch":"comprobante","data":{"provider":"yape","amount":120.5,"valid":true}}}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Branch != "comprobante" || fmt.Sprint(result.Data["amount"]) != "120.5" || result.Data["provider"] != "yape" {
+		t.Fatalf("resultado=%#v", result)
+	}
+
+	tests := []struct {
+		name string
+		raw  string
+		code string
+	}{
+		{name: "missing data", raw: `[{"type":"tool_use","id":"x","name":"select_flow_branch","input":{"branch":"comprobante"}}]`, code: "missing_data"},
+		{name: "unknown field", raw: `[{"type":"tool_use","id":"x","name":"select_flow_branch","input":{"branch":"comprobante","data":{"other":"x"}}}]`, code: "unknown_data_field"},
+		{name: "wrong type", raw: `[{"type":"tool_use","id":"x","name":"select_flow_branch","input":{"branch":"comprobante","data":{"amount":"120"}}}]`, code: "invalid_data_type"},
+		{name: "invalid datetime", raw: `[{"type":"tool_use","id":"x","name":"select_flow_branch","input":{"branch":"comprobante","data":{"occurredAt":"ayer"}}}]`, code: "invalid_data_type"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parse(tt.raw)
+			if err == nil || OutputErrorCode(err) != tt.code {
+				t.Fatalf("err=%v code=%q", err, OutputErrorCode(err))
+			}
+		})
+	}
+}
+
+func TestAnthropicMessagesWithCurrentImage(t *testing.T) {
+	messages, err := anthropicMessagesWithMedia(nil, map[string]string{"input_type": "image"}, &engine.AgentMedia{
+		Data: []byte{1, 2, 3}, MIMEType: "image/jpeg", Caption: "Pago de agosto",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	for _, expected := range []string{`"type":"image"`, `"media_type":"image/jpeg"`, `"data":"AQID"`, "Pago de agosto"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("falta %q en %s", expected, body)
+		}
+	}
+
+	_, err = anthropicMessagesWithMedia(nil, nil, &engine.AgentMedia{Data: []byte{1}, MIMEType: "image/heic"})
+	if OutputErrorCode(err) != "unsupported_media_type" {
+		t.Fatalf("se esperaba MIME rechazado, err=%v", err)
 	}
 }
 
