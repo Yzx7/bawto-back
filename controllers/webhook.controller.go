@@ -62,6 +62,7 @@ func (con *Controller) processWhatsApp(body []byte) {
 	con.handleStatuses(ctx, body)
 	con.handleEchoes(ctx, body)
 	con.handleAccountEvents(ctx, body)
+	con.handleUserPreferences(ctx, body)
 	con.warnUnhandledFields(body)
 
 	msgs, err := whatsapp.Parse(body)
@@ -265,6 +266,60 @@ func (con *Controller) handleAccountEvents(ctx context.Context, body []byte) {
 	}
 }
 
+// handleUserPreferences registra el opt-out y el opt-in de marketing.
+//
+// Se guarda contra el **contacto**, que es la identidad por (org, teléfono), y no
+// contra el chat: la voluntad es de la persona. Si escribe a dos bots de la misma
+// organización, su decisión vale para ambos.
+//
+// Hoy no cambia ningún envío —las plantillas de cobranza son UTILITY y el opt-out
+// promocional no las afecta— y es justo por eso que hay que registrarlo ya: un
+// opt-out perdido no se recupera, y el registro tiene que existir antes del
+// primer envío de marketing, no después.
+func (con *Controller) handleUserPreferences(ctx context.Context, body []byte) {
+	prefs, err := whatsapp.ParseUserPreferences(body)
+	if err != nil || len(prefs) == 0 {
+		return
+	}
+	pool := con.Env.Postgres
+	for _, pref := range prefs {
+		bot, err := models.GetBotByChannel(ctx, pool, whatsapp.Channel, pref.ChannelID)
+		if err != nil || bot == nil {
+			con.whatsAppLogger().Warn("preferencia de un canal desconocido",
+				"channel", pref.ChannelID, "category", pref.Category)
+			continue
+		}
+		// Se crea el contacto si no existe: alguien puede pedir el alta de baja
+		// sin habernos escrito nunca por este bot, y perder ese "no" por no
+		// tenerlo fichado sería el peor de los fallos posibles aquí.
+		contact, err := models.EnsureInboundContact(ctx, pool, bot.ID, pref.WaID, "")
+		if err != nil || contact == nil {
+			con.whatsAppLogger().Error("preferencia: no se pudo resolver el contacto",
+				"bot", bot.ID, "err", errText(err))
+			continue
+		}
+		applied, err := models.StoreAndApplyUserPreference(ctx, pool, contact.ID, pref)
+		if err != nil {
+			con.whatsAppLogger().Error("preferencia: no se pudo guardar",
+				"contact", contact.ID, "category", pref.Category, "err", err.Error())
+			continue
+		}
+		if !applied {
+			continue
+		}
+		con.whatsAppLogger().Info("preferencia del usuario actualizada",
+			"contact", contact.ID, "category", pref.Category, "value", pref.Value,
+			"optedOut", pref.OptedOut())
+	}
+}
+
+func errText(err error) string {
+	if err == nil {
+		return "contacto no resuelto"
+	}
+	return err.Error()
+}
+
 // warnUnhandledFields deja constancia de todo campo suscrito que ningún parser
 // reclama. Sin esto no hay forma de saber qué se está perdiendo: el webhook
 // responde 200, el log dice "webhook recibido" con el tamaño en bytes y ahí
@@ -307,6 +362,7 @@ var handledWebhookFields = func() map[string]bool {
 		"message_template_status_update":  true,
 		"message_template_quality_update": true,
 		"template_category_update":        true,
+		whatsapp.PreferenceField:          true,
 	}
 	for field := range whatsapp.AccountFields {
 		fields[field] = true

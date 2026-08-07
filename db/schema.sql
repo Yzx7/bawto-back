@@ -357,6 +357,39 @@ CREATE INDEX IF NOT EXISTS idx_channel_health_waba ON channel_health (waba_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_health_scope
     ON channel_health (waba_id, scope);
 
+-- PREFERENCIAS DEL CONTACTO (opt-out de marketing) --------------
+-- Llega por el webhook `user_preferences`. Va contra el CONTACTO —la identidad
+-- por (org_id, phone_normalized)— y no contra el chat ni el bot: la voluntad es
+-- de la persona, así que vale para todos los bots de la organización.
+-- Espejo de db/migrations/018_contact_preferences.sql.
+CREATE TABLE IF NOT EXISTS contact_preference_events (
+    id          BIGSERIAL   PRIMARY KEY,
+    event_key   TEXT        NOT NULL UNIQUE,
+    contact_id  UUID        NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    category    TEXT        NOT NULL,          -- valor crudo de Meta
+    value       TEXT        NOT NULL,          -- valor crudo de Meta
+    detail      TEXT,
+    occurred_at TIMESTAMPTZ NOT NULL,
+    payload     JSONB       NOT NULL,
+    applied_at  TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (jsonb_typeof(payload) = 'object')
+);
+CREATE INDEX IF NOT EXISTS idx_contact_preference_events_contacto
+    ON contact_preference_events (contact_id, occurred_at DESC);
+
+CREATE TABLE IF NOT EXISTS contact_preferences (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    contact_id  UUID        NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+    category    TEXT        NOT NULL,
+    value       TEXT        NOT NULL,
+    detail      TEXT,
+    occurred_at TIMESTAMPTZ NOT NULL,          -- guarda de orden del opt-out
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (contact_id, category)
+);
+
 -- AGENTES IA REUTILIZABLES -------------------------------------
 -- Un nodo `agent` puede referenciar uno con `agentRef` en vez de repetir la
 -- instrucción: el agente aporta la base y el nodo le añade su dominio. Se
@@ -672,7 +705,7 @@ $$ LANGUAGE plpgsql;
 DO $$
 DECLARE t TEXT;
 BEGIN
-    FOREACH t IN ARRAY ARRAY['organizations','memberships','bots','chats','contacts','billing_records','contact_fields','audiences','data_objects','data_fields','data_records','data_views','flows','channel_health']
+    FOREACH t IN ARRAY ARRAY['organizations','memberships','bots','chats','contacts','billing_records','contact_fields','audiences','data_objects','data_fields','data_records','data_views','flows','channel_health','contact_preferences']
     LOOP
         EXECUTE format('DROP TRIGGER IF EXISTS trg_%1$s_updated_at ON %1$s;', t);
         EXECUTE format(

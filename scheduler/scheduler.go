@@ -356,6 +356,23 @@ func deliver(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config, cipher
 		return deliveryResult{cancel: "un flow schedule debe producir exactamente una plantilla"}
 	}
 	template := execution.Templates[0]
+
+	// Opt-out de marketing. Se comprueba **antes** de llamar a Meta porque el
+	// cobro es por plantilla entregada: filtrar después es pagar por un envío que
+	// la persona pidió no recibir. Solo aplica a MARKETING; una UTILITY de
+	// cobranza no se ve afectada por el opt-out promocional.
+	if catalog, err := models.GetChannelTemplateForBot(ctx, pool, run.BotID, template.Name, template.Language); err != nil {
+		return deliveryResult{err: err}
+	} else if catalog != nil && catalog.Category != nil && strings.EqualFold(*catalog.Category, "MARKETING") {
+		optedOut, err := models.MarketingOptedOut(ctx, pool, contact.ID)
+		if err != nil {
+			return deliveryResult{err: err}
+		}
+		if optedOut {
+			return deliveryResult{cancel: "el contacto pidió no recibir mensajes de marketing"}
+		}
+	}
+
 	sendCfg := whatsapp.SendConfig{APIBase: cfg.WhatsAppAPIBase, Version: cfg.WhatsAppAPIVersion,
 		PhoneNumberID: *bot.ChannelID, Token: token}
 	status, err := whatsapp.GetTemplateStatus(ctx, sendCfg, *bot.WabaID, template.Name, template.Language)
