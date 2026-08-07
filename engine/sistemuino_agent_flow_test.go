@@ -242,3 +242,64 @@ func TestSistemuinoResuelvePerfilYSegmentoAntesDelAgente(t *testing.T) {
 		}
 	})
 }
+
+// El Router «CTX obtained» que el dueño añadió antes de publicar corta la
+// relectura cuando el segmento ya está en el estado de la conversación: ahorra
+// dos consultas por turno en un chat ya resuelto.
+//
+// El precio es que el contexto queda congelado mientras dure la conversación.
+// Las variables viven en `state.Vars` y sobreviven al wait, así que editar
+// `segmentos.contexto` en el panel no se nota hasta que el chat termina o expira
+// a las 24 h. Es una decisión visible en el grafo; esta prueba la fija para que
+// no cambie por accidente y para que quede escrito cuál es el intercambio.
+func TestSistemuinoNoRelaeElSegmentoYaResuelto(t *testing.T) {
+	flow := loadSistemuinoAgentFlow(t)
+
+	var instruccion string
+	deps := Deps{
+		InputType: "text",
+		Tool: func(ref string, args, _ map[string]string) (string, error) {
+			t.Fatalf("no debe releer %s sobre %q: el segmento ya está en el estado", ref, args["object"])
+			return "", nil
+		},
+		AgentStructured: func(request AgentRequest) (AgentResult, error) {
+			instruccion = request.Instruction
+			return AgentResult{Reply: "Sigo.", Branch: "conversar"}, nil
+		},
+	}
+	estado := &State{NodeID: "n_espera", Vars: map[string]string{
+		"segmento.found":                      "true",
+		"segmento.first.data.activo":          "true",
+		"segmento.first.data.ruta":            "contexto_especializado",
+		"segmento.first.data.nombre":          "Ventas B2B",
+		"segmento.first.data.contexto":        "Decide por costo total.",
+		"segmento.first.data.tono":            "Sobrio.",
+		"segmento.first.data.restricciones":   "Sin descuentos.",
+		"perfil.first.data.contexto_personal": "Opera tres locales.",
+	}}
+	result, err := Advance(flow, estado, "otra pregunta", deps)
+	if err != nil || result.State == nil || len(result.Sends) != 1 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if !strings.Contains(instruccion, "Ventas B2B") {
+		t.Fatal("el contexto en memoria debe seguir llegando al agente")
+	}
+
+	// Un segmento que se apagó entre turnos sí vuelve al agente general, porque
+	// el Router comprueba `activo` sobre el valor cacheado.
+	estado.Vars["segmento.first.data.activo"] = "false"
+	var recargas []string
+	deps.Tool = func(ref string, args, _ map[string]string) (string, error) {
+		recargas = append(recargas, args["object"])
+		return `{"found":false,"count":0,"first":null,"records":[]}`, nil
+	}
+	if _, err = Advance(flow, estado, "otra más", deps); err != nil {
+		t.Fatal(err)
+	}
+	if len(recargas) == 0 {
+		t.Fatal("con el segmento apagado debe volver a leer el perfil")
+	}
+	if strings.Contains(instruccion, "CONTEXTO INTERNO") {
+		t.Fatal("un segmento apagado no puede seguir enriqueciendo")
+	}
+}

@@ -193,7 +193,7 @@ func TestValidateHerramientasDelAgente(t *testing.T) {
 	}{
 		{
 			name:  "válida con su configuración",
-			tools: []NodeTool{{Ref: "search_data", Config: map[string]string{"object": "servicios"}}},
+			tools: []NodeTool{{Ref: "data_query", Config: map[string]string{"object": "servicios"}}},
 		},
 		{
 			name:  "inexistente",
@@ -207,20 +207,20 @@ func TestValidateHerramientasDelAgente(t *testing.T) {
 		},
 		{
 			name:  "sin la configuración obligatoria",
-			tools: []NodeTool{{Ref: "search_data"}},
+			tools: []NodeTool{{Ref: "data_query"}},
 			want:  "requiere Objeto de datos",
 		},
 		{
 			name: "duplicada",
 			tools: []NodeTool{
-				{Ref: "search_data", Config: map[string]string{"object": "servicios"}},
-				{Ref: "search_data", Config: map[string]string{"object": "facturas"}},
+				{Ref: "data_query", Config: map[string]string{"object": "servicios"}},
+				{Ref: "data_query", Config: map[string]string{"object": "facturas"}},
 			},
 			want: "duplicada",
 		},
 		{
 			name: "configuración que la herramienta no admite",
-			tools: []NodeTool{{Ref: "search_data", Config: map[string]string{
+			tools: []NodeTool{{Ref: "data_query", Config: map[string]string{
 				"object": "servicios", "limite": "100",
 			}}},
 			want: "no admite la configuración",
@@ -244,18 +244,20 @@ func TestValidateHerramientasDelAgente(t *testing.T) {
 	}
 }
 
-// Una herramienta puede declarar ambos consumidores, pero search_data es solo
-// agéntica y no puede colgarse de una arista.
-func TestValidateBloqueToolRechazaHerramientaDeAgente(t *testing.T) {
+// Una herramienta puede declarar ambos consumidores —`data_query` los declara—,
+// pero el que solo vale para uno debe rechazarse en el otro. Desde que se retiró
+// `search_data` no queda ninguna solo-agéntica, así que la prueba viva es la del
+// sentido contrario: `data_mutate` escribe y jamás puede ofrecérsele al modelo.
+//
+// La rama simétrica (`!spec.ForGraph`) sigue en `validate.go` sin herramienta que
+// la ejerza. Se conserva porque la siguiente tool de solo-lectura para el modelo
+// la necesitará; si algún día se decide que ningún caso la justifica, se borra el
+// código, no solo la prueba.
+func TestValidateBloqueToolRechazaHerramientaDeEscrituraEnUnAgente(t *testing.T) {
 	flow := validAgentFlow()
-	flow.Nodes = append(flow.Nodes, Node{ID: "t1", Kind: "tool", ToolRef: "search_data"})
-	flow.Edges = append(flow.Edges,
-		Edge{ID: "ok-t1", Source: "ok", Target: "t1"},
-		Edge{ID: "t1-ok", Source: "t1", SourceHandle: "ok", Target: "ok"},
-		Edge{ID: "t1-err", Source: "t1", SourceHandle: "error", Target: "ok"},
-	)
+	flow.Nodes[0].Tools = []NodeTool{{Ref: "data_mutate"}}
 	err := Validate(flow)
-	if err == nil || !strings.Contains(err.Error(), "solo puede usarla un agente") {
+	if err == nil || !strings.Contains(err.Error(), "no está disponible para agentes") {
 		t.Fatalf("se esperaba el rechazo por consumidor equivocado, got %v", err)
 	}
 }

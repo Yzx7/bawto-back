@@ -8,12 +8,6 @@
       "target": "n_entry_router"
     },
     {
-      "id": "e_router_conversation",
-      "source": "n_entry_router",
-      "target": "n_read_profile",
-      "sourceHandle": "conversation"
-    },
-    {
       "id": "e_router_image",
       "source": "n_entry_router",
       "target": "n_classify_payment",
@@ -220,6 +214,24 @@
       "id": "e_noctx_agente",
       "source": "n_sin_context",
       "target": "n_agente"
+    },
+    {
+      "id": "xy-edge__n_entry_routerconversation-router_768deb23",
+      "source": "n_entry_router",
+      "target": "router_768deb23",
+      "sourceHandle": "conversation"
+    },
+    {
+      "id": "xy-edge__router_768deb23caso_1-n_segment_router",
+      "source": "router_768deb23",
+      "target": "n_segment_router",
+      "sourceHandle": "caso_1"
+    },
+    {
+      "id": "xy-edge__router_768deb23default-n_read_profile",
+      "source": "router_768deb23",
+      "target": "n_read_profile",
+      "sourceHandle": "default"
     }
   ],
   "nodes": [
@@ -246,8 +258,8 @@
     {
       "id": "n_agente",
       "pos": {
-        "x": -1091.7110979974543,
-        "y": -572.9240275965121
+        "x": -1393.9937816283257,
+        "y": -558.6116327958005
       },
       "kind": "agent",
       "tools": [
@@ -270,8 +282,8 @@
     {
       "id": "n_payment_wait",
       "pos": {
-        "x": -708.7503060423994,
-        "y": -802.1029475137972
+        "x": -1041.8728289915393,
+        "y": -808.9951376437793
       },
       "kind": "wait",
       "timeoutHours": 24
@@ -279,8 +291,8 @@
     {
       "id": "n_payment_input_router",
       "pos": {
-        "x": -338.94155278811274,
-        "y": -832.9084909166104
+        "x": -697.3354395471874,
+        "y": -747.3304634693314
       },
       "kind": "router",
       "cases": [
@@ -294,8 +306,8 @@
     {
       "id": "n_payment_need_image",
       "pos": {
-        "x": -557.995255424159,
-        "y": -492.95221408039845
+        "x": -488.24403026039624,
+        "y": -522.1796223282084
       },
       "body": "Para registrar el cobro necesito una foto o captura completa del comprobante. Envíala nítida y sin recortes; deben verse fecha, importe y operación.",
       "kind": "send"
@@ -441,8 +453,8 @@
     {
       "id": "n_espera",
       "pos": {
-        "x": -89.50665519520344,
-        "y": -120.85352296153866
+        "x": -72.41911103161875,
+        "y": -169.7852465739839
       },
       "kind": "wait",
       "timeoutHours": 24
@@ -477,8 +489,8 @@
     {
       "id": "n_read_profile",
       "pos": {
-        "x": 150.0,
-        "y": -430.0
+        "x": -3087.4940838509456,
+        "y": 40.40121951171065
       },
       "args": {
         "limit": "1",
@@ -498,8 +510,8 @@
     {
       "id": "n_profile_router",
       "pos": {
-        "x": -120.0,
-        "y": -430.0
+        "x": -2746.635539195064,
+        "y": -212.73052140595527
       },
       "kind": "router",
       "cases": [
@@ -513,8 +525,8 @@
     {
       "id": "n_read_segment",
       "pos": {
-        "x": -390.0,
-        "y": -520.0
+        "x": -2535.818797152735,
+        "y": -257.306212429081
       },
       "args": {
         "limit": "1",
@@ -534,8 +546,8 @@
     {
       "id": "n_segment_router",
       "pos": {
-        "x": -660.0,
-        "y": -520.0
+        "x": -2154.1995187028233,
+        "y": -399.255193471139
       },
       "kind": "router",
       "cases": [
@@ -554,8 +566,8 @@
     {
       "id": "n_set_context",
       "pos": {
-        "x": -930.0,
-        "y": -640.0
+        "x": -1801.207555268545,
+        "y": -364.2066092317374
       },
       "kind": "action",
       "action": "set",
@@ -566,14 +578,29 @@
     {
       "id": "n_sin_context",
       "pos": {
-        "x": -930.0,
-        "y": -400.0
+        "x": -1802.1620465430512,
+        "y": -150.91738830334373
       },
       "kind": "action",
       "action": "set",
       "params": {
         "contexto_organizacion": ""
       }
+    },
+    {
+      "id": "router_768deb23",
+      "pos": {
+        "x": -2459.7773293058676,
+        "y": 365.7951528894176
+      },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "caso_1",
+          "label": "CTX obtained",
+          "expression": "segmento.found == true && segmento.first.data.activo == true"
+        }
+      ]
     }
   ],
   "trigger": {

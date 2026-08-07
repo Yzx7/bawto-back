@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -81,32 +80,6 @@ func ListDataRecordsByOrg(ctx context.Context, p *pgxpool.Pool, orgID, objectID 
 		return nil, e
 	}
 	return pgx.CollectRows(rows, pgx.RowToStructByName[DataRecordWithContact])
-}
-
-// SearchDataRecordsByOrg busca registros de un objeto por su clave técnica.
-//
-// La consulta es un `ILIKE` sobre el JSON completo del registro, no una búsqueda
-// por campo: quien la usa es un modelo que escribe términos sueltos ("tienda
-// online", "sensores") sin saber en qué columna viven. Para un catálogo de
-// decenas de filas es suficiente y es honesto; si algún día se aplica a miles de
-// registros habrá que cambiarlo por un índice de texto, no por más `ILIKE`.
-//
-// El objeto se resuelve **por clave dentro de la organización**, que es el límite
-// de alcance: un agente configurado sobre `servicios` no puede leer `facturas`.
-func SearchDataRecordsByOrg(ctx context.Context, p *pgxpool.Pool, orgID, objectKey, query string, limit int) ([]DataRecord, error) {
-	if limit <= 0 || limit > 50 {
-		limit = 10
-	}
-	rows, e := p.Query(ctx, `SELECT `+dataRecordCols+`
-		FROM data_records r
-		WHERE r.object_id = (SELECT id FROM data_objects WHERE org_id=$1::uuid AND key=$2)
-		  AND ($3 = '' OR r.data::text ILIKE '%' || $3 || '%')
-		ORDER BY r.created_at DESC
-		LIMIT $4`, orgID, objectKey, strings.TrimSpace(query), limit)
-	if e != nil {
-		return nil, e
-	}
-	return pgx.CollectRows(rows, pgx.RowToStructByName[DataRecord])
 }
 
 func ListContactsByOrg(ctx context.Context, p *pgxpool.Pool, orgID string) ([]Contact, error) {

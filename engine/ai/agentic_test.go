@@ -31,7 +31,7 @@ func TestRunAgenticEncadenaHerramientaYConservaLosBloques(t *testing.T) {
 				"id":"msg_1","type":"message","role":"assistant","model":"MiniMax-M3",
 				"content":[
 					{"type":"thinking","thinking":"Necesito el catálogo.","signature":"sig-1"},
-					{"type":"tool_use","id":"tu_1","name":"search_data","input":{"query":"tienda online"}}
+					{"type":"tool_use","id":"tu_1","name":"data_query","input":{"query":"tienda online"}}
 				],
 				"stop_reason":"tool_use",
 				"usage":{"input_tokens":100,"output_tokens":20}
@@ -61,7 +61,7 @@ func TestRunAgenticEncadenaHerramientaYConservaLosBloques(t *testing.T) {
 		"Orienta al cliente", map[string]string{"input": "quiero vender online"},
 		[]string{"conversar", "asesor"}, nil, false,
 		[]AgentTool{{
-			Name:        "search_data",
+			Name:        "data_query",
 			Description: "Busca en el catálogo.",
 			InputSchema: map[string]any{
 				"type":       "object",
@@ -76,7 +76,7 @@ func TestRunAgenticEncadenaHerramientaYConservaLosBloques(t *testing.T) {
 	if reply != "Tenemos Meudim Ecommerce." || branch != "conversar" {
 		t.Fatalf("salida inesperada: reply=%q branch=%q", reply, branch)
 	}
-	if gotName != "search_data" || gotInput != `{"query":"tienda online"}` {
+	if gotName != "data_query" || gotInput != `{"query":"tienda online"}` {
 		t.Fatalf("la herramienta recibió %q con %s", gotName, gotInput)
 	}
 	if len(requests) != 2 {
@@ -145,7 +145,7 @@ func TestRunAgenticCierraTrasRepetirLaMismaHerramienta(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{
 			"id":"msg","type":"message","role":"assistant","model":"MiniMax-M3",
-			"content":[{"type":"tool_use","id":"tu","name":"search_data","input":{"query":"mandos"}}],
+			"content":[{"type":"tool_use","id":"tu","name":"data_query","input":{"query":"mandos"}}],
 			"stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":5}
 		}`))
 	}))
@@ -158,7 +158,7 @@ func TestRunAgenticCierraTrasRepetirLaMismaHerramienta(t *testing.T) {
 	a := New("sk-test", srv.URL, "MiniMax-M3")
 	reply, branch, usage, err := a.RunAgenticUsage(context.Background(), "instrucción",
 		map[string]string{"input": "Vendes mandos?"}, []string{"conversar"}, nil, false,
-		[]AgentTool{{Name: "search_data", Description: "Busca.", InputSchema: map[string]any{
+		[]AgentTool{{Name: "data_query", Description: "Busca.", InputSchema: map[string]any{
 			"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}},
 		}}}, exec)
 
@@ -177,7 +177,7 @@ func TestRunAgenticCierraTrasRepetirLaMismaHerramienta(t *testing.T) {
 	if executions != 1 {
 		t.Fatalf("la consulta repetida no debía ejecutarse otra vez: %d ejecuciones", executions)
 	}
-	if len(usage.ToolTrace) != 3 || usage.ToolTrace[0].Name != "search_data" ||
+	if len(usage.ToolTrace) != 3 || usage.ToolTrace[0].Name != "data_query" ||
 		usage.ToolTrace[0].Repeated || !usage.ToolTrace[1].Repeated ||
 		usage.ToolTrace[2].Name != branchToolName {
 		t.Fatalf("traza de herramientas inesperada: %+v", usage.ToolTrace)
@@ -207,7 +207,7 @@ func TestRunAgenticReservaElUltimoPasoParaCerrar(t *testing.T) {
 		}
 		_, _ = fmt.Fprintf(w, `{
 			"id":"search_%d","type":"message","role":"assistant","model":"MiniMax-M3",
-			"content":[{"type":"tool_use","id":"tu_%d","name":"search_data",
+			"content":[{"type":"tool_use","id":"tu_%d","name":"data_query",
 				"input":{"query":"consulta %d"}}],
 			"stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":5}
 		}`, requests, requests, requests)
@@ -221,7 +221,7 @@ func TestRunAgenticReservaElUltimoPasoParaCerrar(t *testing.T) {
 	a := New("sk-test", srv.URL, "MiniMax-M3")
 	reply, branch, usage, err := a.RunAgenticUsage(context.Background(), "instrucción",
 		map[string]string{"input": "Vendes mandos?"}, []string{"conversar"}, nil, false,
-		[]AgentTool{{Name: "search_data", Description: "Busca.", InputSchema: map[string]any{
+		[]AgentTool{{Name: "data_query", Description: "Busca.", InputSchema: map[string]any{
 			"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}},
 		}}}, exec)
 
@@ -241,8 +241,8 @@ func TestRunAgenticReservaElUltimoPasoParaCerrar(t *testing.T) {
 }
 
 func TestToolCallKeyNormalizaJSON(t *testing.T) {
-	left := toolCallKey("search_data", []byte(`{"query":"mandos","limit":3}`))
-	right := toolCallKey("search_data", []byte(`{ "limit": 3, "query": "mandos" }`))
+	left := toolCallKey("data_query", []byte(`{"query":"mandos","limit":3}`))
+	right := toolCallKey("data_query", []byte(`{ "limit": 3, "query": "mandos" }`))
 	if left != right {
 		t.Fatalf("argumentos JSON equivalentes produjeron claves distintas: %q / %q", left, right)
 	}
@@ -263,7 +263,7 @@ func TestRunAgenticEntregaElErrorAlModelo(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if turn == 1 {
 			_, _ = w.Write([]byte(`{"id":"m1","type":"message","role":"assistant","model":"M3",
-				"content":[{"type":"tool_use","id":"tu_1","name":"search_data","input":{"query":"x"}}],
+				"content":[{"type":"tool_use","id":"tu_1","name":"data_query","input":{"query":"x"}}],
 				"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1}}`))
 			return
 		}
@@ -280,7 +280,7 @@ func TestRunAgenticEntregaElErrorAlModelo(t *testing.T) {
 	a := New("sk-test", srv.URL, "M3")
 	reply, branch, _, err := a.RunAgenticUsage(context.Background(), "instrucción",
 		map[string]string{"input": "hola"}, []string{"conversar"}, nil, false,
-		[]AgentTool{{Name: "search_data", Description: "Busca.", InputSchema: map[string]any{
+		[]AgentTool{{Name: "data_query", Description: "Busca.", InputSchema: map[string]any{
 			"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}},
 		}}}, exec)
 	if err != nil {
@@ -323,8 +323,8 @@ func TestRunAgenticRespondeTodasLasLlamadasDeUnMensaje(t *testing.T) {
 		if turn == 1 {
 			_, _ = w.Write([]byte(`{"id":"m1","type":"message","role":"assistant","model":"M3",
 				"content":[
-					{"type":"tool_use","id":"tu_a","name":"search_data","input":{"query":"web"}},
-					{"type":"tool_use","id":"tu_b","name":"search_data","input":{"query":"iot"}}
+					{"type":"tool_use","id":"tu_a","name":"data_query","input":{"query":"web"}},
+					{"type":"tool_use","id":"tu_b","name":"data_query","input":{"query":"iot"}}
 				],
 				"stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":5}}`))
 			return
@@ -349,7 +349,7 @@ func TestRunAgenticRespondeTodasLasLlamadasDeUnMensaje(t *testing.T) {
 	a := New("sk-test", srv.URL, "M3")
 	reply, branch, _, err := a.RunAgenticUsage(context.Background(), "instrucción",
 		map[string]string{"input": "qué servicios ofreces"}, []string{"conversar", "asesor"}, nil, false,
-		[]AgentTool{{Name: "search_data", Description: "Busca.", InputSchema: map[string]any{
+		[]AgentTool{{Name: "data_query", Description: "Busca.", InputSchema: map[string]any{
 			"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}},
 		}}}, exec)
 	if err != nil {

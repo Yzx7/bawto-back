@@ -174,7 +174,7 @@ func main() {
 		creados++
 	}
 
-	fmt.Printf("\n%d servicio(s) nuevo(s). El agente los consulta con la herramienta search_data sobre %q.\n",
+	fmt.Printf("\n%d servicio(s) nuevo(s). El agente los consulta con la herramienta data_query sobre %q.\n",
 		creados, objectKey)
 }
 

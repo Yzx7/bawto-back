@@ -89,40 +89,6 @@ type Spec struct {
 }
 
 var registry = map[string]Spec{
-	"search_data": {
-		Name:  "search_data",
-		Label: "Buscar en una tabla",
-		Help:  "Consulta los registros de un objeto de datos de la organización y devuelve los que coinciden.",
-		Description: "Busca información en el catálogo interno de la empresa. Úsala antes de " +
-			"afirmar detalles sobre servicios, productos, precios o condiciones: es la fuente " +
-			"de verdad y evita inventar. Si no devuelve resultados, dilo en vez de suponer.",
-		InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"query": map[string]any{
-					"type": "string",
-					"description": "Palabras a buscar, en español. Usa términos del dominio " +
-						"(por ejemplo «tienda online» o «sensores»), no frases completas.",
-					"minLength": 1,
-				},
-			},
-			"required":             []string{"query"},
-			"additionalProperties": false,
-		},
-		Accepts:  []PayloadType{PayloadDataQuery},
-		Produces: PayloadDataRecords,
-		Config: []ConfigKey{{
-			Key:      "object",
-			Label:    "Objeto de datos",
-			Help:     "Clave técnica del objeto en el que puede buscar. El modelo no puede salirse de él.",
-			Required: true,
-			Kind:     "data_object",
-		}},
-		Effect:   EffectRead,
-		ForAgent: true,
-		ForGraph: false,
-	},
-
 	"data_query": {
 		Name:  "data_query",
 		Label: "Leer una tabla",

@@ -23,12 +23,12 @@ import (
 // de su esquema, pero no puede cambiar el alcance —en qué tabla busca— porque ese
 // dato nunca llega a él.
 
-// maxSearchResults acota lo que vuelve al modelo. Cada resultado se reenvía en
+// maxAgentQueryResults acota lo que vuelve al modelo. Cada resultado se reenvía en
 // todas las iteraciones siguientes del turno, así que un catálogo entero encarece
 // el bucle completo, no solo el paso que lo pidió.
 const (
-	maxSearchResults   = 8
-	maxAgentImageBytes = 10 * 1024 * 1024
+	maxAgentQueryResults = 8
+	maxAgentImageBytes   = 10 * 1024 * 1024
 )
 
 // agentMediaSource identifica el mensaje durable que puede ver un agente.
@@ -64,46 +64,11 @@ func (con *Controller) agentTooling(ctx context.Context, bot *models.BotChannel,
 		switch name {
 		case "data_query":
 			return con.execAgentDataQuery(ctx, bot, config[name], input)
-		case "search_data":
-			return con.execSearchData(ctx, bot, config[name], input)
 		default:
 			return "", fmt.Errorf("herramienta %q sin ejecutor", name)
 		}
 	}
 	return specs, exec, nil
-}
-
-// execSearchData busca en el objeto de datos que fijó el autor del nodo.
-func (con *Controller) execSearchData(ctx context.Context, bot *models.BotChannel, config map[string]string, input json.RawMessage) (string, error) {
-	objectKey := strings.TrimSpace(config["object"])
-	if objectKey == "" {
-		return "", fmt.Errorf("la herramienta no tiene objeto de datos configurado")
-	}
-	var args struct {
-		Query string `json:"query"`
-	}
-	if err := json.Unmarshal(input, &args); err != nil {
-		return "", fmt.Errorf("argumentos inválidos")
-	}
-
-	records, err := models.SearchDataRecordsByOrg(ctx, con.Env.Postgres, bot.OrgID, objectKey,
-		args.Query, maxSearchResults)
-	if err != nil {
-		return "", err
-	}
-	if len(records) == 0 {
-		// Se le dice explícitamente que no hay nada, en vez de devolver vacío: un
-		// resultado en blanco invita a rellenar el hueco inventando.
-		return fmt.Sprintf("Sin resultados para %q en %s. No hay información registrada sobre eso.",
-			args.Query, objectKey), nil
-	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "%d resultado(s) en %s:\n", len(records), objectKey)
-	for i, record := range records {
-		fmt.Fprintf(&b, "\n%d. %s", i+1, renderRecord(record.Data))
-	}
-	return b.String(), nil
 }
 
 // execAgentDataQuery es la misma lectura que usa el grafo, con una diferencia de
@@ -147,7 +112,7 @@ func (con *Controller) execAgentDataQuery(ctx context.Context, bot *models.BotCh
 		rules = append(rules, models.DataQueryRule{Field: field, Op: op, Value: filter.Value})
 	}
 
-	limit := maxSearchResults
+	limit := maxAgentQueryResults
 	if raw := strings.TrimSpace(config["maxLimit"]); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
 			limit = parsed
@@ -173,17 +138,9 @@ func (con *Controller) execAgentDataQuery(ctx context.Context, bot *models.BotCh
 	return b.String(), nil
 }
 
-// renderRecord aplana el JSON del registro a `clave: valor` en orden estable. Se
-// entrega como texto y no como JSON crudo porque el modelo lo lee mejor y porque
-// así no se le enseña la forma interna de la tabla.
-func renderRecord(raw json.RawMessage) string {
-	var values map[string]any
-	if json.Unmarshal(raw, &values) != nil {
-		return string(raw)
-	}
-	return renderValues(values)
-}
-
+// renderValues aplana el registro a `clave: valor` en orden estable. Se entrega
+// como texto y no como JSON crudo porque el modelo lo lee mejor y porque así no
+// se le enseña la forma interna de la tabla.
 func renderValues(values map[string]any) string {
 	keys := make([]string, 0, len(values))
 	for key := range values {
