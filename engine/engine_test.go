@@ -783,3 +783,69 @@ func TestAgentErrorPersistsDirectRetryState(t *testing.T) {
 		t.Fatalf("reintento: result=%+v calls=%d err=%v", retried, calls, err)
 	}
 }
+
+// El valor del bloque `data_query` está en lo que deja para el Router siguiente.
+// Sin esta proyección el grafo tendría el JSON entero en una variable y ninguna
+// forma de decidir con él sin expresiones sobre texto.
+func TestDataQueryProyectaVariablesParaElRouter(t *testing.T) {
+	flow := &Flow{
+		ID: "f", Name: "F", Trigger: Trigger{Type: "message", Match: "any"},
+		Nodes: []Node{
+			{ID: "read", Kind: "tool", ToolRef: "data_query", SaveAs: "perfil", Args: map[string]string{
+				"object": "perfiles_contacto", "linkCurrentContact": "true",
+				"where.1.field": "activo", "where.1.op": "eq", "where.1.value": "true",
+			}},
+			{ID: "router", Kind: "router", Cases: []RouterCase{
+				{ID: "segmentado", Expression: `perfil.found == true && perfil.first.data.segmento_key != ""`},
+			}},
+			{ID: "con_perfil", Kind: "send", Body: "Segmento: {perfil.first.data.segmento_key}"},
+			{ID: "sin_perfil", Kind: "send", Body: "Sin perfil"},
+			{ID: "error", Kind: "send", Body: "Falló la lectura"},
+		},
+		Edges: []Edge{
+			{ID: "e0", Source: "trigger", Target: "read"},
+			{ID: "e1", Source: "read", SourceHandle: "ok", Target: "router"},
+			{ID: "e2", Source: "read", SourceHandle: "error", Target: "error"},
+			{ID: "e3", Source: "router", SourceHandle: "segmentado", Target: "con_perfil"},
+			{ID: "e4", Source: "router", SourceHandle: "default", Target: "sin_perfil"},
+		},
+	}
+
+	var gotArgs map[string]string
+	deps := func(result string, err error) Deps {
+		return Deps{Tool: func(_ string, args, _ map[string]string) (string, error) {
+			gotArgs = args
+			return result, err
+		}}
+	}
+
+	encontrado, e := Advance(flow, nil, "hola", deps(
+		`{"found":true,"count":1,"first":{"recordId":"r1","data":{"segmento_key":"ventas_b2b","activo":true}},"records":[]}`, nil))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(encontrado.Sends) != 1 || encontrado.Sends[0] != "Segmento: ventas_b2b" {
+		t.Fatalf("sends=%v", encontrado.Sends)
+	}
+	if gotArgs["where.1.value"] != "true" || gotArgs["object"] != "perfiles_contacto" {
+		t.Fatalf("los argumentos no llegaron al ejecutor: %v", gotArgs)
+	}
+
+	// Cero coincidencias sale por `ok`, no por `error`: el Router debe poder
+	// distinguir «no tiene perfil» de «la consulta falló».
+	vacio, e := Advance(flow, nil, "hola", deps(`{"found":false,"count":0,"first":null,"records":[]}`, nil))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(vacio.Sends) != 1 || vacio.Sends[0] != "Sin perfil" {
+		t.Fatalf("sends=%v", vacio.Sends)
+	}
+
+	fallo, e := Advance(flow, nil, "hola", deps("", errors.New("objeto inexistente")))
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(fallo.Sends) != 1 || fallo.Sends[0] != "Falló la lectura" {
+		t.Fatalf("sends=%v", fallo.Sends)
+	}
+}

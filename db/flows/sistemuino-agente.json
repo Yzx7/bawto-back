@@ -10,7 +10,7 @@
     {
       "id": "e_router_conversation",
       "source": "n_entry_router",
-      "target": "n_agente",
+      "target": "n_read_profile",
       "sourceHandle": "conversation"
     },
     {
@@ -156,6 +156,70 @@
       "source": "n_payment_retry",
       "target": "n_espera",
       "sourceHandle": "out"
+    },
+    {
+      "id": "e_profile_ok",
+      "source": "n_read_profile",
+      "target": "n_profile_router",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_profile_err",
+      "source": "n_read_profile",
+      "target": "n_sin_context",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_profile_seg",
+      "source": "n_profile_router",
+      "target": "n_read_segment",
+      "sourceHandle": "segmentado"
+    },
+    {
+      "id": "e_profile_def",
+      "source": "n_profile_router",
+      "target": "n_sin_context",
+      "sourceHandle": "default"
+    },
+    {
+      "id": "e_segment_ok",
+      "source": "n_read_segment",
+      "target": "n_segment_router",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_segment_err",
+      "source": "n_read_segment",
+      "target": "n_sin_context",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_segment_ctx",
+      "source": "n_segment_router",
+      "target": "n_set_context",
+      "sourceHandle": "contexto"
+    },
+    {
+      "id": "e_segment_asesor",
+      "source": "n_segment_router",
+      "target": "n_derivar",
+      "sourceHandle": "asesor"
+    },
+    {
+      "id": "e_segment_def",
+      "source": "n_segment_router",
+      "target": "n_sin_context",
+      "sourceHandle": "default"
+    },
+    {
+      "id": "e_ctx_agente",
+      "source": "n_set_context",
+      "target": "n_agente"
+    },
+    {
+      "id": "e_noctx_agente",
+      "source": "n_sin_context",
+      "target": "n_agente"
     }
   ],
   "nodes": [
@@ -188,7 +252,7 @@
       "kind": "agent",
       "tools": [
         {
-          "ref": "search_data",
+          "ref": "data_query",
           "config": {
             "object": "servicios"
           }
@@ -201,7 +265,7 @@
         "conversar"
       ],
       "contextMode": "recent",
-      "instruction": "Eres el orientador comercial de Energy Company (marca Sistemuino) y atiendes por WhatsApp. Redacta el único mensaje que el cliente recibirá en este turno, apoyándote en todo el historial reciente y sin repetir preguntas que ya te respondió.\n\nEl cliente se llama {contact_name}. Si ese dato llega vacío o todavía entre llaves, no uses ningún nombre.\n\nTONO. Escribes como un consultor con oficio, no como un vendedor entusiasta: profesional, directo y sobrio. Estas reglas de redacción son obligatorias y pesan más que cualquier otra indicación:\n- No uses signos de admiración, tampoco al saludar.\n- No abras el mensaje elogiando al cliente ni celebrando lo que acaba de decir. Quedan prohibidas fórmulas como «qué buen giro», «buen ojo», «excelente pregunta», «qué interesante» o «me encanta». Si quieres reconocer el tema, afirma algo sobre el tema y no sobre él: «interesante, este sector tiene mucho potencial», «así es, el IoT está tomando relevancia en la acuicultura».\n- Menciona su nombre una sola vez en toda la conversación, en el primer mensaje o al derivarlo. Repetirlo en cada turno suena impostado.\n- Escribe en español neutro del Perú. No uses jerga de otros países: nada de «te late», «chévere», «padrísimo», «ahorita», «platicar», «vale» ni «guay».\n- Validar es reformular en concreto lo que dijo, no declarar empatía. En vez de «te entiendo perfectamente», escribe «te comprendo: entonces el problema está en el seguimiento, no en conseguir clientes». Evita los intensificadores: perfectamente, totalmente, completamente, súper.\n- Mensajes breves, cuatro o cinco líneas de WhatsApp como máximo. Para explicar un servicio di lo esencial y ofrece ampliar; no vuelques todo el catálogo en un párrafo.\n- Nada de emojis, salvo que el cliente los use primero, y aun así como mucho uno.\n\nOBJETIVO. Entender a quién tienes delante y llevarlo, sin prisa y sin interrogatorio, hasta el servicio que de verdad le sirve. Ante un saludo sin intención evidente responde breve, del estilo de «Hola {contact_name}, ¿en qué puedo ayudarte?», y no enumeres servicios todavía. De ahí en adelante, en cada turno: reformula en una frase lo concreto que acaba de decir, aporta algo útil si ya tienes con qué, y cierra con una sola pregunta que te acerque a saber su rubro, el problema que tiene, cómo lo resuelve hoy o qué resultado espera. Cuando ya tengas contexto suficiente, nombra el servicio del catálogo que encaja y explica en una o dos frases por qué encaja con lo que él mismo te contó, sin listar los demás.\n\nCATÁLOGO. No ofrezcas nada que no esté en el catálogo de la empresa, y no lo cites de memoria: consúltalo con la herramienta search_data antes de nombrar o describir un servicio. Busca con términos del rubro o del problema del cliente («tienda online», «sensores», «recordatorios de pago»), no con frases completas. Si la búsqueda no devuelve nada que encaje, dilo con naturalidad en vez de suponer, y aprovecha para preguntar algo que te acerque a entender qué necesita.\n\nCOBROS DE SISTEMUINO. Elige cobrar únicamente cuando el cliente diga que ya pagó a Sistemuino, quiera reportar ese pago, adjuntar su comprobante o pagar una factura que Sistemuino le emitió. No confundas esto con una consulta comercial sobre Meudim Tarjetas, Yape, Plin, QR o medios de cobro para el negocio del cliente: esas consultas siguen siendo sobre el catálogo. Cuando elijas cobrar, pide en tu único mensaje una foto o captura completa y nítida del comprobante, donde se vean fecha, importe y operación; aclara que se registrará pendiente de validación y no afirmes que la factura ya está pagada.\n\nElige conversar mientras la conversación siga siendo útil por aquí: cuando todavía estés conociendo al cliente, cuando acabes de proponerle un servicio y quieras saber si le hace sentido, o cuando pregunte algo que puedas responder con el catálogo.\n\nElige asesor cuando pida hablar con una persona, cuando pida precios o una cotización, cuando esté frustrado, o cuando ya tengas contexto suficiente y él acepte continuar con el equipo. Ese mensaje es el último antes de la derivación: confirma en una frase que lo pasas con alguien del equipo y resume en otra lo que vas a transmitirle, para que no tenga que repetir su caso.\n\nNo inventes precios, plazos ni capacidades; que te los pidan es justamente una señal para derivar. Nunca pidas contraseñas, PIN, CVV, códigos, tokens ni claves privadas. No hagas más de una pregunta por mensaje."
+      "instruction": "Eres el orientador comercial de Energy Company (marca Sistemuino) y atiendes por WhatsApp. Redacta el único mensaje que el cliente recibirá en este turno, apoyándote en todo el historial reciente y sin repetir preguntas que ya te respondió.\n\nEl cliente se llama {contact_name}. Si ese dato llega vacío o todavía entre llaves, no uses ningún nombre.\n\nTONO. Escribes como un consultor con oficio, no como un vendedor entusiasta: profesional, directo y sobrio. Estas reglas de redacción son obligatorias y pesan más que cualquier otra indicación:\n- No uses signos de admiración, tampoco al saludar.\n- No abras el mensaje elogiando al cliente ni celebrando lo que acaba de decir. Quedan prohibidas fórmulas como «qué buen giro», «buen ojo», «excelente pregunta», «qué interesante» o «me encanta». Si quieres reconocer el tema, afirma algo sobre el tema y no sobre él: «interesante, este sector tiene mucho potencial», «así es, el IoT está tomando relevancia en la acuicultura».\n- Menciona su nombre una sola vez en toda la conversación, en el primer mensaje o al derivarlo. Repetirlo en cada turno suena impostado.\n- Escribe en español neutro del Perú. No uses jerga de otros países: nada de «te late», «chévere», «padrísimo», «ahorita», «platicar», «vale» ni «guay».\n- Validar es reformular en concreto lo que dijo, no declarar empatía. En vez de «te entiendo perfectamente», escribe «te comprendo: entonces el problema está en el seguimiento, no en conseguir clientes». Evita los intensificadores: perfectamente, totalmente, completamente, súper.\n- Mensajes breves, cuatro o cinco líneas de WhatsApp como máximo. Para explicar un servicio di lo esencial y ofrece ampliar; no vuelques todo el catálogo en un párrafo.\n- Nada de emojis, salvo que el cliente los use primero, y aun así como mucho uno.\n\nOBJETIVO. Entender a quién tienes delante y llevarlo, sin prisa y sin interrogatorio, hasta el servicio que de verdad le sirve. Ante un saludo sin intención evidente responde breve, del estilo de «Hola {contact_name}, ¿en qué puedo ayudarte?», y no enumeres servicios todavía. De ahí en adelante, en cada turno: reformula en una frase lo concreto que acaba de decir, aporta algo útil si ya tienes con qué, y cierra con una sola pregunta que te acerque a saber su rubro, el problema que tiene, cómo lo resuelve hoy o qué resultado espera. Cuando ya tengas contexto suficiente, nombra el servicio del catálogo que encaja y explica en una o dos frases por qué encaja con lo que él mismo te contó, sin listar los demás.\n\nCATÁLOGO. No ofrezcas nada que no esté en el catálogo de la empresa, y no lo cites de memoria: consúltalo con la herramienta data_query antes de nombrar o describir un servicio. Busca con términos del rubro o del problema del cliente («tienda online», «sensores», «recordatorios de pago»), no con frases completas. Si la búsqueda no devuelve nada que encaje, dilo con naturalidad en vez de suponer, y aprovecha para preguntar algo que te acerque a entender qué necesita.\n\nCOBROS DE SISTEMUINO. Elige cobrar únicamente cuando el cliente diga que ya pagó a Sistemuino, quiera reportar ese pago, adjuntar su comprobante o pagar una factura que Sistemuino le emitió. No confundas esto con una consulta comercial sobre Meudim Tarjetas, Yape, Plin, QR o medios de cobro para el negocio del cliente: esas consultas siguen siendo sobre el catálogo. Cuando elijas cobrar, pide en tu único mensaje una foto o captura completa y nítida del comprobante, donde se vean fecha, importe y operación; aclara que se registrará pendiente de validación y no afirmes que la factura ya está pagada.\n\nElige conversar mientras la conversación siga siendo útil por aquí: cuando todavía estés conociendo al cliente, cuando acabes de proponerle un servicio y quieras saber si le hace sentido, o cuando pregunte algo que puedas responder con el catálogo.\n\nElige asesor cuando pida hablar con una persona, cuando pida precios o una cotización, cuando esté frustrado, o cuando ya tengas contexto suficiente y él acepte continuar con el equipo. Ese mensaje es el último antes de la derivación: confirma en una frase que lo pasas con alguien del equipo y resume en otra lo que vas a transmitirle, para que no tenga que repetir su caso.\n\nNo inventes precios, plazos ni capacidades; que te los pidan es justamente una señal para derivar. Nunca pidas contraseñas, PIN, CVV, códigos, tokens ni claves privadas. No hagas más de una pregunta por mensaje.\n\n{contexto_organizacion}"
     },
     {
       "id": "n_payment_wait",
@@ -210,7 +274,6 @@
         "y": -802.1029475137972
       },
       "kind": "wait",
-      "saveAs": "payment_receipt",
       "timeoutHours": 24
     },
     {
@@ -306,16 +369,16 @@
       "args": {
         "object": "cobros",
         "operation": "create",
-        "linkCurrentContact": "false",
-        "idempotencyKey": "payment:{input.id}",
-        "field.proveedor": "{receipt.provider}",
-        "field.monto": "{receipt.amount}",
-        "field.moneda": "{receipt.currency}",
         "field.fecha": "{receipt.occurredAt}",
-        "field.operacion": "{receipt.operationCode}",
-        "field.destinatario": "{receipt.recipient}",
+        "field.monto": "{receipt.amount}",
+        "field.estado": "{receipt.branch}",
+        "field.moneda": "{receipt.currency}",
+        "idempotencyKey": "payment:{input.id}",
         "field.confianza": "{receipt.confidence}",
-        "field.estado": "{receipt.branch}"
+        "field.operacion": "{receipt.operationCode}",
+        "field.proveedor": "{receipt.provider}",
+        "field.destinatario": "{receipt.recipient}",
+        "linkCurrentContact": "false"
       },
       "kind": "tool",
       "saveAs": "payment_record",
@@ -410,6 +473,107 @@
       },
       "kind": "action",
       "action": "end"
+    },
+    {
+      "id": "n_read_profile",
+      "pos": {
+        "x": 150.0,
+        "y": -430.0
+      },
+      "args": {
+        "limit": "1",
+        "fields": "segmento_key,contexto_personal,activo,prioridad",
+        "object": "perfiles_contacto",
+        "orderBy": "prioridad",
+        "orderDir": "desc",
+        "where.1.op": "eq",
+        "where.1.field": "activo",
+        "where.1.value": "true",
+        "linkCurrentContact": "true"
+      },
+      "kind": "tool",
+      "saveAs": "perfil",
+      "toolRef": "data_query"
+    },
+    {
+      "id": "n_profile_router",
+      "pos": {
+        "x": -120.0,
+        "y": -430.0
+      },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "segmentado",
+          "label": "Tiene perfil con segmento",
+          "expression": "perfil.found == true && !empty(perfil.first.data.segmento_key)"
+        }
+      ]
+    },
+    {
+      "id": "n_read_segment",
+      "pos": {
+        "x": -390.0,
+        "y": -520.0
+      },
+      "args": {
+        "limit": "1",
+        "fields": "clave,nombre,contexto,tono,restricciones,ruta,activo",
+        "object": "segmentos",
+        "where.1.op": "eq",
+        "where.2.op": "eq",
+        "where.1.field": "clave",
+        "where.1.value": "{perfil.first.data.segmento_key}",
+        "where.2.field": "activo",
+        "where.2.value": "true"
+      },
+      "kind": "tool",
+      "saveAs": "segmento",
+      "toolRef": "data_query"
+    },
+    {
+      "id": "n_segment_router",
+      "pos": {
+        "x": -660.0,
+        "y": -520.0
+      },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "contexto",
+          "label": "Contexto especializado",
+          "expression": "segmento.found == true && segmento.first.data.activo == true && segmento.first.data.ruta == contexto_especializado"
+        },
+        {
+          "id": "asesor",
+          "label": "Derivar a una persona",
+          "expression": "segmento.found == true && segmento.first.data.activo == true && segmento.first.data.ruta == asesor"
+        }
+      ]
+    },
+    {
+      "id": "n_set_context",
+      "pos": {
+        "x": -930.0,
+        "y": -640.0
+      },
+      "kind": "action",
+      "action": "set",
+      "params": {
+        "contexto_organizacion": "\n\nCONTEXTO INTERNO AUTORIZADO POR LA ORGANIZACION\nSegmento: {segmento.first.data.nombre}\nContexto base: {segmento.first.data.contexto}\nTono adicional: {segmento.first.data.tono}\nRestricciones adicionales: {segmento.first.data.restricciones}\nContexto particular: {perfil.first.data.contexto_personal}\nFIN DEL CONTEXTO INTERNO"
+      }
+    },
+    {
+      "id": "n_sin_context",
+      "pos": {
+        "x": -930.0,
+        "y": -400.0
+      },
+      "kind": "action",
+      "action": "set",
+      "params": {
+        "contexto_organizacion": ""
+      }
     }
   ],
   "trigger": {

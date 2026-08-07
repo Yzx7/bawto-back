@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/Yzx7/sacs-chatbots/channels"
@@ -61,6 +62,8 @@ func (con *Controller) agentTooling(ctx context.Context, bot *models.BotChannel,
 
 	exec := func(ctx context.Context, name string, input json.RawMessage) (string, error) {
 		switch name {
+		case "data_query":
+			return con.execAgentDataQuery(ctx, bot, config[name], input)
 		case "search_data":
 			return con.execSearchData(ctx, bot, config[name], input)
 		default:
@@ -103,6 +106,73 @@ func (con *Controller) execSearchData(ctx context.Context, bot *models.BotChanne
 	return b.String(), nil
 }
 
+// execAgentDataQuery es la misma lectura que usa el grafo, con una diferencia de
+// confianza: aquí los argumentos los redacta el modelo, así que el alcance se
+// impone antes de consultar. El objeto viene del bloque; los campos por los que
+// puede filtrar también. Un campo que el autor no listó no se rechaza con un
+// error técnico: se le dice al modelo por qué no vale, que es lo que le permite
+// reintentar bien en vez de repetir la misma llamada.
+func (con *Controller) execAgentDataQuery(ctx context.Context, bot *models.BotChannel, config map[string]string, input json.RawMessage) (string, error) {
+	objectKey := strings.TrimSpace(config["object"])
+	if objectKey == "" {
+		return "", fmt.Errorf("la herramienta no tiene objeto de datos configurado")
+	}
+	var args struct {
+		Query   string `json:"query"`
+		Filters []struct {
+			Field string `json:"field"`
+			Op    string `json:"op"`
+			Value string `json:"value"`
+		} `json:"filters"`
+	}
+	if err := json.Unmarshal(input, &args); err != nil {
+		return "", fmt.Errorf("argumentos inválidos")
+	}
+
+	allowed := splitList(config["filterFields"])
+	rules := make([]models.DataQueryRule, 0, len(args.Filters))
+	for _, filter := range args.Filters {
+		field := strings.TrimSpace(filter.Field)
+		if !containsString(allowed, field) {
+			if len(allowed) == 0 {
+				return "Esta herramienta no admite filtros por campo. Vuelve a llamarla usando solo `query`.", nil
+			}
+			return fmt.Sprintf("No puedes filtrar por %q. Campos permitidos: %s.",
+				field, strings.Join(allowed, ", ")), nil
+		}
+		op := strings.TrimSpace(filter.Op)
+		if op != "eq" && op != "contains" && op != "in" {
+			return fmt.Sprintf("El operador %q no está permitido. Usa eq, contains o in.", op), nil
+		}
+		rules = append(rules, models.DataQueryRule{Field: field, Op: op, Value: filter.Value})
+	}
+
+	limit := maxSearchResults
+	if raw := strings.TrimSpace(config["maxLimit"]); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	result, err := models.QueryDataRecords(ctx, con.Env.Postgres, models.DataQueryInput{
+		OrgID: bot.OrgID, ObjectKey: objectKey, Fields: splitList(config["fields"]),
+		Where: rules, Text: args.Query, Limit: limit,
+	})
+	if err != nil {
+		return "", err
+	}
+	if !result.Found {
+		// Se le dice explícitamente que no hay nada, en vez de devolver vacío: un
+		// resultado en blanco invita a rellenar el hueco inventando.
+		return fmt.Sprintf("Sin resultados en %s. No hay información registrada sobre eso.", objectKey), nil
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d resultado(s) en %s:\n", result.Count, objectKey)
+	for i, record := range result.Records {
+		fmt.Fprintf(&b, "\n%d. %s", i+1, renderValues(record.Data))
+	}
+	return b.String(), nil
+}
+
 // renderRecord aplana el JSON del registro a `clave: valor` en orden estable. Se
 // entrega como texto y no como JSON crudo porque el modelo lo lee mejor y porque
 // así no se le enseña la forma interna de la tabla.
@@ -111,6 +181,10 @@ func renderRecord(raw json.RawMessage) string {
 	if json.Unmarshal(raw, &values) != nil {
 		return string(raw)
 	}
+	return renderValues(values)
+}
+
+func renderValues(values map[string]any) string {
 	keys := make([]string, 0, len(values))
 	for key := range values {
 		keys = append(keys, key)

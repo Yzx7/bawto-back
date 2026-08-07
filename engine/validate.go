@@ -312,8 +312,13 @@ func validateNode(n *Node, triggerType string) error {
 		if len(n.Tools) > 0 {
 			return fmt.Errorf("`tools` es del bloque agente; este ejecuta una sola herramienta con `toolRef`")
 		}
-		if n.ToolRef == "data_mutate" {
+		switch n.ToolRef {
+		case "data_mutate":
 			if err := validateDataMutateArgs(n.Args); err != nil {
+				return err
+			}
+		case "data_query":
+			if err := validateDataQueryArgs(n.Args); err != nil {
 				return err
 			}
 		}
@@ -395,6 +400,87 @@ func validateAgentOutput(n *Node) error {
 		}
 	}
 	return nil
+}
+
+// dataQueryRuleRe reconoce `where.<n>.<parte>` con n de 1 a 8. El índice se
+// limita aquí y no en el ejecutor porque un flujo publicado ya no debe poder
+// crecer sin pasar por el validador.
+var dataQueryRuleRe = regexp.MustCompile(`^where\.([1-8])\.(field|op|value)$`)
+
+// validateDataQueryArgs distingue lo que el autor fija de lo que el runtime
+// interpola. `object`, `fields`, `orderBy` y cada `where.<n>.field`/`op` no
+// pueden contener `{`: si el mensaje del cliente pudiera elegir tabla, campo u
+// operador, el aislamiento por organización sería lo único que quedaría en pie.
+// Los `value` sí son interpolables; ahí está toda la utilidad del bloque.
+func validateDataQueryArgs(args map[string]string) error {
+	object := strings.TrimSpace(args["object"])
+	if object == "" || strings.Contains(object, "{") {
+		return fmt.Errorf("data_query requiere un objeto fijo elegido por el autor")
+	}
+	for _, key := range []string{"fields", "orderBy"} {
+		if strings.Contains(args[key], "{") {
+			return fmt.Errorf("data_query no admite variables en %s", key)
+		}
+	}
+	if dir := strings.TrimSpace(args["orderDir"]); dir != "" && dir != "asc" && dir != "desc" {
+		return fmt.Errorf("data_query orderDir debe ser asc o desc")
+	}
+	if raw := strings.TrimSpace(args["limit"]); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > 50 {
+			return fmt.Errorf("data_query limit debe ser un número entre 1 y 50")
+		}
+	}
+	if raw := strings.TrimSpace(args["linkCurrentContact"]); raw != "" {
+		if _, err := strconv.ParseBool(raw); err != nil {
+			return fmt.Errorf("data_query linkCurrentContact debe ser true o false")
+		}
+	}
+
+	allowed := map[string]bool{
+		"object": true, "fields": true, "orderBy": true, "orderDir": true,
+		"limit": true, "linkCurrentContact": true,
+	}
+	rules := map[string]bool{}
+	for key := range args {
+		if allowed[key] {
+			continue
+		}
+		match := dataQueryRuleRe.FindStringSubmatch(key)
+		if match == nil {
+			return fmt.Errorf("data_query no admite el argumento %q", key)
+		}
+		if match[2] == "field" {
+			rules[match[1]] = true
+		}
+	}
+	for key, value := range args {
+		match := dataQueryRuleRe.FindStringSubmatch(key)
+		if match == nil || match[2] == "value" {
+			continue
+		}
+		if strings.TrimSpace(value) == "" || strings.Contains(value, "{") {
+			return fmt.Errorf("data_query requiere un %s fijo en la condición %s", match[2], match[1])
+		}
+		if match[2] == "op" && !validDataQueryOp(value) {
+			return fmt.Errorf("data_query no admite el operador %q", value)
+		}
+		if !rules[match[1]] {
+			return fmt.Errorf("la condición %s de data_query no declara campo", match[1])
+		}
+	}
+	return nil
+}
+
+// validDataQueryOp espeja models.DataQueryOperators. Se duplica la lista porque
+// `engine` no puede importar `models` —es `models` quien importa `engine`—; la
+// prueba de coherencia vive del lado que sí ve ambos paquetes.
+func validDataQueryOp(op string) bool {
+	switch strings.TrimSpace(op) {
+	case "eq", "neq", "lt", "lte", "gt", "gte", "contains", "in", "exists":
+		return true
+	}
+	return false
 }
 
 func validateDataMutateArgs(args map[string]string) error {

@@ -123,6 +123,80 @@ var registry = map[string]Spec{
 		ForGraph: false,
 	},
 
+	"data_query": {
+		Name:  "data_query",
+		Label: "Leer una tabla",
+		Help: "Consulta los registros de un objeto de datos con filtros, orden y límite fijados en el bloque. " +
+			"Devuelve `found`, `count`, `first` y la lista completa.",
+		Description: "Consulta la información registrada de la empresa. Úsala antes de afirmar " +
+			"detalles sobre servicios, productos, precios o condiciones: es la fuente de verdad " +
+			"y evita inventar. Si no devuelve resultados, dilo en vez de suponer.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{
+					"type": "string",
+					"description": "Palabras a buscar, en español. Usa términos del dominio " +
+						"(por ejemplo «tienda online» o «sensores»), no frases completas.",
+				},
+				"filters": map[string]any{
+					"type": "array",
+					"description": "Condiciones exactas sobre campos concretos. Omítelo si no " +
+						"conoces el nombre del campo: la búsqueda por texto ya cubre el caso normal.",
+					"maxItems": 4,
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"field": map[string]any{"type": "string", "description": "Clave del campo."},
+							"op": map[string]any{
+								"type":        "string",
+								"enum":        []string{"eq", "contains", "in"},
+								"description": "`in` compara contra una lista separada por comas.",
+							},
+							"value": map[string]any{"type": "string"},
+						},
+						"required":             []string{"field", "op", "value"},
+						"additionalProperties": false,
+					},
+				},
+			},
+			"additionalProperties": false,
+		},
+		Accepts:  []PayloadType{PayloadDataQuery},
+		Produces: PayloadDataRecords,
+		Config: []ConfigKey{
+			{
+				Key:      "object",
+				Label:    "Objeto de datos",
+				Help:     "Clave técnica del objeto en el que puede buscar. El modelo no puede salirse de él.",
+				Required: true,
+				Kind:     "data_object",
+			},
+			{
+				Key:   "fields",
+				Label: "Campos que puede ver",
+				Help:  "Claves separadas por coma. Vacío devuelve todos los campos del objeto.",
+				Kind:  "text",
+			},
+			{
+				Key:   "filterFields",
+				Label: "Campos por los que puede filtrar",
+				Help: "Claves separadas por coma. Vacío deja al modelo solo la búsqueda por texto; " +
+					"nunca puede filtrar por un campo que no esté aquí.",
+				Kind: "text",
+			},
+			{
+				Key:   "maxLimit",
+				Label: "Máximo de registros",
+				Help:  "Tope de resultados que vuelven al modelo. Por defecto 8.",
+				Kind:  "text",
+			},
+		},
+		Effect:   EffectRead,
+		ForAgent: true,
+		ForGraph: true,
+	},
+
 	"data_mutate": {
 		Name:  "data_mutate",
 		Label: "Guardar en una tabla",

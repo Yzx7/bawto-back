@@ -666,6 +666,8 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 		switch ref {
 		case "data_mutate":
 			return con.execDataMutate(ctx, bot, m.From, m.WaID, args)
+		case "data_query":
+			return con.execDataQuery(ctx, bot, m.From, args)
 		default:
 			return "", fmt.Errorf("herramienta %q no implementada", ref)
 		}

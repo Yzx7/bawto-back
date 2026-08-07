@@ -285,3 +285,74 @@ func TestValidateDataMutateRequiresSafeDeclarativeScope(t *testing.T) {
 		t.Fatalf("se esperaba rechazar objeto dinámico: %v", err)
 	}
 }
+
+// La frontera de data_query es asimétrica a propósito: los valores pueden venir
+// de una variable, el resto no. Si el objeto, el campo o el operador fueran
+// interpolables, un mensaje del cliente podría elegir qué tabla se lee.
+func TestValidateDataQuerySeparaConfiguracionDeValores(t *testing.T) {
+	base := func(args map[string]string) *Flow {
+		return &Flow{ID: "f", Name: "F", Trigger: Trigger{Type: "message", Match: "any"}, Nodes: []Node{
+			{ID: "read", Kind: "tool", ToolRef: "data_query", Args: args},
+			{ID: "ok", Kind: "action", Action: "end"}, {ID: "error", Kind: "action", Action: "end"},
+		}, Edges: []Edge{
+			{ID: "start", Source: "trigger", Target: "read"},
+			{ID: "ok", Source: "read", SourceHandle: "ok", Target: "ok"},
+			{ID: "error", Source: "read", SourceHandle: "error", Target: "error"},
+		}}
+	}
+
+	valid := base(map[string]string{
+		"object": "segmentos", "fields": "clave,contexto,ruta",
+		"where.1.field": "clave", "where.1.op": "eq", "where.1.value": "{perfil.first.data.segmento_key}",
+		"where.2.field": "activo", "where.2.op": "eq", "where.2.value": "true",
+		"orderBy": "prioridad", "orderDir": "desc", "limit": "1",
+	})
+	if err := Validate(valid); err != nil {
+		t.Fatalf("data_query válido rechazado: %v", err)
+	}
+
+	// Un bloque sin condiciones lee la tabla entera acotada por limit; es legítimo.
+	if err := Validate(base(map[string]string{"object": "servicios", "limit": "5"})); err != nil {
+		t.Fatalf("data_query sin condiciones rechazado: %v", err)
+	}
+
+	for name, tc := range map[string]struct {
+		args map[string]string
+		want string
+	}{
+		"objeto dinámico": {
+			map[string]string{"object": "{input.text}"}, "objeto fijo",
+		},
+		"campo dinámico": {
+			map[string]string{"object": "s", "where.1.field": "{input.text}", "where.1.value": "x"}, "field fijo",
+		},
+		"operador dinámico": {
+			map[string]string{"object": "s", "where.1.field": "clave", "where.1.op": "{input.text}", "where.1.value": "x"}, "op fijo",
+		},
+		"operador inventado": {
+			map[string]string{"object": "s", "where.1.field": "clave", "where.1.op": "regex", "where.1.value": "x"}, "operador",
+		},
+		"campos dinámicos": {
+			map[string]string{"object": "s", "fields": "{input.text}"}, "variables en fields",
+		},
+		"argumento desconocido": {
+			map[string]string{"object": "s", "sql": "SELECT 1"}, "no admite el argumento",
+		},
+		"condición sin campo": {
+			map[string]string{"object": "s", "where.1.op": "eq", "where.1.value": "x"}, "no declara campo",
+		},
+		"índice fuera de rango": {
+			map[string]string{"object": "s", "where.9.field": "clave"}, "no admite el argumento",
+		},
+		"limit fuera de rango": {
+			map[string]string{"object": "s", "limit": "500"}, "entre 1 y 50",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := Validate(base(tc.args))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("esperaba %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
