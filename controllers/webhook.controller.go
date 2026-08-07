@@ -279,27 +279,60 @@ func (con *Controller) handleEchoes(ctx context.Context, body []byte) {
 		if err != nil || bot == nil {
 			continue
 		}
-		// Si ya lo teníamos guardado, el mensaje salió del bot: nada que hacer.
-		if exists, err := models.MessageExists(ctx, pool, e.WaID); err != nil || exists {
-			continue
-		}
+		// El chat se resuelve antes que nada porque hace falta su id para tomar
+		// el lock: la decisión de si el eco es humano no puede tomarse sin él.
 		chatID, err := models.UpsertChat(ctx, pool, bot.ID, e.To, "")
 		if err != nil {
 			continue
 		}
-		// Se guarda y se publica para que la bandeja muestre lo que el agente
-		// escribió desde el teléfono, no solo lo que sale del bot.
-		if saved, err := models.InsertOutboundMessage(ctx, pool, chatID, e.WaID, e.Type, e.Text); err == nil && saved != nil {
-			con.publishChat(ctx, "message", bot.ID, chatID, saved)
-			con.reconcileStatusEvents(ctx, e.WaID)
-		}
-		if err := models.HandoffChat(ctx, pool, chatID, handoffWindow); err != nil {
-			con.whatsAppLogger().Error("handoff por eco", "chat", chatID, "err", err.Error())
-			continue
-		}
-		con.whatsAppLogger().Info("humano tomó el chat desde la app (coexistence)", "chat", chatID)
-		con.publishMode(ctx, bot.ID, chatID)
+		con.applyEcho(ctx, bot, chatID, e)
 	}
+}
+
+// applyEcho decide si un eco lo escribió una persona y, en ese caso, silencia al
+// bot. Corre bajo el **mismo** advisory lock por chat que protege el envío del
+// motor, y de ahí que esté en su propia función: así el lock se libera por todos
+// los caminos de salida.
+//
+// El lock no es una precaución teórica. La respuesta del bot se manda a Meta y
+// solo después se guarda su wa_id, así que hay un hueco en el que `MessageExists`
+// diría que el mensaje no es nuestro. Un eco que cayera ahí haría que el bot se
+// diese handoff a sí mismo y se callara 12 h sin un solo error en el log.
+// Esperar al lock convierte esa carrera en una espera de milisegundos.
+func (con *Controller) applyEcho(ctx context.Context, bot *models.BotChannel, chatID string, e whatsapp.Echo) {
+	pool := con.Env.Postgres
+	lockConn, err := pool.Acquire(ctx)
+	if err != nil {
+		con.whatsAppLogger().Error("eco: no se pudo tomar conexión", "chat", chatID, "err", err.Error())
+		return
+	}
+	defer lockConn.Release()
+	if _, err := lockConn.Exec(ctx, `SELECT pg_advisory_lock(hashtextextended($1,0))`, chatID); err != nil {
+		// Se descarta en vez de seguir sin lock: procesarlo aquí es exactamente
+		// la carrera que esta función existe para evitar.
+		con.whatsAppLogger().Error("eco: no se pudo tomar el lock del chat", "chat", chatID, "err", err.Error())
+		return
+	}
+	// Contexto propio: el unlock debe ocurrir aunque ctx ya esté cancelado, o la
+	// conexión volvería al pool con el lock puesto.
+	defer lockConn.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1,0))`, chatID)
+
+	// Si ya lo teníamos guardado, el mensaje salió del bot: nada que hacer.
+	if exists, err := models.MessageExists(ctx, pool, e.WaID); err != nil || exists {
+		return
+	}
+	// Se guarda y se publica para que la bandeja muestre lo que el agente
+	// escribió desde el teléfono, no solo lo que sale del bot.
+	if saved, err := models.InsertOutboundMessage(ctx, pool, chatID, e.WaID, e.Type, e.Text); err == nil && saved != nil {
+		con.publishChat(ctx, "message", bot.ID, chatID, saved)
+		con.reconcileStatusEvents(ctx, e.WaID)
+	}
+	if err := models.HandoffChat(ctx, pool, chatID, handoffWindow); err != nil {
+		con.whatsAppLogger().Error("handoff por eco", "chat", chatID, "err", err.Error())
+		return
+	}
+	con.whatsAppLogger().Info("humano tomó el chat desde la app (coexistence)", "chat", chatID)
+	con.publishMode(ctx, bot.ID, chatID)
 }
 
 // runFlowOrEcho ejecuta el motor si el bot tiene flujo (trigger message); si no, eco.
