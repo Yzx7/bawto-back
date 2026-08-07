@@ -47,6 +47,9 @@ func TestRutasDeLaInterfazOperativaRegistradas(t *testing.T) {
 		http.MethodGet + " /orgs/:orgId/costs",
 		http.MethodGet + " /orgs/:orgId/billing",
 		http.MethodGet + " /orgs/:orgId/billing/statements/:statementId",
+		// Comparte prefijo con GET /bots/:botId/channel: si alguien registrara
+		// `/channel/:algo` antes, esta dejaría de existir sin avisar.
+		http.MethodGet + " /bots/:botId/channel/health",
 	}
 	for _, ruta := range esperadas {
 		if !paths[ruta] {

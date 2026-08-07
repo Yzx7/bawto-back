@@ -61,6 +61,8 @@ func (con *Controller) processWhatsApp(body []byte) {
 	con.handleTemplateEvents(ctx, body)
 	con.handleStatuses(ctx, body)
 	con.handleEchoes(ctx, body)
+	con.handleAccountEvents(ctx, body)
+	con.warnUnhandledFields(body)
 
 	msgs, err := whatsapp.Parse(body)
 	if err != nil {
@@ -223,6 +225,94 @@ func (con *Controller) handleTemplateEvents(ctx context.Context, body []byte) {
 		}
 	}
 }
+
+// handleAccountEvents conserva y aplica la salud del canal: restricciones,
+// infracciones, calidad del número, límite de mensajería, revisión de la cuenta
+// y aprobación del nombre para mostrar.
+//
+// Los seis campos llevaban suscritos en Meta desde el alta de la app **sin
+// receptor**: llegaban y se descartaban. Con Coexistence eso significaba que una
+// desconexión del teléfono solo se notaba porque dejaban de entrar mensajes.
+func (con *Controller) handleAccountEvents(ctx context.Context, body []byte) {
+	events, err := whatsapp.ParseAccountEvents(body)
+	if err != nil || len(events) == 0 {
+		return
+	}
+	for _, event := range events {
+		applied, err := models.StoreAndApplyAccountEvent(ctx, con.Env.Postgres, event)
+		if err != nil {
+			con.whatsAppLogger().Error("wa account event", "field", event.Field,
+				"waba", event.WabaID, "err", err.Error())
+			continue
+		}
+		if !applied {
+			continue
+		}
+		// El nivel del log sigue a la severidad para que un `grep level=ERROR`
+		// encuentre una restricción sin tener que saber qué campo la trae.
+		log := con.whatsAppLogger()
+		args := []any{"field", event.Field, "waba", event.WabaID,
+			"phone", event.PhoneNumberID, "event", event.Event,
+			"limit", event.MessagingLimit, "decision", event.Decision}
+		switch event.Severity {
+		case whatsapp.SeverityCritical:
+			log.Error("salud del canal: evento crítico", args...)
+		case whatsapp.SeverityWarning:
+			log.Warn("salud del canal", args...)
+		default:
+			log.Info("salud del canal", args...)
+		}
+	}
+}
+
+// warnUnhandledFields deja constancia de todo campo suscrito que ningún parser
+// reclama. Sin esto no hay forma de saber qué se está perdiendo: el webhook
+// responde 200, el log dice "webhook recibido" con el tamaño en bytes y ahí
+// muere. Fue justo lo que ocultó durante semanas seis campos sin receptor.
+//
+// No se vuelca el `value`: puede traer teléfono, nombre y texto del cliente, y
+// los logs no son el sitio. La carga íntegra va a channel_account_events, que
+// está en Postgres y bajo la organización dueña.
+func (con *Controller) warnUnhandledFields(body []byte) {
+	var payload struct {
+		Entry []struct {
+			Changes []struct {
+				Field string          `json:"field"`
+				Value json.RawMessage `json:"value"`
+			} `json:"changes"`
+		} `json:"entry"`
+	}
+	if json.Unmarshal(body, &payload) != nil {
+		return
+	}
+	for _, entry := range payload.Entry {
+		for _, change := range entry.Changes {
+			if change.Field == "" || handledWebhookFields[change.Field] {
+				continue
+			}
+			con.whatsAppLogger().Warn("campo de webhook sin receptor: se descarta",
+				"field", change.Field, "bytes", len(change.Value))
+		}
+	}
+}
+
+// handledWebhookFields son los campos que algún parser reclama. Añadir un
+// receptor obliga a añadirlo aquí; si no, warnUnhandledFields lo denunciará en
+// cada evento, que es exactamente el recordatorio que se busca.
+var handledWebhookFields = func() map[string]bool {
+	fields := map[string]bool{
+		"messages":                        true, // entrantes + estados de entrega
+		"smb_message_echoes":              true,
+		"message_echoes":                  true, // no suscrito; el parser lo aceptaría
+		"message_template_status_update":  true,
+		"message_template_quality_update": true,
+		"template_category_update":        true,
+	}
+	for field := range whatsapp.AccountFields {
+		fields[field] = true
+	}
+	return fields
+}()
 
 // handleStatuses persiste primero el evento y luego intenta reconciliarlo. Si
 // el status ganó la carrera al INSERT del mensaje, queda pendiente sin perderse.

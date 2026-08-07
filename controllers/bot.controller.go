@@ -191,6 +191,33 @@ func (con *Controller) GetBotChannel(c *fiber.Ctx) error {
 	return con.ok(c, "ok", info)
 }
 
+// GET /bots/:botId/channel/health — salud del canal proyectada desde los eventos
+// de cuenta de Meta, más el historial reciente.
+//
+// Va aparte de GET /channel a propósito, aunque respondan sobre lo mismo: aquel
+// consulta el número en Meta en vivo y devuelve 502 si el token venció. La salud
+// tiene que poder leerse **justo cuando Meta no responde**, que es cuando hace
+// falta. Sale entera de Postgres.
+func (con *Controller) GetBotChannelHealth(c *fiber.Ctx) error {
+	bot, err := con.botWithRole(c, c.Params("botId"), "owner", "admin", "member")
+	if err != nil {
+		return con.failErr(c, err)
+	}
+	if bot.WabaID == nil || *bot.WabaID == "" {
+		return con.ok(c, "el bot no tiene WABA asociado", nil)
+	}
+	health, err := models.GetChannelHealth(c.Context(), con.Env.Postgres, *bot.WabaID)
+	if err != nil {
+		return con.fail(c, fiber.StatusInternalServerError, "no se pudo leer la salud del canal")
+	}
+	events, err := models.ListChannelAccountEvents(c.Context(), con.Env.Postgres, *bot.WabaID,
+		c.Query("onlyProblems") == "true", c.QueryInt("limit", 50))
+	if err != nil {
+		return con.fail(c, fiber.StatusInternalServerError, "no se pudo leer el historial del canal")
+	}
+	return con.ok(c, "ok", fiber.Map{"health": health, "events": events})
+}
+
 // POST /bots/:botId/channel/embedded conecta el canal via Embedded Signup de Meta.
 // Cloud API registra el numero; Coexistence conserva el registro de la app movil.
 func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {

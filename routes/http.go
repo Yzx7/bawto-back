@@ -94,6 +94,7 @@ func RegisterHTTP(app *fiber.App, e *env.Env) {
 	bots.Post("/:botId/flow-runs/:runId/retry", con.RetryBotFlowRun)
 	bots.Post("/:botId/flow-runs/:runId/cancel", con.CancelBotFlowRun)
 	bots.Get("/:botId/channel", con.GetBotChannel)
+	bots.Get("/:botId/channel/health", con.GetBotChannelHealth)
 	bots.Put("/:botId/channel", con.ConnectBotChannel)
 	bots.Post("/:botId/channel/embedded", con.ConnectBotChannelEmbedded)
 	bots.Post("/:botId/channel/register", con.RegisterBotChannel)

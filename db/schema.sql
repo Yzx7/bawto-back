@@ -301,6 +301,55 @@ CREATE TABLE IF NOT EXISTS channel_template_events (
 CREATE INDEX IF NOT EXISTS idx_channel_template_events_waba
     ON channel_template_events (waba_id, occurred_at DESC);
 
+-- SALUD DE CUENTA ----------------------------------------------
+-- Mismo patrón que las plantillas —bitácora inmutable + proyección del estado—
+-- aplicado a los seis campos de webhook que describen el canal: account_update,
+-- phone_number_quality_update, account_alerts, account_review_update, security y
+-- phone_number_name_update. No hay una tabla por campo: todos responden a la
+-- misma pregunta, ¿en qué estado está el canal de este bot?
+-- Espejo de db/migrations/016_channel_account_events.sql.
+CREATE TABLE IF NOT EXISTS channel_account_events (
+    id              BIGSERIAL   PRIMARY KEY,
+    event_key       TEXT        NOT NULL UNIQUE,
+    waba_id         TEXT        NOT NULL,
+    phone_number_id TEXT,                                 -- nulo en eventos de cuenta
+    field           TEXT        NOT NULL,
+    severity        TEXT        NOT NULL DEFAULT 'warning',
+    occurred_at     TIMESTAMPTZ NOT NULL,
+    payload         JSONB       NOT NULL,                  -- el evento tal como llegó
+    applied_at      TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (jsonb_typeof(payload) = 'object'),
+    CHECK (severity IN ('info', 'warning', 'critical'))
+);
+CREATE INDEX IF NOT EXISTS idx_channel_account_events_waba
+    ON channel_account_events (waba_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_channel_account_events_problemas
+    ON channel_account_events (waba_id, occurred_at DESC)
+    WHERE severity <> 'info';
+
+-- Los nombres de columna describen su origen y no un vocabulario propio: los
+-- valores de Meta se guardan tal cual porque sus enums no están confirmados
+-- contra payloads reales.
+CREATE TABLE IF NOT EXISTS channel_health (
+    id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    waba_id             TEXT        NOT NULL,
+    phone_number_id     TEXT,
+    quality_event       TEXT,       -- phone_number_quality_update.event
+    messaging_limit     TEXT,       -- phone_number_quality_update.current_limit
+    account_event       TEXT,       -- account_update.event
+    review_decision     TEXT,       -- account_review_update.decision
+    name_decision       TEXT,       -- phone_number_name_update.decision
+    severity            TEXT        NOT NULL DEFAULT 'info',
+    last_event_field    TEXT,
+    last_event_at       TIMESTAMPTZ,                       -- guarda de orden
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE NULLS NOT DISTINCT (waba_id, phone_number_id),
+    CHECK (severity IN ('info', 'warning', 'critical'))
+);
+CREATE INDEX IF NOT EXISTS idx_channel_health_waba ON channel_health (waba_id);
+
 -- AGENTES IA REUTILIZABLES -------------------------------------
 -- Un nodo `agent` puede referenciar uno con `agentRef` en vez de repetir la
 -- instrucción: el agente aporta la base y el nodo le añade su dominio. Se
@@ -616,7 +665,7 @@ $$ LANGUAGE plpgsql;
 DO $$
 DECLARE t TEXT;
 BEGIN
-    FOREACH t IN ARRAY ARRAY['organizations','memberships','bots','chats','contacts','billing_records','contact_fields','audiences','data_objects','data_fields','data_records','data_views','flows']
+    FOREACH t IN ARRAY ARRAY['organizations','memberships','bots','chats','contacts','billing_records','contact_fields','audiences','data_objects','data_fields','data_records','data_views','flows','channel_health']
     LOOP
         EXECUTE format('DROP TRIGGER IF EXISTS trg_%1$s_updated_at ON %1$s;', t);
         EXECUTE format(
