@@ -158,6 +158,53 @@ func TestStoreAndApplyAccountEventSinNumero(t *testing.T) {
 	}
 }
 
+// Los payloads reales de Meta identifican el número por su display phone, no por
+// phone_number_id (comprobado el 2026-08-07 contra los eventos de prueba del
+// panel). Sin tratarlo, **dos números distintos colisionaban en la fila de la
+// cuenta** y se pisaban el estado mutuamente.
+func TestEventosDeDosNumerosNoColisionan(t *testing.T) {
+	pool := accountPool(t)
+	defer pool.Close()
+	ctx := context.Background()
+
+	waba := randID("waba_")
+	defer pool.Exec(ctx, `DELETE FROM channel_account_events WHERE waba_id=$1`, waba)
+	defer pool.Exec(ctx, `DELETE FROM channel_health WHERE waba_id=$1`, waba)
+
+	base := time.Now().UTC().Truncate(time.Second)
+	uno := evento(waba, "phone_number_quality_update", "FLAGGED", "TIER_1K", "", whatsapp.SeverityWarning, base)
+	uno.DisplayPhone = "16505551111"
+	dos := evento(waba, "phone_number_quality_update", "ONBOARDING", "TIER_250", "", whatsapp.SeverityInfo, base.Add(time.Second))
+	dos.DisplayPhone = "51999000222"
+
+	for _, e := range []whatsapp.AccountEvent{uno, dos} {
+		if applied, err := StoreAndApplyAccountEvent(ctx, pool, e); err != nil || !applied {
+			t.Fatalf("%s: applied=%v err=%v", e.DisplayPhone, applied, err)
+		}
+	}
+
+	rows, err := GetChannelHealth(ctx, pool, waba)
+	if err != nil {
+		t.Fatalf("GetChannelHealth: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("los dos números deberían ocupar filas distintas, got %d: %+v", len(rows), rows)
+	}
+	porNumero := map[string]ChannelHealth{}
+	for _, r := range rows {
+		if r.DisplayPhone == nil {
+			t.Fatalf("se perdió el número del evento: %+v", r)
+		}
+		porNumero[*r.DisplayPhone] = r
+	}
+	if h, ok := porNumero["16505551111"]; !ok || h.QualityEvent == nil || *h.QualityEvent != "FLAGGED" {
+		t.Fatalf("el primer número perdió su estado: %+v", porNumero)
+	}
+	if h, ok := porNumero["51999000222"]; !ok || h.QualityEvent == nil || *h.QualityEvent != "ONBOARDING" {
+		t.Fatalf("el segundo número perdió su estado: %+v", porNumero)
+	}
+}
+
 func healthDe(t *testing.T, ctx context.Context, pool *pgxpool.Pool, waba, phone string) ChannelHealth {
 	t.Helper()
 	rows, err := GetChannelHealth(ctx, pool, waba)

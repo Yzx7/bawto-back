@@ -312,7 +312,8 @@ CREATE TABLE IF NOT EXISTS channel_account_events (
     id              BIGSERIAL   PRIMARY KEY,
     event_key       TEXT        NOT NULL UNIQUE,
     waba_id         TEXT        NOT NULL,
-    phone_number_id TEXT,                                 -- nulo en eventos de cuenta
+    phone_number_id TEXT,                                 -- resuelto contra bots
+    display_phone   TEXT,                                 -- el número tal como lo escribe Meta
     field           TEXT        NOT NULL,
     severity        TEXT        NOT NULL DEFAULT 'warning',
     occurred_at     TIMESTAMPTZ NOT NULL,
@@ -335,6 +336,7 @@ CREATE TABLE IF NOT EXISTS channel_health (
     id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     waba_id             TEXT        NOT NULL,
     phone_number_id     TEXT,
+    display_phone       TEXT,       -- Meta identifica el número por aquí, no por id
     quality_event       TEXT,       -- phone_number_quality_update.event
     messaging_limit     TEXT,       -- phone_number_quality_update.current_limit
     account_event       TEXT,       -- account_update.event
@@ -345,10 +347,15 @@ CREATE TABLE IF NOT EXISTS channel_health (
     last_event_at       TIMESTAMPTZ,                       -- guarda de orden
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE NULLS NOT DISTINCT (waba_id, phone_number_id),
+    -- Los payloads reales no traen phone_number_id: sin `scope`, dos números
+    -- distintos colisionaban en la fila de la cuenta y se pisaban el estado.
+    scope               TEXT GENERATED ALWAYS AS
+        (COALESCE(NULLIF(phone_number_id, ''), NULLIF(display_phone, ''), '')) STORED,
     CHECK (severity IN ('info', 'warning', 'critical'))
 );
 CREATE INDEX IF NOT EXISTS idx_channel_health_waba ON channel_health (waba_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_health_scope
+    ON channel_health (waba_id, scope);
 
 -- AGENTES IA REUTILIZABLES -------------------------------------
 -- Un nodo `agent` puede referenciar uno con `agentRef` en vez de repetir la

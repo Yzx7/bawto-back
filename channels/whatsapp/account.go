@@ -37,11 +37,18 @@ var AccountFields = map[string]bool{
 // envíos de un cliente por una restricción que no existe —o no pausarlos por una
 // que sí—. Payload guarda el evento entero para poder revisar esa decisión.
 type AccountEvent struct {
-	WabaID         string
-	PhoneNumberID  string
+	WabaID        string
+	PhoneNumberID string
+	// DisplayPhone es el número tal como Meta lo escribe (`phone_number` o
+	// `display_phone_number`). **Los payloads reales no traen `phone_number_id`**
+	// —comprobado el 2026-08-07 contra los eventos de prueba del panel—, así que
+	// sin esto todos los avisos de un número acabarían en la fila de la cuenta y
+	// dos números distintos colisionarían en la misma.
+	DisplayPhone   string
 	Field          string
 	Event          string
 	MessagingLimit string
+	PreviousLimit  string
 	Decision       string
 	Severity       string
 	OccurredAt     time.Time
@@ -89,12 +96,18 @@ func parseAccountValue(wabaID string, entryTime int64, field string, raw json.Ra
 	// leen todas las variantes conocidas y se conserva el resto en Payload.
 	var value struct {
 		PhoneNumberID string `json:"phone_number_id"`
-		Event         string `json:"event"`
-		CurrentLimit  string `json:"current_limit"`
-		Decision      string `json:"decision"`
-		AlertSeverity string `json:"alert_severity"`
-		AlertStatus   string `json:"alert_status"`
-		AlertType     string `json:"alert_type"`
+		// Meta usa un nombre distinto según el campo, y en los payloads observados
+		// nunca manda `phone_number_id`: account_update trae `phone_number` y
+		// phone_number_quality_update trae `display_phone_number`.
+		PhoneNumber        string `json:"phone_number"`
+		DisplayPhoneNumber string `json:"display_phone_number"`
+		Event              string `json:"event"`
+		CurrentLimit       string `json:"current_limit"`
+		OldLimit           string `json:"old_limit"`
+		Decision           string `json:"decision"`
+		AlertSeverity      string `json:"alert_severity"`
+		AlertStatus        string `json:"alert_status"`
+		AlertType          string `json:"alert_type"`
 
 		// Su **presencia** es estructural, no un enum que haya que adivinar: si
 		// Meta adjunta información de baneo, infracción o restricción, el evento
@@ -115,27 +128,41 @@ func parseAccountValue(wabaID string, entryTime int64, field string, raw json.Ra
 	event := AccountEvent{
 		WabaID:         wabaID,
 		PhoneNumberID:  value.PhoneNumberID,
+		DisplayPhone:   firstNonEmpty(value.DisplayPhoneNumber, value.PhoneNumber),
 		Field:          field,
 		Event:          firstNonEmpty(value.Event, value.AlertType),
 		MessagingLimit: value.CurrentLimit,
+		PreviousLimit:  value.OldLimit,
 		Decision:       value.Decision,
 		OccurredAt:     occurredAt,
-		Severity:       accountSeverity(field, value.AlertSeverity, value.BanInfo, value.ViolationInfo, value.RestrictionInfo),
-		Payload:        append(json.RawMessage(nil), raw...),
+		Severity: accountSeverity(field, value.Event, value.AlertSeverity,
+			value.BanInfo, value.ViolationInfo, value.RestrictionInfo),
+		Payload: append(json.RawMessage(nil), raw...),
 	}
 
-	keyMaterial := fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%s",
-		event.WabaID, event.Field, event.PhoneNumberID, entryTime, string(raw))
+	keyMaterial := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%d\x00%s",
+		event.WabaID, event.Field, event.PhoneNumberID, event.DisplayPhone, entryTime, string(raw))
 	sum := sha256.Sum256([]byte(keyMaterial))
 	event.EventKey = hex.EncodeToString(sum[:])
 	return event, true
 }
 
-// accountSeverity clasifica sin inventar enums. Solo dos señales se consideran
-// fiables hoy: la severidad que Meta declara en account_alerts, y la presencia de
-// estructuras de baneo/infracción/restricción. Todo lo demás queda en Warning,
-// que es visible sin ser alarmista; se afinará cuando haya payloads reales.
-func accountSeverity(field, declared string, ban, violation, restriction json.RawMessage) string {
+// benignEvents son valores de `event` **observados en payloads reales** (panel de
+// Meta → Probar, 2026-08-07) que describen buenas noticias o rutina. No son
+// suposiciones: sin esta lista, una cuenta que se verifica o un número que
+// termina su onboarding se pintaban en ámbar como si algo fuera mal.
+// Cualquier valor no observado sigue cayendo en Warning.
+var benignEvents = map[string]bool{
+	"VERIFIED_ACCOUNT": true, // account_update: la cuenta quedó verificada
+	"ONBOARDING":       true, // phone_number_quality_update: alta del número
+}
+
+// accountSeverity clasifica sin inventar enums. Las señales fiables son: la
+// severidad que Meta declara en account_alerts, la presencia de estructuras de
+// baneo/infracción/restricción, y los pocos valores de `event` confirmados
+// contra payloads reales. Todo lo demás queda en Warning, visible sin ser
+// alarmista.
+func accountSeverity(field, event, declared string, ban, violation, restriction json.RawMessage) string {
 	if len(ban) > 0 && !isJSONNull(ban) {
 		return SeverityCritical
 	}
@@ -151,6 +178,9 @@ func accountSeverity(field, declared string, ban, violation, restriction json.Ra
 	case "WARNING":
 		return SeverityWarning
 	case "INFO", "INFORMATIONAL":
+		return SeverityInfo
+	}
+	if benignEvents[strings.ToUpper(strings.TrimSpace(event))] {
 		return SeverityInfo
 	}
 	// business_capability_update informa de límites de la cuenta; no describe una

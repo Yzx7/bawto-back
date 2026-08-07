@@ -17,6 +17,7 @@ import (
 type ChannelHealth struct {
 	WabaID         string     `db:"waba_id"           json:"wabaId"`
 	PhoneNumberID  *string    `db:"phone_number_id"   json:"phoneNumberId,omitempty"`
+	DisplayPhone   *string    `db:"display_phone"     json:"displayPhone,omitempty"`
 	QualityEvent   *string    `db:"quality_event"     json:"qualityEvent,omitempty"`
 	MessagingLimit *string    `db:"messaging_limit"   json:"messagingLimit,omitempty"`
 	AccountEvent   *string    `db:"account_event"     json:"accountEvent,omitempty"`
@@ -33,6 +34,7 @@ type ChannelAccountEvent struct {
 	ID            int64           `db:"id"              json:"id"`
 	WabaID        string          `db:"waba_id"         json:"wabaId"`
 	PhoneNumberID *string         `db:"phone_number_id" json:"phoneNumberId,omitempty"`
+	DisplayPhone  *string         `db:"display_phone"   json:"displayPhone,omitempty"`
 	Field         string          `db:"field"           json:"field"`
 	Severity      string          `db:"severity"        json:"severity"`
 	OccurredAt    time.Time       `db:"occurred_at"     json:"occurredAt"`
@@ -60,12 +62,24 @@ func StoreAndApplyAccountEvent(
 	}
 	defer tx.Rollback(ctx)
 
+	// Meta identifica el número por su display phone, no por el phone_number_id
+	// con el que trabaja el resto del sistema. Se resuelve contra nuestros propios
+	// bots: es el único sitio donde esa correspondencia existe. Si no resuelve
+	// —por ejemplo en un payload de prueba— se conserva el número tal cual y el
+	// evento sigue siendo suyo, no de la cuenta.
+	phoneNumberID := event.PhoneNumberID
+	if phoneNumberID == "" && event.DisplayPhone != "" {
+		if resolved, err := resolvePhoneNumberID(ctx, tx, event.WabaID, event.DisplayPhone); err == nil {
+			phoneNumberID = resolved
+		}
+	}
+
 	var eventID int64
 	err = tx.QueryRow(ctx, `INSERT INTO channel_account_events(
-			event_key,waba_id,phone_number_id,field,severity,occurred_at,payload)
-		VALUES($1,$2,NULLIF($3,''),$4,$5,$6,$7::jsonb)
+			event_key,waba_id,phone_number_id,display_phone,field,severity,occurred_at,payload)
+		VALUES($1,$2,NULLIF($3,''),NULLIF($4,''),$5,$6,$7,$8::jsonb)
 		ON CONFLICT(event_key) DO NOTHING RETURNING id`,
-		event.EventKey, event.WabaID, event.PhoneNumberID, event.Field,
+		event.EventKey, event.WabaID, phoneNumberID, event.DisplayPhone, event.Field,
 		event.Severity, event.OccurredAt, event.Payload).Scan(&eventID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
@@ -87,11 +101,12 @@ func StoreAndApplyAccountEvent(
 	}
 
 	_, err = tx.Exec(ctx, `INSERT INTO channel_health(
-			waba_id,phone_number_id,quality_event,messaging_limit,account_event,
+			waba_id,phone_number_id,display_phone,quality_event,messaging_limit,account_event,
 			review_decision,name_decision,severity,last_event_field,last_event_at,updated_at)
-		VALUES($1,NULLIF($2,''),NULLIF($3,''),NULLIF($4,''),NULLIF($5,''),
+		VALUES($1,NULLIF($2,''),NULLIF($11,''),NULLIF($3,''),NULLIF($4,''),NULLIF($5,''),
 			NULLIF($6,''),NULLIF($7,''),$8,$9,$10,NOW())
-		ON CONFLICT(waba_id,phone_number_id) DO UPDATE SET
+		ON CONFLICT(waba_id,scope) DO UPDATE SET
+			display_phone=COALESCE(EXCLUDED.display_phone,channel_health.display_phone),
 			quality_event=COALESCE(EXCLUDED.quality_event,channel_health.quality_event),
 			messaging_limit=COALESCE(EXCLUDED.messaging_limit,channel_health.messaging_limit),
 			account_event=COALESCE(EXCLUDED.account_event,channel_health.account_event),
@@ -103,8 +118,8 @@ func StoreAndApplyAccountEvent(
 			updated_at=NOW()
 		WHERE channel_health.last_event_at IS NULL
 			OR EXCLUDED.last_event_at >= channel_health.last_event_at`,
-		event.WabaID, event.PhoneNumberID, quality, limit, accountEvent,
-		review, name, event.Severity, event.Field, event.OccurredAt)
+		event.WabaID, phoneNumberID, quality, limit, accountEvent,
+		review, name, event.Severity, event.Field, event.OccurredAt, event.DisplayPhone)
 	if err != nil {
 		return false, err
 	}
@@ -117,11 +132,32 @@ func StoreAndApplyAccountEvent(
 	return true, nil
 }
 
+// resolvePhoneNumberID traduce el número que escribe Meta al phone_number_id con
+// el que trabaja el resto del sistema, buscándolo entre los bots del WABA. La
+// comparación es sobre dígitos: Meta manda "16505551111" y el bot puede tener
+// guardado "+1 650 555 1111".
+func resolvePhoneNumberID(ctx context.Context, tx pgx.Tx, wabaID, displayPhone string) (string, error) {
+	digits := NormalizePhone(displayPhone)
+	if digits == "" {
+		return "", errors.New("número vacío")
+	}
+	var channelID string
+	err := tx.QueryRow(ctx, `
+		SELECT channel_id FROM bots
+		WHERE waba_id = $1 AND channel_id IS NOT NULL
+		  AND regexp_replace(COALESCE(phone,''), '\D', '', 'g') = $2
+		LIMIT 1`, wabaID, digits).Scan(&channelID)
+	if err != nil {
+		return "", err
+	}
+	return channelID, nil
+}
+
 // GetChannelHealth devuelve las filas de salud de un WABA: la de la cuenta
 // (sin número) y una por número con eventos.
 func GetChannelHealth(ctx context.Context, pool *pgxpool.Pool, wabaID string) ([]ChannelHealth, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT waba_id,phone_number_id,quality_event,messaging_limit,account_event,
+		SELECT waba_id,phone_number_id,display_phone,quality_event,messaging_limit,account_event,
 		       review_decision,name_decision,severity,last_event_field,last_event_at,updated_at
 		FROM channel_health WHERE waba_id = $1
 		ORDER BY phone_number_id NULLS FIRST`, wabaID)
@@ -144,7 +180,7 @@ func ListChannelAccountEvents(
 		limit = 50
 	}
 	rows, err := pool.Query(ctx, `
-		SELECT id,waba_id,phone_number_id,field,severity,occurred_at,payload
+		SELECT id,waba_id,phone_number_id,display_phone,field,severity,occurred_at,payload
 		FROM channel_account_events
 		WHERE waba_id = $1 AND ($2 = false OR severity <> 'info')
 		ORDER BY occurred_at DESC, id DESC LIMIT $3`, wabaID, onlyProblems, limit)

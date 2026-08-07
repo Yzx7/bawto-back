@@ -54,6 +54,43 @@ func TestParseAccountEventsCamposYSeveridad(t *testing.T) {
 	}
 }
 
+// Payloads reales capturados el 2026-08-07 con el botón «Probar» del panel de
+// Meta. **No traen `phone_number_id`**: account_update manda `phone_number` y
+// phone_number_quality_update manda `display_phone_number`. La primera versión
+// del parser solo leía `phone_number_id`, así que todo aviso de un número caía
+// en la fila de la cuenta y dos números se pisaban entre sí.
+func TestParseAccountEventsPayloadsRealesDeMeta(t *testing.T) {
+	body := []byte(`{"entry":[{"id":"0","time":1754540526,"changes":[
+		{"field":"account_update","value":{"event":"VERIFIED_ACCOUNT","phone_number":"16505551111"}},
+		{"field":"phone_number_quality_update","value":{"event":"ONBOARDING","old_limit":"TIER_NOT_SET",
+		 "current_limit":"TIER_250","display_phone_number":"16505551111",
+		 "max_daily_conversations_per_business":"TIER_250"}}]}]}`)
+
+	events, err := ParseAccountEvents(body)
+	if err != nil || len(events) != 2 {
+		t.Fatalf("parse err=%v n=%d", err, len(events))
+	}
+	for _, e := range events {
+		if e.DisplayPhone != "16505551111" {
+			t.Fatalf("%s: no se extrajo el número: %q", e.Field, e.DisplayPhone)
+		}
+		// Ambos son buenas noticias o rutina: pintarlos en ámbar entrenaría a
+		// ignorar los avisos.
+		if e.Severity != SeverityInfo {
+			t.Fatalf("%s (%s) debería ser info, got %q", e.Field, e.Event, e.Severity)
+		}
+	}
+
+	quality := events[1]
+	if quality.MessagingLimit != "TIER_250" || quality.PreviousLimit != "TIER_NOT_SET" {
+		t.Fatalf("límites mal extraídos: %+v", quality)
+	}
+	// Dos números distintos no pueden compartir event_key.
+	if events[0].EventKey == events[1].EventKey {
+		t.Fatal("event_key colisiona entre campos distintos")
+	}
+}
+
 // La presencia de estructuras de baneo/infracción/restricción es estructural, no
 // un enum que haya que adivinar: eleva a crítico sin mirar su contenido.
 func TestParseAccountEventsCriticoPorEstructura(t *testing.T) {
