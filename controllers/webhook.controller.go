@@ -284,9 +284,18 @@ func (con *Controller) handleUserPreferences(ctx context.Context, body []byte) {
 	pool := con.Env.Postgres
 	for _, pref := range prefs {
 		bot, err := models.GetBotByChannel(ctx, pool, whatsapp.Channel, pref.ChannelID)
-		if err != nil || bot == nil {
+		if err != nil {
+			// No es lo mismo «este número no es nuestro» que «no pudimos
+			// averiguarlo». Colapsar ambos en un WARN escondería la pérdida de un
+			// opt-out real por un fallo transitorio de base de datos, y como el
+			// webhook ya respondió 200, Meta no lo reintenta: se perdería.
+			con.whatsAppLogger().Error("preferencia: no se pudo resolver el canal",
+				"channel", pref.ChannelID, "category", pref.Category, "err", err.Error())
+			continue
+		}
+		if bot == nil {
 			con.whatsAppLogger().Warn("preferencia de un canal desconocido",
-				"channel", pref.ChannelID, "category", pref.Category)
+				"channel", pref.ChannelID, "category", pref.Category, "value", pref.Value)
 			continue
 		}
 		// Se crea el contacto si no existe: alguien puede pedir el alta de baja
@@ -295,7 +304,7 @@ func (con *Controller) handleUserPreferences(ctx context.Context, body []byte) {
 		contact, err := models.EnsureInboundContact(ctx, pool, bot.ID, pref.WaID, "")
 		if err != nil || contact == nil {
 			con.whatsAppLogger().Error("preferencia: no se pudo resolver el contacto",
-				"bot", bot.ID, "err", errText(err))
+				"bot", bot.ID, "category", pref.Category, "err", errText(err))
 			continue
 		}
 		applied, err := models.StoreAndApplyUserPreference(ctx, pool, contact.ID, pref)
