@@ -322,11 +322,15 @@ func (con *Controller) ResetBotFlowChats(c *fiber.Ctx) error {
 	if err != nil {
 		return con.failErr(c, err)
 	}
-	cortadas, err := models.ResetChatsOfFlow(c.Context(), con.Env.Postgres, bot.ID, flow.ID)
+	cortadas, restantes, err := models.ResetChatsOfFlow(c.Context(), con.Env.Postgres, bot.ID, flow.ID)
 	if err != nil {
 		return con.failFlow(c, "ResetChatsOfFlow", bot.ID, err, "no se pudieron cortar las conversaciones")
 	}
-	return con.ok(c, "conversaciones cortadas", fiber.Map{"reset": cortadas})
+	// `active` dice dónde están las que quedan. Sin eso, un «no había nada que
+	// cortar» es cierto e inútil: el caso normal es que las conversaciones estén
+	// selladas a OTRO flujo —el de reserva— y quien pulsó el botón no tiene cómo
+	// saberlo.
+	return con.ok(c, "conversaciones cortadas", fiber.Map{"reset": cortadas, "active": restantes})
 }
 
 // POST /bots/:botId/flows/:flowId/validate — valida el grafo sin publicar.

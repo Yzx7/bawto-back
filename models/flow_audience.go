@@ -168,17 +168,56 @@ func SetFlowAudience(ctx context.Context, p *pgxpool.Pool, botID, flowID string,
 // quien entró y sigue atrapado en el general, desde el general. Una acción por
 // audiencia solo habría resuelto el primero.
 //
-// Devuelve cuántas conversaciones se cortaron: sin ese número el operador no
-// sabe si la acción hizo algo o si no había nadie a quien cortar.
-func ResetChatsOfFlow(ctx context.Context, p *pgxpool.Pool, botID, flowID string) (int64, error) {
+// Devuelve cuántas conversaciones se cortaron **y dónde están las que quedan**.
+//
+// Lo segundo no es un extra: un «no había nada que cortar» a secas es cierto y
+// completamente inútil. Quien acaba de restringir un flujo y no ve el cambio
+// tiene sus conversaciones selladas a OTRO flujo —normalmente el de reserva—, y
+// sin decirle a cuál se queda mirando el botón que acaba de pulsar sin efecto.
+func ResetChatsOfFlow(ctx context.Context, p *pgxpool.Pool, botID, flowID string) (int64, []ActiveChatsByFlow, error) {
 	cmd, err := p.Exec(ctx,
 		`UPDATE chats SET current_layer = 'null'::jsonb, updated_at = NOW()
 		 WHERE bot_id = $1::uuid
 		   AND current_layer ->> 'flowId' = $2`, botID, flowID)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	return cmd.RowsAffected(), nil
+	remaining, err := ActiveChats(ctx, p, botID)
+	if err != nil {
+		// El corte sí ocurrió; no poder contar el resto no lo invalida.
+		return cmd.RowsAffected(), nil, nil
+	}
+	return cmd.RowsAffected(), remaining, nil
+}
+
+// ActiveChatsByFlow es el recuento de conversaciones vivas selladas a un flujo.
+type ActiveChatsByFlow struct {
+	FlowID string `db:"flow_id" json:"flowId"`
+	Key    string `db:"key" json:"key"`
+	Name   string `db:"name" json:"name"`
+	Count  int    `db:"count" json:"count"`
+}
+
+// ActiveChats agrupa por flujo las conversaciones que siguen selladas.
+//
+// Un flujo borrado o archivado puede seguir apareciendo con su id y sin nombre:
+// el estado guarda el `flowId`, no una FK, y esconder esas filas dejaría
+// conversaciones invisibles que nadie podría cortar.
+func ActiveChats(ctx context.Context, p *pgxpool.Pool, botID string) ([]ActiveChatsByFlow, error) {
+	rows, err := p.Query(ctx,
+		`SELECT c.current_layer ->> 'flowId' AS flow_id,
+		        COALESCE(f.key, '(flujo desconocido)') AS key,
+		        COALESCE(f.name, '(ya no existe)') AS name,
+		        count(*)::int AS count
+		 FROM chats c
+		 LEFT JOIN flows f ON f.id::text = c.current_layer ->> 'flowId'
+		 WHERE c.bot_id = $1::uuid AND c.current_layer ->> 'flowId' IS NOT NULL
+		 GROUP BY 1, 2, 3
+		 ORDER BY count(*) DESC, 2`, botID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByName[ActiveChatsByFlow])
 }
 
 // translateAudienceConflict convierte los CHECK de la migración 019 en errores
