@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -174,11 +175,12 @@ func SetFlowAudience(ctx context.Context, p *pgxpool.Pool, botID, flowID string,
 // completamente inútil. Quien acaba de restringir un flujo y no ve el cambio
 // tiene sus conversaciones selladas a OTRO flujo —normalmente el de reserva—, y
 // sin decirle a cuál se queda mirando el botón que acaba de pulsar sin efecto.
-func ResetChatsOfFlow(ctx context.Context, p *pgxpool.Pool, botID, flowID string) (int64, []ActiveChatsByFlow, error) {
-	cmd, err := p.Exec(ctx,
-		`UPDATE chats SET current_layer = 'null'::jsonb, updated_at = NOW()
-		 WHERE bot_id = $1::uuid
-		   AND current_layer ->> 'flowId' = $2`, botID, flowID)
+func ResetChatsOfFlow(ctx context.Context, p *pgxpool.Pool, botID, flowID, orgID string, audience json.RawMessage) (int64, []ActiveChatsByFlow, error) {
+	sql, args, err := resetChatsStatement(ctx, p, botID, flowID, orgID, audience)
+	if err != nil {
+		return 0, nil, err
+	}
+	cmd, err := p.Exec(ctx, sql, args...)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -188,6 +190,61 @@ func ResetChatsOfFlow(ctx context.Context, p *pgxpool.Pool, botID, flowID string
 		return cmd.RowsAffected(), nil, nil
 	}
 	return cmd.RowsAffected(), remaining, nil
+}
+
+// resetChatsStatement decide **a quién** se corta.
+//
+// Con audiencia, la acción es quirúrgica: toca solo las conversaciones cuyo
+// sellado contradice la condición, en los dos sentidos.
+//
+//	entró en la audiencia  → está sellado a OTRO flujo  → se corta
+//	salió de la audiencia  → está sellado a ESTE flujo  → se corta
+//	todo lo demás                                       → no se toca
+//
+// La primera línea es el caso que motiva la acción: restringir un flujo a un
+// contacto no surte efecto mientras su conversación siga viva en el flujo
+// anterior. Cortar «las de este flujo» no lo arreglaba —esas son cero— y cortar
+// las del flujo de reserva arrastraba a **toda** la organización para mover a una
+// persona. Ninguna de las dos es lo que el operador quiere.
+//
+// El conjunto de contactos sale de `audiencePreviewQuery`, la MISMA consulta que
+// alimenta la tabla del formulario. Así lo que se corta es exactamente lo que la
+// vista previa enseñó: no hay forma de que el botón afecte a alguien que no
+// estaba en la lista.
+//
+// Sin audiencia el flujo atiende a todos, no hay condición que aplicar, y la
+// única lectura posible es la literal: cortar las conversaciones selladas a él.
+func resetChatsStatement(ctx context.Context, p *pgxpool.Pool, botID, flowID, orgID string, audience json.RawMessage) (string, []any, error) {
+	condition, err := engine.ParseAudience(audience)
+	if err != nil {
+		return "", nil, err
+	}
+	if condition == nil {
+		return `UPDATE chats SET current_layer = 'null'::jsonb, updated_at = NOW()
+			WHERE bot_id = $1::uuid AND current_layer ->> 'flowId' = $2`,
+			[]any{botID, flowID}, nil
+	}
+
+	base, args, err := audiencePreviewQuery(ctx, p, orgID, condition)
+	if err != nil {
+		return "", nil, err
+	}
+	// Los marcadores de `base` ya ocupan $1..$n; el bot y el flujo van detrás.
+	args = append(args, botID, flowID)
+	bot := "$" + strconv.Itoa(len(args)-1)
+	flow := "$" + strconv.Itoa(len(args))
+
+	// `chats.contact` guarda el teléfono tal cual llegó del canal, así que se
+	// compara contra `phone_normalized`, que es la identidad del contacto.
+	enLaAudiencia := `chats.contact IN (SELECT c.phone_normalized ` + base + `)`
+
+	return `UPDATE chats SET current_layer = 'null'::jsonb, updated_at = NOW()
+		WHERE chats.bot_id = ` + bot + `::uuid
+		  AND chats.current_layer ->> 'flowId' IS NOT NULL
+		  AND (
+		        (` + enLaAudiencia + ` AND chats.current_layer ->> 'flowId' <> ` + flow + `)
+		     OR (NOT ` + enLaAudiencia + ` AND chats.current_layer ->> 'flowId' = ` + flow + `)
+		  )`, args, nil
 }
 
 // ActiveChatsByFlow es el recuento de conversaciones vivas selladas a un flujo.

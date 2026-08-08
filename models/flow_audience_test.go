@@ -325,6 +325,143 @@ func TestVistaPreviaDevuelveElErrorDeUnaCondicionRota(t *testing.T) {
 	}
 }
 
+// **Cortar con audiencia toca solo a quien contradice la condición.**
+//
+// Es lo que separa esta acción de un martillo. Mover a UN contacto al flujo
+// restringido no puede costar reiniciar la conversación de toda la organización,
+// que es lo que pasaba cortando «las del flujo de reserva».
+func TestCortarConAudienciaEsQuirurgico(t *testing.T) {
+	pool, ctx := flowTestPool(t)
+	bot := botDePrueba(t, ctx, pool, "cut1_")
+
+	restringido, err := CreateFlow(ctx, pool, bot.ID, NewFlow{
+		Key: "piloto", Name: "Piloto", TriggerType: "message", UserID: "tester",
+	})
+	if err != nil {
+		t.Fatalf("CreateFlow: %v", err)
+	}
+	otro, err := CreateFlow(ctx, pool, bot.ID, NewFlow{
+		Key: "general", Name: "General", TriggerType: "message", UserID: "tester",
+	})
+	if err != nil {
+		t.Fatalf("CreateFlow general: %v", err)
+	}
+
+	if _, err := UpsertContactFieldByOrg(ctx, pool, bot.OrgID, "piloto", "Piloto", "text", false); err != nil {
+		t.Fatalf("UpsertContactFieldByOrg: %v", err)
+	}
+	// `dentro` cumple la condición pero conversa en el general: hay que moverlo.
+	// `ajeno` no cumple y también conversa en el general: NO se toca.
+	// `saliente` ya no cumple pero está sellado al restringido: hay que sacarlo.
+	crea := func(phone, piloto, flowID string) string {
+		c, err := SaveContactByOrg(ctx, pool, bot.OrgID, "", phone, "C", "active",
+			json.RawMessage(`{"piloto":"`+piloto+`"}`))
+		if err != nil {
+			t.Fatalf("SaveContactByOrg %s: %v", phone, err)
+		}
+		var chatID string
+		if err := pool.QueryRow(ctx,
+			`INSERT INTO chats (bot_id, contact, current_layer) VALUES ($1::uuid,$2,$3::jsonb) RETURNING id::text`,
+			bot.ID, c.PhoneNormalized,
+			`{"flowId":"`+flowID+`","nodeId":"n_espera"}`).Scan(&chatID); err != nil {
+			t.Fatalf("insert chat %s: %v", phone, err)
+		}
+		return chatID
+	}
+	chatDentro := crea("51904000001", "si", otro.ID)
+	chatAjeno := crea("51904000002", "no", otro.ID)
+	chatSaliente := crea("51904000003", "no", restringido.ID)
+	chatQuieto := crea("51904000004", "si", restringido.ID) // ya está donde toca
+
+	condicion := json.RawMessage(`{"object":"@contacts","linkCurrentContact":"true",` +
+		`"where.1.field":"piloto","where.1.op":"eq","where.1.value":"si"}`)
+	if _, err := SetFlowAudience(ctx, pool, bot.ID, restringido.ID, condicion, "tester"); err != nil {
+		t.Fatalf("SetFlowAudience: %v", err)
+	}
+
+	cortadas, _, err := ResetChatsOfFlow(ctx, pool, bot.ID, restringido.ID, bot.OrgID, condicion)
+	if err != nil {
+		t.Fatalf("ResetChatsOfFlow: %v", err)
+	}
+	if cortadas != 2 {
+		t.Errorf("debían cortarse 2 (el que entra y el que sale), y fueron %d", cortadas)
+	}
+
+	sellado := func(chatID string) string {
+		var layer string
+		if err := pool.QueryRow(ctx,
+			`SELECT COALESCE(current_layer ->> 'flowId','') FROM chats WHERE id=$1::uuid`, chatID).Scan(&layer); err != nil {
+			t.Fatalf("leer chat: %v", err)
+		}
+		return layer
+	}
+	if sellado(chatDentro) != "" {
+		t.Error("el contacto que entra en la audiencia debía quedar libre para que el despacho lo reubique")
+	}
+	if sellado(chatSaliente) != "" {
+		t.Error("el contacto que salió de la audiencia debía quedar libre")
+	}
+	// La afirmación que de verdad importa: al de al lado no se le tocó.
+	if sellado(chatAjeno) != otro.ID {
+		t.Error("un contacto ajeno a la audiencia NO puede perder su conversación")
+	}
+	if sellado(chatQuieto) != restringido.ID {
+		t.Error("quien ya estaba donde le toca no necesita que le corten nada")
+	}
+}
+
+// Sin audiencia no hay condición que aplicar, y la única lectura posible es la
+// literal: cortar las conversaciones selladas a ese flujo.
+func TestCortarSinAudienciaCortaLasDeEseFlujo(t *testing.T) {
+	pool, ctx := flowTestPool(t)
+	bot := botDePrueba(t, ctx, pool, "cut2_")
+
+	flujo, err := CreateFlow(ctx, pool, bot.ID, NewFlow{
+		Key: "general", Name: "General", TriggerType: "message", UserID: "tester",
+	})
+	if err != nil {
+		t.Fatalf("CreateFlow: %v", err)
+	}
+	otro, err := CreateFlow(ctx, pool, bot.ID, NewFlow{
+		Key: "otro", Name: "Otro", TriggerType: "message", UserID: "tester",
+	})
+	if err != nil {
+		t.Fatalf("CreateFlow otro: %v", err)
+	}
+	for _, caso := range []struct{ phone, flowID string }{
+		{"51905000001", flujo.ID}, {"51905000002", flujo.ID}, {"51905000003", otro.ID},
+	} {
+		c, err := SaveContactByOrg(ctx, pool, bot.OrgID, "", caso.phone, "C", "active", nil)
+		if err != nil {
+			t.Fatalf("SaveContactByOrg: %v", err)
+		}
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO chats (bot_id, contact, current_layer) VALUES ($1::uuid,$2,$3::jsonb)`,
+			bot.ID, c.PhoneNormalized, `{"flowId":"`+caso.flowID+`","nodeId":"n"}`); err != nil {
+			t.Fatalf("insert chat: %v", err)
+		}
+	}
+
+	cortadas, activas, err := ResetChatsOfFlow(ctx, pool, bot.ID, flujo.ID, bot.OrgID, nil)
+	if err != nil {
+		t.Fatalf("ResetChatsOfFlow: %v", err)
+	}
+	if cortadas != 2 {
+		t.Errorf("debían cortarse las 2 de ese flujo, y fueron %d", cortadas)
+	}
+	// El recuento restante es lo que convierte un «no corté nada» en una
+	// respuesta útil: dice dónde están las que siguen vivas.
+	var enOtro int
+	for _, a := range activas {
+		if a.FlowID == otro.ID {
+			enOtro = a.Count
+		}
+	}
+	if enOtro != 1 {
+		t.Errorf("debía quedar 1 conversación viva en el otro flujo, y el recuento dijo %d", enOtro)
+	}
+}
+
 // El fallback atiende cuando ningún trigger reconoce el mensaje: restringirlo
 // dejaría mudo al bot para todos los de fuera. Se rechaza al guardar y no al
 // publicar, porque guardar ya es donde el operador cree haber terminado.

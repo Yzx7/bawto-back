@@ -322,7 +322,8 @@ func (con *Controller) ResetBotFlowChats(c *fiber.Ctx) error {
 	if err != nil {
 		return con.failErr(c, err)
 	}
-	cortadas, restantes, err := models.ResetChatsOfFlow(c.Context(), con.Env.Postgres, bot.ID, flow.ID)
+	cortadas, restantes, err := models.ResetChatsOfFlow(c.Context(), con.Env.Postgres,
+		bot.ID, flow.ID, bot.OrgID, flow.Audience)
 	if err != nil {
 		return con.failFlow(c, "ResetChatsOfFlow", bot.ID, err, "no se pudieron cortar las conversaciones")
 	}
