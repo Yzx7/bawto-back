@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -76,19 +75,9 @@ func ContactMatchesAudience(ctx context.Context, p *pgxpool.Pool, orgID, phone s
 		return AudienceVerdict{Serves: false, Reason: "el mensaje no trae contacto que comprobar"}
 	}
 
-	var rules []DataQueryRule
-	for i := 1; i <= 8; i++ {
-		prefix := "where." + strconv.Itoa(i) + "."
-		field := strings.TrimSpace(condition[prefix+"field"])
-		if field == "" {
-			continue
-		}
-		rules = append(rules, DataQueryRule{
-			Field: field,
-			Op:    strings.TrimSpace(condition[prefix+"op"]),
-			Value: condition[prefix+"value"],
-		})
-	}
+	// Misma lectura que usa la vista previa: si una de las dos interpretara las
+	// reglas de otra forma, el panel enseñaría un conjunto y el bot atendería otro.
+	rules := audienceRules(condition)
 
 	// `contacts` no es un `data_object`: es la tabla especial del producto, con
 	// sus columnas propias y su JSONB de campos personalizados. Y es la más

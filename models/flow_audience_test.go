@@ -237,6 +237,94 @@ func TestObjetoContactsNoTapaUnaTablaDelUsuario(t *testing.T) {
 	}
 }
 
+// **La vista previa tiene que coincidir con el despacho, contacto por contacto.**
+//
+// Es la única propiedad que la hace útil: una lista que enseñara un conjunto y un
+// bot que atendiera otro daría confianza falsa justo antes de publicar, que es
+// peor que no tener vista previa. Por eso no se comprueba «devuelve 2 filas»,
+// sino que para CADA contacto de la organización el veredicto del predicado y la
+// pertenencia a la vista previa dicen lo mismo.
+func TestVistaPreviaCoincideConElDespacho(t *testing.T) {
+	pool, ctx := flowTestPool(t)
+	bot, object := audienciaDePrueba(t, ctx, pool, "prev1_")
+
+	if _, err := UpsertContactFieldByOrg(ctx, pool, bot.OrgID, "piloto", "Piloto", "text", false); err != nil {
+		t.Fatalf("UpsertContactFieldByOrg: %v", err)
+	}
+	// Tres con registro vinculado (dos cumplen), uno suelto sin registro, y uno
+	// bloqueado para que el filtro por columna propia tenga a quién excluir.
+	contactoConPerfil(t, ctx, pool, bot, object, "51903000001", "si")
+	contactoConPerfil(t, ctx, pool, bot, object, "51903000002", "si")
+	contactoConPerfil(t, ctx, pool, bot, object, "51903000003", "no")
+	if _, err := SaveContactByOrg(ctx, pool, bot.OrgID, "", "51903000004", "Suelto", "active",
+		json.RawMessage(`{"piloto":"si"}`)); err != nil {
+		t.Fatalf("SaveContactByOrg suelto: %v", err)
+	}
+	if _, err := SaveContactByOrg(ctx, pool, bot.OrgID, "", "51903000005", "Bloqueado", "blocked",
+		json.RawMessage(`{"piloto":"si"}`)); err != nil {
+		t.Fatalf("SaveContactByOrg bloqueado: %v", err)
+	}
+
+	condiciones := map[string]string{
+		"tabla de datos": condicionPiloto,
+		"contactos por campo": `{"object":"@contacts","linkCurrentContact":"true",` +
+			`"where.1.field":"piloto","where.1.op":"eq","where.1.value":"si"}`,
+		"contactos por columna propia": `{"object":"@contacts","linkCurrentContact":"true",` +
+			`"where.1.field":"status","where.1.op":"eq","where.1.value":"active"}`,
+		"sin condición": ``,
+	}
+
+	todos, err := ListContactsByOrg(ctx, pool, bot.OrgID)
+	if err != nil {
+		t.Fatalf("ListContactsByOrg: %v", err)
+	}
+
+	for nombre, raw := range condiciones {
+		preview, err := PreviewAudience(ctx, pool, bot.OrgID, json.RawMessage(raw))
+		if err != nil {
+			t.Errorf("%s: PreviewAudience: %v", nombre, err)
+			continue
+		}
+		enPreview := map[string]bool{}
+		for _, c := range preview.Contacts {
+			enPreview[c.ID] = true
+		}
+		if preview.Total != len(preview.Contacts) {
+			t.Errorf("%s: el caso de prueba cabe entero, total=%d listados=%d",
+				nombre, preview.Total, len(preview.Contacts))
+		}
+		for _, contacto := range todos {
+			verdict := ContactMatchesAudience(ctx, pool, bot.OrgID, contacto.PhoneNormalized, json.RawMessage(raw))
+			if verdict.Serves != enPreview[contacto.ID] {
+				t.Errorf("%s: %s — el despacho dice serves=%v y la vista previa lo %s",
+					nombre, contacto.PhoneNormalized, verdict.Serves,
+					map[bool]string{true: "incluye", false: "excluye"}[enPreview[contacto.ID]])
+			}
+		}
+	}
+}
+
+// Una condición rota se le muestra al autor tal cual. En el despacho un error se
+// traduce a «no atiende a nadie» —para no abrir el flujo a todos por una avería—,
+// pero aquí ocultarlo dejaría una condición inválida pareciendo una audiencia
+// vacía, que es el diagnóstico contrario al correcto.
+func TestVistaPreviaDevuelveElErrorDeUnaCondicionRota(t *testing.T) {
+	pool, ctx := flowTestPool(t)
+	bot, _ := audienciaDePrueba(t, ctx, pool, "prev2_")
+
+	rotas := map[string]string{
+		"tabla inexistente":        `{"object":"no_existe","linkCurrentContact":"true"}`,
+		"campo inexistente":        `{"object":"@contacts","linkCurrentContact":"true","where.1.field":"nada","where.1.op":"eq","where.1.value":"x"}`,
+		"sin linkCurrentContact":   `{"object":"@contacts"}`,
+		"con variable en el valor": `{"object":"@contacts","linkCurrentContact":"true","where.1.field":"status","where.1.op":"eq","where.1.value":"{x}"}`,
+	}
+	for nombre, raw := range rotas {
+		if _, err := PreviewAudience(ctx, pool, bot.OrgID, json.RawMessage(raw)); err == nil {
+			t.Errorf("%s: la vista previa debe devolver el error, no una lista vacía", nombre)
+		}
+	}
+}
+
 // El fallback atiende cuando ningún trigger reconoce el mensaje: restringirlo
 // dejaría mudo al bot para todos los de fuera. Se rechaza al guardar y no al
 // publicar, porque guardar ya es donde el operador cree haber terminado.

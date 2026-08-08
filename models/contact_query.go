@@ -92,24 +92,11 @@ func contactMatches(ctx context.Context, p *pgxpool.Pool, orgID, phone string, r
 	args := []any{orgID, NormalizePhone(phone)}
 	query := `SELECT 1 FROM contacts c WHERE c.org_id = $1::uuid AND c.phone_normalized = $2`
 
-	for _, rule := range rules {
-		field := strings.TrimSpace(rule.Field)
-		typ, known := types[field]
-		if !known {
-			return false, &contactFieldError{field: field}
-		}
-		expr, builtin := contactBuiltinFields[field]
-		if !builtin {
-			args = append(args, field)
-			expr = `c.data ->> $` + strconv.Itoa(len(args))
-		}
-		condition, err := dataQueryComparison(expr, field, typ, rule, &args)
-		if err != nil {
-			return false, err
-		}
-		query += ` AND ` + condition
+	where, err := contactConditions(types, rules, &args)
+	if err != nil {
+		return false, err
 	}
-	query += ` LIMIT 1`
+	query += where + ` LIMIT 1`
 
 	var found int
 	err = p.QueryRow(ctx, query, args...).Scan(&found)
@@ -123,6 +110,36 @@ func contactMatches(ctx context.Context, p *pgxpool.Pool, orgID, phone string, r
 		return false, err
 	}
 	return true, nil
+}
+
+// contactConditions arma el fragmento ` AND …` de las reglas sobre un contacto
+// con alias `c`.
+//
+// Lo comparten el predicado del despacho y la vista previa del panel **a
+// propósito**: una vista previa que enseñara un conjunto distinto del que el bot
+// atiende sería peor que no tener vista previa, porque daría confianza falsa
+// justo antes de publicar. Compartir el constructor es lo único que garantiza
+// que no se separen.
+func contactConditions(types map[string]string, rules []DataQueryRule, args *[]any) (string, error) {
+	var out string
+	for _, rule := range rules {
+		field := strings.TrimSpace(rule.Field)
+		typ, known := types[field]
+		if !known {
+			return "", &contactFieldError{field: field}
+		}
+		expr, builtin := contactBuiltinFields[field]
+		if !builtin {
+			*args = append(*args, field)
+			expr = `c.data ->> $` + strconv.Itoa(len(*args))
+		}
+		condition, err := dataQueryComparison(expr, field, typ, rule, args)
+		if err != nil {
+			return "", err
+		}
+		out += ` AND ` + condition
+	}
+	return out, nil
 }
 
 type contactFieldError struct{ field string }

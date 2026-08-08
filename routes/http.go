@@ -76,6 +76,7 @@ func RegisterHTTP(app *fiber.App, e *env.Env) {
 	bots.Get("/:botId/flows/:flowId/draft", con.GetBotFlowDraft)
 	bots.Put("/:botId/flows/:flowId/draft", con.UpdateBotFlowDraft)
 	bots.Put("/:botId/flows/:flowId/audience", con.SetBotFlowAudience)
+	bots.Post("/:botId/flows/:flowId/audience/preview", con.PreviewBotFlowAudience)
 	bots.Post("/:botId/flows/:flowId/reset-chats", con.ResetBotFlowChats)
 	bots.Post("/:botId/flows/:flowId/validate", con.ValidateBotFlow)
 	bots.Post("/:botId/flows/:flowId/publish", con.PublishBotFlow)

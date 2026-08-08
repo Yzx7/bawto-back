@@ -277,6 +277,39 @@ func (con *Controller) SetBotFlowAudience(c *fiber.Ctx) error {
 	return con.ok(c, msg, updated)
 }
 
+// POST /bots/:botId/flows/:flowId/audience/preview — ensayo en seco: a quién
+// atendería el flujo con esta condición.
+//
+// Acepta la condición **en el cuerpo** y no la guardada, que es el punto entero:
+// sirve para ver el resultado mientras se edita, antes de asignar nada. Con el
+// cuerpo vacío previsualiza la que ya tiene.
+//
+// Lo puede pedir cualquier miembro aunque solo owner/admin pueda asignarla: no
+// expone nada nuevo —los contactos ya se ven en el panel de Datos— y un `member`
+// que construye un flujo restringido necesita comprobar su condición tanto como
+// quien la aprueba.
+func (con *Controller) PreviewBotFlowAudience(c *fiber.Ctx) error {
+	bot, flow, err := con.flowWithRole(c, "owner", "admin", "member")
+	if err != nil {
+		return con.failErr(c, err)
+	}
+	raw := flow.Audience
+	if body := c.Body(); len(body) > 0 {
+		if !json.Valid(body) {
+			return con.fail(c, fiber.StatusBadRequest, "la condición de audiencia no es JSON válido")
+		}
+		raw = json.RawMessage(body)
+	}
+	preview, err := models.PreviewAudience(c.Context(), con.Env.Postgres, bot.OrgID, raw)
+	if err != nil {
+		// Aquí el autor SÍ quiere ver el fallo, al revés que en el despacho, donde
+		// un error se traduce a «no atiende a nadie» y se registra. Ocultarlo
+		// dejaría una condición rota pareciendo una audiencia vacía.
+		return con.fail(c, fiber.StatusBadRequest, err.Error())
+	}
+	return con.ok(c, "ok", preview)
+}
+
 // POST /bots/:botId/flows/:flowId/reset-chats — corta las conversaciones que
 // siguen selladas a este flujo (owner/admin).
 //

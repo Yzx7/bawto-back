@@ -57,6 +57,9 @@ func TestRutasDeLaInterfazOperativaRegistradas(t *testing.T) {
 		// Sin esta acción, sacar a un contacto de la audiencia no surtiría efecto
 		// hasta que su conversación expirara y no habría forma de forzarlo.
 		http.MethodPost + " /bots/:botId/flows/:flowId/reset-chats",
+		// Cuelga de /audience, que ya es una ruta: si alguien registrara
+		// `/audience/:algo` antes, el ensayo en seco dejaría de existir sin avisar.
+		http.MethodPost + " /bots/:botId/flows/:flowId/audience/preview",
 		// Comparte prefijo con /contact-fields: si alguien registrara
 		// `/contact-fields/:algo` antes, esta dejaría de existir sin avisar.
 		http.MethodGet + " /orgs/:orgId/contact-query-fields",
