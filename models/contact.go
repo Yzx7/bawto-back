@@ -44,7 +44,7 @@ type BillingRecord struct {
 const contactCols = `id::text AS id, org_id::text AS org_id, phone_normalized, name, data, status, created_at, updated_at`
 
 // contactColsC es la misma lista calificada con el alias `c`. Toda consulta con
-// JOIN debe usar esta: `created_at` existe también en `audience_contacts`, en
+// JOIN debe usar esta: `created_at` existe también en `data_record_contacts`, en
 // `data_records` y en `data_objects`, y con la lista sin prefijo Postgres
 // responde "column reference is ambiguous" en tiempo de ejecución, no al
 // compilar. Es el mismo tropiezo que ya costó `GetFlowVersion` y

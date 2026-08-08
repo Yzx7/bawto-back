@@ -512,7 +512,7 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 		stateFlowID = st.FlowID
 	}
 
-	selected := con.messageFlowForInput(ctx, bot.ID, stateFlowID, m.Text)
+	selected := con.messageFlowForInput(ctx, bot, m.From, stateFlowID, m.Text)
 
 	var flow engine.Flow
 	hasFlow := selected != nil &&

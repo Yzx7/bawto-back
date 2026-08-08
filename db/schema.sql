@@ -133,25 +133,8 @@ CREATE TABLE IF NOT EXISTS contact_fields (
     CHECK (type IN ('text', 'number', 'date', 'boolean'))
 );
 
-CREATE TABLE IF NOT EXISTS audiences (
-    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    org_id      UUID        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-    name        TEXT        NOT NULL,
-    kind        TEXT        NOT NULL DEFAULT 'dynamic', -- dynamic | manual
-    filter      JSONB       NOT NULL DEFAULT '{}',
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CHECK (kind IN ('dynamic', 'manual')),
-    CHECK (length(trim(name)) > 0)
-);
-CREATE INDEX IF NOT EXISTS idx_audiences_org ON audiences (org_id, created_at DESC);
-
-CREATE TABLE IF NOT EXISTS audience_contacts (
-    audience_id UUID NOT NULL REFERENCES audiences(id) ON DELETE CASCADE,
-    contact_id  UUID NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (audience_id, contact_id)
-);
+-- No hay tabla `audiences`: se retiró en 019_flows_audience.sql. Una audiencia es
+-- una consulta sobre los datos de la organización, y vive en `flows.audience`.
 
 -- DATOS GENÉRICOS ----------------------------------------------
 -- El producto no modela "facturas", "citas" o "pedidos" en su núcleo. Cada
@@ -430,6 +413,11 @@ CREATE TABLE IF NOT EXISTS flows (
     status                TEXT        NOT NULL DEFAULT 'draft',-- draft | published | paused | archived
     priority              INTEGER     NOT NULL DEFAULT 100,
     is_fallback           BOOLEAN     NOT NULL DEFAULT FALSE,
+    -- Condición de audiencia: misma configuración que el bloque «Leer una tabla».
+    -- NULL es «sin restricción»; el flujo atiende a todos. Va aquí y no en
+    -- flow_versions porque es metadato operativo —quién entra al grafo—, como
+    -- priority e is_fallback, y cambiarla no debe obligar a republicar.
+    audience              JSONB,
     draft                 JSONB       NOT NULL DEFAULT '{}',
     published_version_id  UUID,
     created_by            TEXT,
@@ -442,7 +430,18 @@ CREATE TABLE IF NOT EXISTS flows (
     CHECK (status IN ('draft', 'published', 'paused', 'archived')),
     CHECK (key ~ '^[a-z][a-z0-9_-]{0,62}$'),
     CHECK (length(trim(name)) > 0),
-    CHECK (jsonb_typeof(draft) = 'object')
+    CHECK (jsonb_typeof(draft) = 'object'),
+    -- Un objeto vacío sería un predicado sin condiciones: otra cosa, y ambigua.
+    CONSTRAINT flows_audience_object_check
+        CHECK (audience IS NULL OR (jsonb_typeof(audience) = 'object' AND audience <> '{}'::jsonb)),
+    -- El fallback atiende cuando ningún trigger reconoce el mensaje; restringirlo
+    -- dejaría mudo al bot para todos los de fuera, sin un solo error.
+    CONSTRAINT flows_audience_not_fallback_check
+        CHECK (audience IS NULL OR NOT is_fallback),
+    -- Un `schedule` resuelve destinatario por data_view, no por el contacto del
+    -- mensaje: admitir audiencia ahí la dejaría sin efecto en silencio.
+    CONSTRAINT flows_audience_only_message_check
+        CHECK (audience IS NULL OR trigger_type = 'message')
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_flows_bot_key
     ON flows (bot_id, key) WHERE archived_at IS NULL;

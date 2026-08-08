@@ -16,7 +16,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
-var affectedTables = []string{"contacts", "contact_fields", "audiences", "data_objects"}
+var affectedTables = []string{"contacts", "contact_fields", "data_objects"}
 
 func main() {
 	inspectOnly := len(os.Args) == 2 && os.Args[1] == "--inspect"

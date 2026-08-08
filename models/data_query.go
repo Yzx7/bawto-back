@@ -252,18 +252,29 @@ func projectDataQueryValues(values map[string]any, projection map[string]struct{
 
 func dataQueryCondition(fieldTypes map[string]string, rule DataQueryRule, args *[]any) (string, error) {
 	field := strings.TrimSpace(rule.Field)
-	op := strings.TrimSpace(rule.Op)
 	typ, ok := fieldTypes[field]
 	if !ok {
 		return "", fmt.Errorf("el campo %q no existe en el objeto", field)
 	}
+	*args = append(*args, field)
+	expr := `r.data ->> $` + strconv.Itoa(len(*args))
+	return dataQueryComparison(expr, field, typ, rule, args)
+}
+
+// dataQueryComparison traduce un operador a SQL sobre una expresión escalar ya
+// construida por el llamador.
+//
+// Se separó de dataQueryCondition para que la audiencia pueda comparar contra
+// `contacts` —donde el dato vive en columnas propias y en su JSONB, no en
+// `data_records`— **sin una segunda definición de qué significa `contains`, `in`
+// o un campo de tipo fecha**. Dos implementaciones de los mismos nueve
+// operadores se separan al primer retoque, y entonces la misma condición
+// filtraría distinto según dónde esté guardado el dato.
+func dataQueryComparison(expr, field, typ string, rule DataQueryRule, args *[]any) (string, error) {
+	op := strings.TrimSpace(rule.Op)
 	if !ValidDataQueryOperator(op) {
 		return "", fmt.Errorf("operador inválido %q", op)
 	}
-
-	*args = append(*args, field)
-	keyRef := "$" + strconv.Itoa(len(*args))
-	expr := `r.data ->> ` + keyRef
 
 	switch op {
 	case "exists":

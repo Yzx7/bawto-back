@@ -166,6 +166,26 @@ func (con *Controller) ListOrgContactFields(c *fiber.Ctx) error {
 	return con.ok(c, "ok", v)
 }
 
+// GET /orgs/:orgId/contact-query-fields — campos por los que se puede filtrar un
+// contacto: las columnas propias (`status`, `name`, `phone`) más los campos
+// personalizados de la organización.
+//
+// No es lo mismo que `/contact-fields`, que solo devuelve los personalizados. El
+// selector de audiencia necesita las dos cosas en una lista, y decidir aquí qué
+// columnas son filtrables evita que el panel se invente la suya y se separe de
+// lo que el ejecutor sabe resolver.
+func (con *Controller) ListOrgContactQueryFields(c *fiber.Ctx) error {
+	org := c.Params("orgId")
+	if _, e := con.requireOrgRole(c, org); e != nil {
+		return con.failErr(c, e)
+	}
+	v, e := models.ContactQueryFields(c.Context(), con.Env.Postgres, org)
+	if e != nil {
+		return con.fail(c, 500, "error obteniendo campos filtrables de contacto")
+	}
+	return con.ok(c, "ok", v)
+}
+
 func (con *Controller) UpsertOrgContactField(c *fiber.Ctx) error {
 	org := c.Params("orgId")
 	if _, e := con.requireOrgRole(c, org, "owner", "admin", "member"); e != nil {

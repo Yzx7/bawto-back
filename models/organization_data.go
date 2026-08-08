@@ -4,10 +4,37 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ContactField es un campo del CRM definido por la organización. Vivía en
+// models/audience.go, que se retiró con las audiencias en 019_flows_audience.sql;
+// no tenía relación con ellas más allá de haber compartido fichero.
+type ContactField struct {
+	ID        string    `db:"id" json:"id"`
+	OrgID     string    `db:"org_id" json:"orgId"`
+	Key       string    `db:"key" json:"key"`
+	Label     string    `db:"label" json:"label"`
+	Type      string    `db:"type" json:"type"`
+	Required  bool      `db:"required" json:"required"`
+	CreatedAt time.Time `db:"created_at" json:"createdAt"`
+	UpdatedAt time.Time `db:"updated_at" json:"updatedAt"`
+}
+
+const fieldCols = `id::text AS id, org_id::text AS org_id, key, label, type, required, created_at, updated_at`
+
+// ListContactFields resuelve la organización desde el bot, para los llamadores
+// del runtime que solo conocen el bot que recibió el mensaje.
+func ListContactFields(ctx context.Context, pool *pgxpool.Pool, botID string) ([]ContactField, error) {
+	rows, err := pool.Query(ctx, `SELECT `+fieldCols+` FROM contact_fields WHERE org_id=(SELECT org_id FROM bots WHERE id=$1::uuid) ORDER BY created_at`, botID)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByName[ContactField])
+}
 
 func ListDataObjectsByOrg(ctx context.Context, p *pgxpool.Pool, orgID string) ([]DataObject, error) {
 	rows, e := p.Query(ctx, `SELECT `+dataObjectCols+` FROM data_objects WHERE org_id=$1::uuid ORDER BY created_at`, orgID)

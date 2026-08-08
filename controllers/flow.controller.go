@@ -93,6 +93,15 @@ func (con *Controller) CreateBotFlow(c *fiber.Ctx) error {
 	if len(b.Draft) > 0 && !json.Valid(b.Draft) {
 		return con.fail(c, fiber.StatusBadRequest, "el borrador no es JSON válido")
 	}
+	// La creación acepta `priority` e `isFallback` en el cuerpo, así que endurecer
+	// solo UpdateBotFlowMeta dejaría la puerta de atrás abierta: bastaría con
+	// pedirlos al crear el flujo. `priority` 0 se trata como "no lo pidió", que es
+	// lo que ya hace CreateFlow al sustituirlo por el 100 por defecto.
+	if b.IsFallback || (b.Priority != 0 && b.Priority != 100) {
+		if _, err := con.requireOrgRole(c, bot.OrgID, "owner", "admin"); err != nil {
+			return con.fail(c, fiber.StatusForbidden, "fijar la prioridad o el flujo de reserva requiere un administrador")
+		}
+	}
 
 	flow, err := models.CreateFlow(c.Context(), con.Env.Postgres, bot.ID, models.NewFlow{
 		Key:         b.Key,
@@ -182,15 +191,28 @@ func (con *Controller) UpdateBotFlowMeta(c *fiber.Ctx) error {
 			return con.fail(c, fiber.StatusBadRequest, "el nombre es obligatorio")
 		}
 	}
-	if b.Priority != nil {
+	// Prioridad y fallback deciden **el orden del despacho de todo el bot**, no
+	// solo el de este flujo: bajar la prioridad de un flujo propio le roba el
+	// turno a otro, y marcarse fallback desmarca al que lo era. Un `member` puede
+	// construir su flujo entero sin tocar ninguna de las dos.
+	if b.Priority != nil && *b.Priority != flow.Priority {
+		if _, err := con.requireOrgRole(c, bot.OrgID, "owner", "admin"); err != nil {
+			return con.fail(c, fiber.StatusForbidden, "cambiar la prioridad reordena el despacho del bot y requiere un administrador")
+		}
 		if *b.Priority < 0 || *b.Priority > 1000 {
 			return con.fail(c, fiber.StatusBadRequest, "la prioridad va de 0 a 1000")
 		}
 		priority = *b.Priority
 	}
-	if b.IsFallback != nil {
+	if b.IsFallback != nil && *b.IsFallback != flow.IsFallback {
+		if _, err := con.requireOrgRole(c, bot.OrgID, "owner", "admin"); err != nil {
+			return con.fail(c, fiber.StatusForbidden, "marcar el flujo de reserva requiere un administrador")
+		}
 		if *b.IsFallback && flow.TriggerType != "message" {
 			return con.fail(c, fiber.StatusBadRequest, "solo un flujo de conversación puede ser el fallback")
+		}
+		if *b.IsFallback && len(flow.Audience) > 0 {
+			return con.fail(c, fiber.StatusBadRequest, models.ErrFlowAudienceFallback.Error())
 		}
 		isFallback = *b.IsFallback
 	}
@@ -204,6 +226,74 @@ func (con *Controller) UpdateBotFlowMeta(c *fiber.Ctx) error {
 		return con.fail(c, fiber.StatusNotFound, "flujo no encontrado")
 	}
 	return con.ok(c, "flujo actualizado", updated)
+}
+
+// PUT /bots/:botId/flows/:flowId/audience — restringe a quién atiende el flujo
+// (owner/admin). Un cuerpo vacío, `null` o `{}` retira la restricción.
+//
+// **Endpoint propio y no un campo del PATCH de metadatos**, y la razón es de
+// seguridad y no de estética: si la audiencia viajara junto al nombre, un
+// `member` —que sí puede renombrar— podría quitarse la restricción y publicar
+// después sin ella, saltándose justo el permiso que PublishBotFlow impone. Ese
+// es el agujero que este endpoint existe para cerrar.
+//
+// No exige republicar. La audiencia es metadato operativo —quién entra al
+// grafo—, de la misma familia que `priority` e `is_fallback`, que ya viven en la
+// fila mutable y ya surten efecto sin versión nueva.
+func (con *Controller) SetBotFlowAudience(c *fiber.Ctx) error {
+	bot, flow, err := con.flowWithRole(c, "owner", "admin")
+	if err != nil {
+		return con.failErr(c, err)
+	}
+	if flow.ArchivedAt != nil {
+		return con.fail(c, fiber.StatusConflict, models.ErrFlowArchived.Error())
+	}
+	body := c.Body()
+	if len(body) > 0 && !json.Valid(body) {
+		return con.fail(c, fiber.StatusBadRequest, "la condición de audiencia no es JSON válido")
+	}
+	updated, err := models.SetFlowAudience(c.Context(), con.Env.Postgres, bot.ID, flow.ID,
+		json.RawMessage(body), con.currentUserID(c))
+	if err != nil {
+		switch {
+		case errors.Is(err, models.ErrFlowAudienceFallback), errors.Is(err, models.ErrFlowAudienceOnMessage):
+			return con.fail(c, fiber.StatusBadRequest, err.Error())
+		}
+		// engine.ParseAudience devuelve errores de forma, no de infraestructura:
+		// son culpa del cuerpo enviado y merecen un 400 con el motivo exacto, que
+		// es lo que el panel muestra al autor.
+		if _, parseErr := engine.ParseAudience(json.RawMessage(body)); parseErr != nil {
+			return con.fail(c, fiber.StatusBadRequest, parseErr.Error())
+		}
+		return con.failFlow(c, "SetFlowAudience", bot.ID, err, "no se pudo asignar la audiencia")
+	}
+	if updated == nil {
+		return con.fail(c, fiber.StatusNotFound, "flujo no encontrado")
+	}
+	msg := "audiencia asignada"
+	if len(updated.Audience) == 0 {
+		msg = "audiencia retirada: el flujo vuelve a atender a todos los contactos"
+	}
+	return con.ok(c, msg, updated)
+}
+
+// POST /bots/:botId/flows/:flowId/reset-chats — corta las conversaciones que
+// siguen selladas a este flujo (owner/admin).
+//
+// Es la contrapartida de que la regla 1 del dispatcher ignore la audiencia: sin
+// esta acción, sacar a alguien de la audiencia no surtiría efecto hasta que su
+// conversación expirara, y no habría forma de forzarlo. Pide `owner/admin`
+// porque interrumpe conversaciones de clientes reales a media frase.
+func (con *Controller) ResetBotFlowChats(c *fiber.Ctx) error {
+	bot, flow, err := con.flowWithRole(c, "owner", "admin")
+	if err != nil {
+		return con.failErr(c, err)
+	}
+	cortadas, err := models.ResetChatsOfFlow(c.Context(), con.Env.Postgres, bot.ID, flow.ID)
+	if err != nil {
+		return con.failFlow(c, "ResetChatsOfFlow", bot.ID, err, "no se pudieron cortar las conversaciones")
+	}
+	return con.ok(c, "conversaciones cortadas", fiber.Map{"reset": cortadas})
 }
 
 // POST /bots/:botId/flows/:flowId/validate — valida el grafo sin publicar.
@@ -227,14 +317,30 @@ func (con *Controller) ValidateBotFlow(c *fiber.Ctx) error {
 	return con.ok(c, "el flujo es válido", fiber.Map{"valid": true, "warnings": templateValidation.Warnings})
 }
 
-// POST /bots/:botId/flows/:flowId/publish — publica el borrador (owner/admin/member).
+// POST /bots/:botId/flows/:flowId/publish — publica el borrador.
+//
+// El rol exigido **depende de a quién va a atender el flujo**: un `member` puede
+// publicar uno restringido a una audiencia, pero no uno que hable con todos los
+// contactos del bot. Es el punto entero de este diseño — permitir dar permiso de
+// publicar acotado en vez de permiso de publicar a secas—, y por eso la
+// comprobación va aquí y no en un rol nuevo.
 //
 // Secuencia de §5.2: validar → normalizar → checksum → no-op si coincide con lo
 // publicado → versión inmutable → published_version_id.
 func (con *Controller) PublishBotFlow(c *fiber.Ctx) error {
+	// Se carga con el conjunto amplio porque hace falta ver el flujo para saber
+	// qué rol exigirle. El endurecimiento viene inmediatamente después: entre las
+	// dos comprobaciones no se ha escrito nada.
 	bot, flow, err := con.flowWithRole(c, "owner", "admin", "member")
 	if err != nil {
 		return con.failErr(c, err)
+	}
+	if len(flow.Audience) == 0 {
+		if _, err := con.requireOrgRole(c, bot.OrgID, "owner", "admin"); err != nil {
+			return con.fail(c, fiber.StatusForbidden,
+				"publicar un flujo sin audiencia atiende a todos los contactos del bot y requiere un administrador. "+
+					"Puedes publicarlo restringido a una audiencia, o pedir a un administrador que lo publique abierto.")
+		}
 	}
 	if flow.ArchivedAt != nil {
 		return con.fail(c, fiber.StatusConflict, models.ErrFlowArchived.Error())
@@ -396,13 +502,22 @@ func (con *Controller) failFlow(c *fiber.Ctx, op, botID string, err error, fallb
 //     a mitad de un wait perdería el nodo en el que estaba y las variables ya
 //     recogidas. Si ese flujo dejó de estar publicado se vuelve a despachar: el
 //     operador lo pausó y pausar tiene que surtir efecto.
-//  2. Si no, gana el primer flujo cuyo trigger reconozca el mensaje, por
-//     prioridad.
-//  3. Si ninguno lo reconoce, atiende el marcado como fallback.
+//  2. Si no, gana el primer flujo que (a) reconozca el mensaje por su trigger, por
+//     prioridad, y (b) o no tenga audiencia, o incluya a este contacto.
+//  3. Si ninguno lo reconoce, atiende el marcado como fallback, con la misma
+//     condición (b) —aunque hoy la base impide que un fallback tenga audiencia—.
+//
+// **La regla 1 NO comprueba la audiencia, y es deliberado.** Sacar a alguien de
+// su flujo a mitad de un `wait` porque dejó de cumplir la condición perdería su
+// nodo y sus variables, que es justo lo que el punto 1 existe para evitar. La
+// consecuencia visible: entrar o salir de la audiencia no surte efecto hasta la
+// próxima conversación. Para eso está la acción de cortar conversaciones
+// activas, que es una decisión del operador y no una expulsión automática.
 //
 // Sin versión publicada no hay grafo y el webhook cae al eco. Es deliberado:
 // despublicar tiene que dejar de ejecutar, no revivir una copia paralela.
-func (con *Controller) messageFlowForInput(ctx context.Context, botID, stateFlowID, input string) *models.PublishedFlowRef {
+func (con *Controller) messageFlowForInput(ctx context.Context, bot *models.BotChannel, phone, stateFlowID, input string) *models.PublishedFlowRef {
+	botID := bot.ID
 	if stateFlowID != "" {
 		ref, err := models.PublishedFlowByID(ctx, con.Env.Postgres, botID, stateFlowID)
 		if err != nil {
@@ -421,16 +536,43 @@ func (con *Controller) messageFlowForInput(ctx context.Context, botID, stateFlow
 	var fallback *models.PublishedFlowRef
 	for i := range flows {
 		ref := &flows[i]
-		if ref.IsFallback && fallback == nil {
+		if ref.IsFallback && fallback == nil && con.audienceAdmits(ctx, bot, phone, ref) {
 			fallback = ref
 		}
 		var graph engine.Flow
 		if json.Unmarshal(ref.Definition, &graph) != nil {
 			continue
 		}
-		if engine.TriggerMatches(graph.Trigger, input) {
+		// La audiencia se comprueba **después** del trigger: solo pagan consulta
+		// los flujos restringidos que además reconocen el mensaje, y el bucle se
+		// corta en el primero que gana. Un bot sin audiencias no consulta nada.
+		if engine.TriggerMatches(graph.Trigger, input) && con.audienceAdmits(ctx, bot, phone, ref) {
 			return ref
 		}
 	}
 	return fallback
+}
+
+// audienceAdmits resuelve si este contacto entra en el flujo.
+//
+// La prioridad sigue siendo el único mecanismo de precedencia: un flujo con
+// audiencia gana al general publicándose con `priority` menor. No se añade aquí
+// ninguna regla de "el restringido manda", porque dos mecanismos de orden
+// compitiendo es de donde salen los despachos impredecibles.
+func (con *Controller) audienceAdmits(ctx context.Context, bot *models.BotChannel, phone string, ref *models.PublishedFlowRef) bool {
+	if len(ref.Audience) == 0 {
+		return true
+	}
+	verdict := models.ContactMatchesAudience(ctx, con.Env.Postgres, bot.OrgID, phone, ref.Audience)
+	if verdict.Serves {
+		return true
+	}
+	// Sin esta línea, un flujo restringido que no responde se depura a ciegas:
+	// desde fuera es indistinguible de un trigger que no casa o de un bot caído.
+	// El motivo separa el funcionamiento normal ("no cumple") de la avería que
+	// alguien tiene que mirar ("no se pudo evaluar"), aunque para el contacto las
+	// dos acaben igual.
+	con.whatsAppLogger().Info("flujo descartado por audiencia",
+		"bot", bot.ID, "flow", ref.Key, "motivo", verdict.Reason)
+	return false
 }

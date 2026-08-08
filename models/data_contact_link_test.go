@@ -11,12 +11,11 @@ import (
 // Regresión de dos fallos que solo aparecen contra Postgres de verdad y que se
 // descubrieron al montar el piloto D-3 (§19, pasos 5 a 9):
 //
-//  1. `PrimaryContactForRecord` y `ResolveAudience` seleccionaban la lista de
-//     columnas de contacto sin prefijo dentro de un JOIN. `created_at` existe
-//     también en `data_records`, `data_objects` y `audience_contacts`, así que
-//     Postgres respondía "column reference is ambiguous" en ejecución. Ninguna
-//     de las dos había fallado antes porque en producción no había un solo
-//     vínculo registro→contacto ni una audiencia manual.
+//  1. `PrimaryContactForRecord` seleccionaba la lista de columnas de contacto
+//     sin prefijo dentro de un JOIN. `created_at` existe también en
+//     `data_records`, `data_objects` y `data_record_contacts`, así que Postgres
+//     respondía "column reference is ambiguous" en ejecución. No había fallado
+//     antes porque en producción no había un solo vínculo registro→contacto.
 //
 //  2. El vínculo usaba `ON CONFLICT DO NOTHING` y luego trataba
 //     `RowsAffected() == 0` como error de propiedad: volver a vincular el mismo
@@ -140,30 +139,4 @@ func registroEnLista(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgI
 	}
 	t.Fatalf("el registro %s desapareció de la lista (%d registros)", recordID, len(records))
 	return DataRecordWithContact{}
-}
-
-// Misma clase de fallo en la otra consulta con JOIN sobre contactos.
-func TestAudienciaManualResuelveContactos(t *testing.T) {
-	pool, ctx := flowTestPool(t)
-	bot := botDePrueba(t, ctx, pool, "aud_")
-
-	audience, err := CreateAudience(ctx, pool, bot.ID, "Piloto", "manual", json.RawMessage(`{}`))
-	if err != nil {
-		t.Fatalf("CreateAudience: %v", err)
-	}
-	contact, err := SaveContactByOrg(ctx, pool, bot.OrgID, "", "51900333444", "Miembro", "active", nil)
-	if err != nil {
-		t.Fatalf("UpsertContact: %v", err)
-	}
-	if err := AddAudienceContact(ctx, pool, bot.ID, audience.ID, contact.ID); err != nil {
-		t.Fatalf("AddAudienceContact: %v", err)
-	}
-
-	miembros, err := ResolveAudience(ctx, pool, bot.ID, audience.ID)
-	if err != nil {
-		t.Fatalf("ResolveAudience: %v", err)
-	}
-	if len(miembros) != 1 || miembros[0].ID != contact.ID {
-		t.Fatalf("audiencia inesperada: %+v", miembros)
-	}
 }

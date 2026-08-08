@@ -23,14 +23,17 @@ import (
 
 // Flow es un flujo del bot con su borrador y su versión publicada.
 type Flow struct {
-	ID                 string          `db:"id" json:"id"`
-	BotID              string          `db:"bot_id" json:"botId"`
-	Key                string          `db:"key" json:"key"`
-	Name               string          `db:"name" json:"name"`
-	TriggerType        string          `db:"trigger_type" json:"triggerType"`
-	Status             string          `db:"status" json:"status"`
-	Priority           int             `db:"priority" json:"priority"`
-	IsFallback         bool            `db:"is_fallback" json:"isFallback"`
+	ID          string `db:"id" json:"id"`
+	BotID       string `db:"bot_id" json:"botId"`
+	Key         string `db:"key" json:"key"`
+	Name        string `db:"name" json:"name"`
+	TriggerType string `db:"trigger_type" json:"triggerType"`
+	Status      string `db:"status" json:"status"`
+	Priority    int    `db:"priority" json:"priority"`
+	IsFallback  bool   `db:"is_fallback" json:"isFallback"`
+	// Audience restringe a quién atiende el flujo. NULL/vacío = atiende a todos.
+	// Es la configuración de un `data_query`, no un lenguaje de filtros propio.
+	Audience           json.RawMessage `db:"audience" json:"audience,omitempty"`
 	Draft              json.RawMessage `db:"draft" json:"draft"`
 	PublishedVersionID *string         `db:"published_version_id" json:"publishedVersionId,omitempty"`
 	CreatedBy          *string         `db:"created_by" json:"createdBy,omitempty"`
@@ -75,7 +78,7 @@ var (
 )
 
 const flowCols = `id::text AS id, bot_id::text AS bot_id, key, name, trigger_type, status,
-	priority, is_fallback, draft, published_version_id::text AS published_version_id,
+	priority, is_fallback, audience, draft, published_version_id::text AS published_version_id,
 	created_by, updated_by, archived_at, last_tick_at, created_at, updated_at`
 
 // Sin calificar por tabla: no se puede usar en un SELECT con JOIN a `flows`,
@@ -610,11 +613,15 @@ func RestoreFlowVersion(ctx context.Context, p *pgxpool.Pool, botID, flowID, ver
 // dispatcher del webhook, que necesita saber **cuál** flujo eligió (para poder
 // reanudar la conversación en ese mismo grafo), no solo su definición.
 type PublishedFlowRef struct {
-	FlowID     string          `db:"flow_id"`
-	Key        string          `db:"key"`
-	Name       string          `db:"name"`
-	Priority   int             `db:"priority"`
-	IsFallback bool            `db:"is_fallback"`
+	FlowID     string `db:"flow_id"`
+	Key        string `db:"key"`
+	Name       string `db:"name"`
+	Priority   int    `db:"priority"`
+	IsFallback bool   `db:"is_fallback"`
+	// Audience viaja con el flujo publicado aunque viva en la fila mutable: el
+	// dispatcher la necesita en el mismo lote para no consultar `flows` otra vez
+	// dentro del bucle.
+	Audience   json.RawMessage `db:"audience"`
 	Definition json.RawMessage `db:"definition"`
 }
 
@@ -627,7 +634,7 @@ type PublishedFlowRef struct {
 // único flujo que se ejecuta jamás.
 func PublishedMessageFlows(ctx context.Context, p *pgxpool.Pool, botID string) ([]PublishedFlowRef, error) {
 	rows, err := p.Query(ctx,
-		`SELECT f.id::text AS flow_id, f.key, f.name, f.priority, f.is_fallback, v.definition
+		`SELECT f.id::text AS flow_id, f.key, f.name, f.priority, f.is_fallback, f.audience, v.definition
 		 FROM flows f
 		 JOIN flow_versions v ON v.id = f.published_version_id
 		 WHERE f.bot_id = $1::uuid AND f.trigger_type = 'message'
@@ -648,7 +655,7 @@ func PublishedMessageFlows(ctx context.Context, p *pgxpool.Pool, botID string) (
 // a despachar en vez de ejecutar algo que el operador pausó.
 func PublishedFlowByID(ctx context.Context, p *pgxpool.Pool, botID, flowID string) (*PublishedFlowRef, error) {
 	rows, err := p.Query(ctx,
-		`SELECT f.id::text AS flow_id, f.key, f.name, f.priority, f.is_fallback, v.definition
+		`SELECT f.id::text AS flow_id, f.key, f.name, f.priority, f.is_fallback, f.audience, v.definition
 		 FROM flows f
 		 JOIN flow_versions v ON v.id = f.published_version_id
 		 WHERE f.bot_id = $1::uuid AND f.id = $2::uuid

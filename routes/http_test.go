@@ -50,6 +50,16 @@ func TestRutasDeLaInterfazOperativaRegistradas(t *testing.T) {
 		// Comparte prefijo con GET /bots/:botId/channel: si alguien registrara
 		// `/channel/:algo` antes, esta dejaría de existir sin avisar.
 		http.MethodGet + " /bots/:botId/channel/health",
+		// La audiencia es endpoint propio a propósito: si acabara siendo un campo
+		// del PATCH de metadatos, un `member` podría quitarse la restricción y
+		// publicar sin ella. Que la ruta exista es parte del control de acceso.
+		http.MethodPut + " /bots/:botId/flows/:flowId/audience",
+		// Sin esta acción, sacar a un contacto de la audiencia no surtiría efecto
+		// hasta que su conversación expirara y no habría forma de forzarlo.
+		http.MethodPost + " /bots/:botId/flows/:flowId/reset-chats",
+		// Comparte prefijo con /contact-fields: si alguien registrara
+		// `/contact-fields/:algo` antes, esta dejaría de existir sin avisar.
+		http.MethodGet + " /orgs/:orgId/contact-query-fields",
 	}
 	for _, ruta := range esperadas {
 		if !paths[ruta] {
@@ -65,5 +75,23 @@ func TestValidateCronNoCuelgaDeFlows(t *testing.T) {
 	paths := registeredPaths(t)
 	if paths[http.MethodPost+" /bots/:botId/flows/validate-cron"] {
 		t.Error("`/flows/validate-cron` chocaría con un flujo cuya key sea validate-cron")
+	}
+}
+
+// Las audiencias se retiraron en 019_flows_audience.sql: una audiencia es una
+// consulta sobre los datos de la organización, no una tabla propia. Sus cuatro
+// rutas no deben volver, ni siquiera "por compatibilidad" — reintroducirlas
+// traería de vuelta la tabla que nadie llegó a usar.
+func TestRutasDeAudienciasRetiradas(t *testing.T) {
+	paths := registeredPaths(t)
+	for _, ruta := range []string{
+		http.MethodGet + " /bots/:botId/audiences",
+		http.MethodPost + " /bots/:botId/audiences",
+		http.MethodGet + " /bots/:botId/audiences/:audienceId/contacts",
+		http.MethodPost + " /bots/:botId/audiences/:audienceId/contacts/:contactId",
+	} {
+		if paths[ruta] {
+			t.Errorf("la ruta de audiencias volvió: %s", ruta)
+		}
 	}
 }
