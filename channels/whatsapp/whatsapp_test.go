@@ -145,6 +145,98 @@ func TestParseReactionAndRemoval(t *testing.T) {
 	}
 }
 
+// TestParseConservaElCuerpoOriginal fija que `Raw` sea el fragmento tal como lo
+// mandó Meta y no una reserialización de la struct. La diferencia solo se nota en
+// los campos que el parser no declara —aquí `referral`, el de los anuncios
+// Click-to-WhatsApp—, y es la que decide si una campaña se puede atribuir: el
+// mensaje pasa una vez, y lo que no se guarde entonces no se recupera nunca.
+func TestParseConservaElCuerpoOriginal(t *testing.T) {
+	payload := `{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"PNID"},"messages":[
+		{"from":"51999","id":"wamid.ad","type":"text","text":{"body":"hola"},
+		 "referral":{"source_url":"https://fb.me/x","source_id":"120210000","source_type":"ad",
+		  "headline":"¿Respondes mensajes todo el día?","body":"Bawto contesta por ti",
+		  "media_type":"image","image_url":"https://scontent/x.jpg","ctwa_clid":"CLID123"}}
+	]}}]}]}`
+	msgs, err := Parse([]byte(payload))
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("Parse: len=%d err=%v", len(msgs), err)
+	}
+
+	// Lo tipado sigue funcionando: este cambio no reinterpreta nada.
+	if msgs[0].Text != "hola" || msgs[0].Type != channels.MsgText || msgs[0].WaID != "wamid.ad" {
+		t.Fatalf("el mensaje dejó de parsearse bien: %+v", msgs[0])
+	}
+
+	var got struct {
+		Referral map[string]any `json:"referral"`
+	}
+	if err := json.Unmarshal(msgs[0].Raw, &got); err != nil {
+		t.Fatalf("Raw no es JSON válido: %v", err)
+	}
+	if got.Referral == nil {
+		t.Fatal("el referral se perdió: Raw no conserva los campos que la struct no declara")
+	}
+	// Campo por campo: guardar el objeto a medias sería la misma fuga más tarde.
+	for key, want := range map[string]string{
+		"source_id": "120210000", "source_type": "ad", "ctwa_clid": "CLID123",
+		"headline": "¿Respondes mensajes todo el día?", "source_url": "https://fb.me/x",
+	} {
+		if got.Referral[key] != want {
+			t.Errorf("referral[%q] = %v, esperaba %q", key, got.Referral[key], want)
+		}
+	}
+}
+
+// Contrapartida de la anterior: el cambio toca el camino caliente del webhook y
+// el 100 % del tráfico de hoy llega **sin** referral. Un mensaje normal debe
+// seguir dando exactamente el mismo Raw que antes.
+func TestParseRawDeMensajeSinReferral(t *testing.T) {
+	payload := `{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"PNID"},"messages":[
+		{"from":"51999","id":"wamid.1","type":"image","image":{"id":"MID","mime_type":"image/jpeg","sha256":"abc","caption":"pago"}}
+	]}}]}]}`
+	msgs, err := Parse([]byte(payload))
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("Parse: len=%d err=%v", len(msgs), err)
+	}
+	if msgs[0].MediaID != "MID" || msgs[0].Caption != "pago" || msgs[0].Type != channels.MsgImage {
+		t.Fatalf("imagen mal parseada: %+v", msgs[0])
+	}
+	var got map[string]any
+	if err := json.Unmarshal(msgs[0].Raw, &got); err != nil {
+		t.Fatalf("Raw no es JSON válido: %v", err)
+	}
+	if got["id"] != "wamid.1" || got["type"] != "image" {
+		t.Fatalf("Raw perdió campos del mensaje: %v", got)
+	}
+}
+
+// Con varios mensajes en el mismo lote, cada Raw debe ser el suyo. encoding/json
+// reutiliza el buffer que entrega a UnmarshalJSON, así que quedarse con el slice
+// sin copiarlo dejaría a todos apuntando a los bytes del último.
+func TestParseRawNoSeMezclaEntreMensajes(t *testing.T) {
+	payload := `{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"PNID"},"messages":[
+		{"from":"51999","id":"wamid.1","type":"text","text":{"body":"uno"},"referral":{"source_id":"AD-1"}},
+		{"from":"51999","id":"wamid.2","type":"text","text":{"body":"dos"},"referral":{"source_id":"AD-2"}}
+	]}}]}]}`
+	msgs, err := Parse([]byte(payload))
+	if err != nil || len(msgs) != 2 {
+		t.Fatalf("Parse: len=%d err=%v", len(msgs), err)
+	}
+	for i, wantID := range []string{"AD-1", "AD-2"} {
+		var got struct {
+			Referral struct {
+				SourceID string `json:"source_id"`
+			} `json:"referral"`
+		}
+		if err := json.Unmarshal(msgs[i].Raw, &got); err != nil {
+			t.Fatalf("Raw[%d] no es JSON válido: %v", i, err)
+		}
+		if got.Referral.SourceID != wantID {
+			t.Errorf("Raw[%d].referral.source_id = %q, esperaba %q", i, got.Referral.SourceID, wantID)
+		}
+	}
+}
+
 func TestSendText(t *testing.T) {
 	var gotPath, gotAuth string
 	var gotBody map[string]any

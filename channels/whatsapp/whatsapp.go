@@ -63,84 +63,106 @@ type webhookPayload struct {
 					} `json:"profile"`
 					WaID string `json:"wa_id"`
 				} `json:"contacts"`
-				Messages []struct {
-					From    string `json:"from"`
-					ID      string `json:"id"`
-					Type    string `json:"type"`
-					Context struct {
-						ID                  string `json:"id"`
-						Forwarded           bool   `json:"forwarded"`
-						FrequentlyForwarded bool   `json:"frequently_forwarded"`
-					} `json:"context"`
-					Text struct {
-						Body string `json:"body"`
-					} `json:"text"`
-					Image struct {
-						ID       string `json:"id"`
-						MimeType string `json:"mime_type"`
-						Caption  string `json:"caption"`
-						SHA256   string `json:"sha256"`
-						URL      string `json:"url"`
-					} `json:"image"`
-					Audio struct {
-						ID       string `json:"id"`
-						MimeType string `json:"mime_type"`
-						SHA256   string `json:"sha256"`
-						URL      string `json:"url"`
-						Voice    bool   `json:"voice"`
-					} `json:"audio"`
-					Document struct {
-						ID       string `json:"id"`
-						MimeType string `json:"mime_type"`
-						SHA256   string `json:"sha256"`
-						URL      string `json:"url"`
-						Caption  string `json:"caption"`
-						Filename string `json:"filename"`
-					} `json:"document"`
-					Video struct {
-						ID       string `json:"id"`
-						MimeType string `json:"mime_type"`
-						SHA256   string `json:"sha256"`
-						URL      string `json:"url"`
-						Caption  string `json:"caption"`
-					} `json:"video"`
-					Sticker struct {
-						ID       string `json:"id"`
-						MimeType string `json:"mime_type"`
-						SHA256   string `json:"sha256"`
-						URL      string `json:"url"`
-						Animated bool   `json:"animated"`
-					} `json:"sticker"`
-					Location struct {
-						Latitude  *float64 `json:"latitude"`
-						Longitude *float64 `json:"longitude"`
-						Name      string   `json:"name"`
-						Address   string   `json:"address"`
-					} `json:"location"`
-					Contacts json.RawMessage `json:"contacts"`
-					Order    json.RawMessage `json:"order"`
-					Reaction struct {
-						MessageID string  `json:"message_id"`
-						Emoji     *string `json:"emoji"`
-					} `json:"reaction"`
-					Button struct {
-						Payload string `json:"payload"`
-						Text    string `json:"text"`
-					} `json:"button"`
-					Interactive struct {
-						ButtonReply struct {
-							ID    string `json:"id"`
-							Title string `json:"title"`
-						} `json:"button_reply"`
-						ListReply struct {
-							ID    string `json:"id"`
-							Title string `json:"title"`
-						} `json:"list_reply"`
-					} `json:"interactive"`
-				} `json:"messages"`
+				Messages []webhookMessage `json:"messages"`
 			} `json:"value"`
 		} `json:"changes"`
 	} `json:"entry"`
+}
+
+// webhookMessage conserva el cuerpo original del mensaje además de los campos que
+// el parser interpreta. Sin esto, `Raw` se rellenaba reserializando la struct ya
+// parseada, así que todo campo que Meta mande y aquí no esté declarado se perdía
+// sin dejar rastro: el `referral` de los anuncios Click-to-WhatsApp —con qué
+// anuncio trajo la conversación— fue el primero en hacer falta, y para entonces
+// las conversaciones ya habían pasado. Lo que no se guarda al entrar no se
+// recupera después.
+type webhookMessage struct {
+	raw json.RawMessage
+	webhookMessageFields
+}
+
+// UnmarshalJSON copia el fragmento antes de delegar en los campos tipados:
+// encoding/json reutiliza el buffer que entrega, así que quedarse con el slice
+// sin copiar dejaría el `raw` apuntando a bytes de otro mensaje.
+func (m *webhookMessage) UnmarshalJSON(b []byte) error {
+	m.raw = append(json.RawMessage(nil), b...)
+	return json.Unmarshal(b, &m.webhookMessageFields)
+}
+
+type webhookMessageFields struct {
+	From    string `json:"from"`
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Context struct {
+		ID                  string `json:"id"`
+		Forwarded           bool   `json:"forwarded"`
+		FrequentlyForwarded bool   `json:"frequently_forwarded"`
+	} `json:"context"`
+	Text struct {
+		Body string `json:"body"`
+	} `json:"text"`
+	Image struct {
+		ID       string `json:"id"`
+		MimeType string `json:"mime_type"`
+		Caption  string `json:"caption"`
+		SHA256   string `json:"sha256"`
+		URL      string `json:"url"`
+	} `json:"image"`
+	Audio struct {
+		ID       string `json:"id"`
+		MimeType string `json:"mime_type"`
+		SHA256   string `json:"sha256"`
+		URL      string `json:"url"`
+		Voice    bool   `json:"voice"`
+	} `json:"audio"`
+	Document struct {
+		ID       string `json:"id"`
+		MimeType string `json:"mime_type"`
+		SHA256   string `json:"sha256"`
+		URL      string `json:"url"`
+		Caption  string `json:"caption"`
+		Filename string `json:"filename"`
+	} `json:"document"`
+	Video struct {
+		ID       string `json:"id"`
+		MimeType string `json:"mime_type"`
+		SHA256   string `json:"sha256"`
+		URL      string `json:"url"`
+		Caption  string `json:"caption"`
+	} `json:"video"`
+	Sticker struct {
+		ID       string `json:"id"`
+		MimeType string `json:"mime_type"`
+		SHA256   string `json:"sha256"`
+		URL      string `json:"url"`
+		Animated bool   `json:"animated"`
+	} `json:"sticker"`
+	Location struct {
+		Latitude  *float64 `json:"latitude"`
+		Longitude *float64 `json:"longitude"`
+		Name      string   `json:"name"`
+		Address   string   `json:"address"`
+	} `json:"location"`
+	Contacts json.RawMessage `json:"contacts"`
+	Order    json.RawMessage `json:"order"`
+	Reaction struct {
+		MessageID string  `json:"message_id"`
+		Emoji     *string `json:"emoji"`
+	} `json:"reaction"`
+	Button struct {
+		Payload string `json:"payload"`
+		Text    string `json:"text"`
+	} `json:"button"`
+	Interactive struct {
+		ButtonReply struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+		} `json:"button_reply"`
+		ListReply struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+		} `json:"list_reply"`
+	} `json:"interactive"`
 }
 
 // Parse normaliza un payload del webhook de WhatsApp a InboundMessages.
@@ -168,8 +190,7 @@ func Parse(body []byte) ([]channels.InboundMessage, error) {
 					Forwarded:           m.Context.Forwarded,
 					FrequentlyForwarded: m.Context.FrequentlyForwarded,
 				}
-				raw, _ := json.Marshal(m)
-				im.Raw = raw
+				im.Raw = m.raw
 				switch m.Type {
 				case "text":
 					im.Type = channels.MsgText
