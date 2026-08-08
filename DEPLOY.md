@@ -1,7 +1,9 @@
 # Deploy del backend (Bawto)
 
 Estado actual del despliegue en producción y cómo actualizarlo. Backend,
-frontend y topología final verificados el 2026-08-02.
+frontend y topología verificados el 2026-08-07 desplegando de verdad: el
+procedimiento del frontend estaba sin documentar y hubo que reconstruirlo
+leyendo los scripts del server.
 
 ## Topología
 
@@ -37,8 +39,8 @@ Postgres 16 vive en el mismo server y escucha en 127.0.0.1 y 10.11.12.1.
 | Binario | `/opt/bawto/bawto-backend` | Go, linux/amd64, corre como `www-data` |
 | Config | `/opt/bawto/.env` | `chmod 600`; Postgres por `127.0.0.1`; bindea `127.0.0.1:3009` |
 | Servicio | `/etc/systemd/system/bawto-backend.service` | `Restart=always`, enabled al boot |
-| Frontend | `/opt/bawto-frontend` | release, `.env` con `chmod 600` y contenedor `bawto-frontend` |
-| Imagen frontend | `bawto-frontend:20260802-1` | Next standalone, Node 22, límite de 512 MiB |
+| Frontend | `/opt/bawto-frontend` | releases `source-<etiqueta>/`, `.env` con `chmod 600`, contenedor `bawto-frontend` |
+| Imagen frontend | consultar, no fijar aquí | `docker inspect --format '{{.Config.Image}}' bawto-frontend`. Next standalone, Node 22, límite de 512 MiB |
 | nginx | `/etc/nginx/sites-available/bawto.conf` | frontend `:3010` + webhook con failover; backup `bawto.conf.bak.20260728-081909` |
 | Swap | `/swapfile` | 2 GiB, persistente mediante `/etc/fstab` |
 
@@ -69,6 +71,43 @@ ssh -p 22022 root@209.74.83.236 "systemctl stop bawto-backend && mv /opt/bawto/b
 (Se sube como `.new` y se mueve con el servicio parado porque Linux no deja
 sobreescribir un binario en ejecución. Conviene dejar el anterior como
 `bawto-backend.pre-<fase>` antes de mover: revertir es entonces un `mv`.)
+
+**Comprobar el SHA256 en los tres sitios, no el health check.** Un `{"ok":true}`
+dice que *algo* responde, no *qué código* corre: si el `mv` falló, si el servicio
+arrancó del binario viejo o si el `scp` subió a medias, el health check sale en
+200 igualmente.
+
+```bash
+sha256sum /opt/bawto/bawto-backend                                    # en disco
+sha256sum /proc/$(systemctl show -p MainPID --value bawto-backend)/exe # el proceso vivo
+```
+
+Los dos tienen que coincidir con el de la PC
+(`(Get-FileHash "$env:TEMP\bawto-backend" -Algorithm SHA256).Hash`). El del
+proceso es el que de verdad importa: es el único que no se puede fingir.
+
+Y mirar el arranque, porque **una credencial ausente no rompe el arranque:
+degrada en silencio**. Tienen que salir **dos** líneas:
+
+```bash
+journalctl -u bawto-backend --since '-3 min' --no-pager | grep -E 'IA de texto|IA visual'
+```
+
+Si falta «IA visual habilitada», `MINIMAX_M3_API_KEY` no está en el `.env` del
+server: el bot arranca sano, responde su mensaje de reserva y el agente visual no
+funciona sin un solo error.
+
+**Si el cambio toca el camino del webhook, reiniciar también la PC.** Es el
+primario (§Topología), así que desplegar solo el server deja las dos instancias
+con código distinto y el comportamiento depende de quién atienda cada mensaje.
+Se comprueba en un segundo:
+
+```bash
+curl -s -o /dev/null -w '%{time_total}\n' https://bawto.sistemuino.com/webhook/whatsapp
+```
+
+~0,3 s significa que contesta el primario. ~3,1 s es el `proxy_connect_timeout`
+al primario caído antes de la conmutación: el bot funciona, pero por el backup.
 
 **Esto actualiza solo la instancia del server.** La PC es el *primario* del webhook
 y corre su propio proceso (`go run .` en `backend/`), así que tras un redeploy las
@@ -233,6 +272,54 @@ El contenedor publica solo en loopback mediante `--network host`; nginx es el
 - `GO_API_URL=http://127.0.0.1:3009`
 - Postgres local (`127.0.0.1`)
 
-Para un nuevo release, crear una etiqueta nueva, comprobar `http://127.0.0.1:3010`
-y recién entonces recargar nginx. No reutilizar el puerto `3000`: pertenece al
-servicio Vox en este servidor.
+No reutilizar el puerto `3000`: pertenece al servicio Vox en este servidor.
+
+### El mecanismo
+
+El frontend **no se construye en la PC**: se sube el código y la imagen se
+construye en el server. Cada release vive en `/opt/bawto-frontend` con tres
+piezas que comparten etiqueta `<AAAAMMDD>-<n>`:
+
+| Pieza | Qué es |
+|---|---|
+| `source-<etiqueta>.tar.gz` | el código subido |
+| `source-<etiqueta>/` | el código extraído (a esto apunta el symlink `current`) |
+| `deploy-<etiqueta>.sh` | el script que construye y conmuta |
+| `deploy-<etiqueta>.log` | la salida de `docker build` |
+
+El script hace, en este orden: aborta si la etiqueta ya existe —para no pisar un
+release—, extrae el tarball, carga el `.env` del server, construye la imagen,
+para y recrea el contenedor, y sondea `http://127.0.0.1:3010/signin` durante 30 s.
+Si no queda sano, **vuelve solo** a la imagen anterior, que capturó al empezar con
+`docker inspect`. Imprime `FRONTEND_HEALTHY` o `FRONTEND_ROLLED_BACK`.
+
+### Cómo publicar un release
+
+Desde la PC, en `frontend/`. El tarball se genera con `git archive HEAD` **a
+propósito**: así solo viaja lo commiteado, y no el árbol de trabajo con cambios a
+medias. Es la misma regla que para el binario del backend.
+
+```bash
+REL=$(date +%Y%m%d)-1        # sube el -n si ya publicaste hoy
+git archive --format=tar.gz -o /tmp/source-$REL.tar.gz HEAD
+scp -P 22022 /tmp/source-$REL.tar.gz root@209.74.83.236:/opt/bawto-frontend/
+```
+
+En el server, el script nuevo sale del anterior cambiando una línea; no hay que
+escribirlo a mano:
+
+```bash
+cd /opt/bawto-frontend
+ANTERIOR=deploy-20260807-1.sh          # el último que se usó
+sed "s/^release=.*$/release=$REL/" $ANTERIOR > deploy-$REL.sh
+chmod +x deploy-$REL.sh
+diff $ANTERIOR deploy-$REL.sh          # debe diferir SOLO en la línea release=
+./deploy-$REL.sh
+```
+
+Verificación pública:
+
+```powershell
+curl.exe -I https://bawto.sistemuino.com/signin
+curl.exe -s https://bawto.sistemuino.com/api/auth/jwks
+```
