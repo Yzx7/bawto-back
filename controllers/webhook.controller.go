@@ -49,9 +49,19 @@ func (con *Controller) WhatsAppWebhook(c *fiber.Ctx) error {
 // handoffWindow es cuánto calla el bot tras que un humano toma la conversación.
 const handoffWindow = 12 * time.Hour
 
+// rapidTextDebounce recoge frases partidas en varios mensajes ("hola" / "quiero
+// el plan Base") para que solo el último avance el flujo. Todos quedan en el
+// historial y el agente recibe la intención completa, sin respuestas cruzadas.
+const rapidTextDebounce = 400 * time.Millisecond
+const rapidTextWindow = 2 * time.Second
+
 // processWhatsApp normaliza, rutea por phone_number_id, ejecuta el flujo y responde.
 func (con *Controller) processWhatsApp(body []byte) {
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	// Este contexto cubre solo normalización y persistencia inicial. Esperar el
+	// turno del chat y ejecutar el flujo reciben presupuestos propios más abajo:
+	// compartir uno solo hacía que el segundo mensaje de una ráfaga llegara al
+	// lock con casi todo su tiempo ya consumido.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	pool := con.Env.Postgres
 	cfg := con.Env.Config
@@ -81,7 +91,8 @@ func (con *Controller) processWhatsApp(body []byte) {
 			con.whatsAppLogger().Error("wa upsert chat", "err", err.Error())
 			continue
 		}
-		if _, err := models.EnsureInboundContact(ctx, pool, bot.ID, m.From, m.ContactName); err != nil {
+		contact, err := models.EnsureInboundContact(ctx, pool, bot.ID, m.From, m.ContactName)
+		if err != nil {
 			con.whatsAppLogger().Error("wa ensure contact", "err", err.Error())
 			continue
 		}
@@ -150,28 +161,82 @@ func (con *Controller) processWhatsApp(body []byte) {
 		}
 		con.publishInbound(ctx, bot.ID, chatID, messageID, m, hasMedia)
 
+		// Un bloqueo conserva el mensaje y el medio como evidencia, pero corta el
+		// flujo antes de ejecutar IA, herramientas o cualquier respuesta saliente.
+		if contact != nil && contact.Status == "blocked" {
+			con.whatsAppLogger().Info("wa contacto bloqueado; mensaje archivado sin respuesta",
+				"bot_id", bot.ID, "chat_id", chatID, "contact_id", contact.ID)
+			continue
+		}
+
 		// Handoff: si una persona tiene el chat, el bot guarda el mensaje pero no responde.
 		if models.BotSilenced(ctx, pool, chatID) {
 			continue
 		}
 
-		lockConn, err := pool.Acquire(ctx)
+		// Los mensajes del mismo chat se procesan estrictamente en orden incluso
+		// entre varias instancias. Como el inbound ya está persistido, esperar el
+		// lock no debe consumir el presupuesto de IA de este turno.
+		lockCtx, lockCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		lockConn, err := pool.Acquire(lockCtx)
 		if err != nil {
+			lockCancel()
+			con.whatsAppLogger().Error("wa lock: no se pudo tomar conexión", "chat", chatID, "message", m.WaID, "err", err.Error())
 			continue
 		}
-		if _, err = lockConn.Exec(ctx, `SELECT pg_advisory_lock(hashtextextended($1,0))`, chatID); err != nil {
+		if _, err = lockConn.Exec(lockCtx, `SELECT pg_advisory_lock(hashtextextended($1,0))`, chatID); err != nil {
+			lockCancel()
 			lockConn.Release()
+			con.whatsAppLogger().Error("wa lock: no se pudo serializar el chat", "chat", chatID, "message", m.WaID, "err", err.Error())
 			continue
 		}
-		replies, newState, handoff := con.runFlowOrEcho(ctx, bot, chatID, messageID, m, correlation, func() {
-			if err := whatsapp.ShowTypingIndicator(ctx, sendCfg, m.WaID); err != nil {
+		lockCancel()
+		if m.Type == channels.MsgText || m.Type == channels.MsgInteractive || m.Type == channels.MsgReply {
+			// La espera ocurre ya bajo el lock. Así da tiempo a que el siguiente
+			// webhook persista su fragmento, pero ningún turno del mismo chat puede
+			// adelantarse mientras decidimos cuál representa la ráfaga completa.
+			timer := time.NewTimer(rapidTextDebounce)
+			<-timer.C
+			burstCtx, burstCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			newer, burstErr := models.HasNewerInboundText(burstCtx, pool, chatID, messageID, rapidTextWindow)
+			burstCancel()
+			if burstErr != nil {
+				con.whatsAppLogger().Warn("wa ráfaga: no se pudo comprobar mensaje posterior", "chat", chatID, "message", m.WaID, "err", burstErr.Error())
+			} else if newer {
+				con.whatsAppLogger().Info("wa ráfaga: fragmento absorbido por el turno siguiente", "chat", chatID, "message", m.WaID)
+				_, _ = lockConn.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1,0))`, chatID)
+				lockConn.Release()
+				continue
+			} else {
+				burstCtx, burstCancel = context.WithTimeout(context.Background(), 3*time.Second)
+				fragments, fragmentsErr := models.InboundTextBurst(burstCtx, pool, chatID, messageID, rapidTextWindow)
+				burstCancel()
+				if fragmentsErr != nil {
+					con.whatsAppLogger().Warn("wa ráfaga: no se pudieron reunir fragmentos", "chat", chatID, "message", m.WaID, "err", fragmentsErr.Error())
+				} else if len(fragments) > 1 {
+					m.Text = strings.Join(fragments, "\n")
+					con.whatsAppLogger().Info("wa ráfaga: fragmentos reunidos en un turno", "chat", chatID, "message", m.WaID, "fragments", len(fragments))
+				}
+			}
+		}
+
+		// MiniMax orquestador + DeepSeek especialista son dos llamadas legítimas;
+		// el turno obtiene su presupuesto completo recién después de ganar el lock.
+		turnCtx, turnCancel := context.WithTimeout(context.Background(), 50*time.Second)
+		replies, newState, handoff := con.runFlowOrEcho(turnCtx, bot, chatID, messageID, m, correlation, func() {
+			if err := whatsapp.ShowTypingIndicator(turnCtx, sendCfg, m.WaID); err != nil {
 				// El indicador es accesorio: un fallo no bloquea la respuesta.
 				con.whatsAppLogger().Warn("wa typing indicator", "message", m.WaID, "err", err.Error())
 			}
 		})
+		turnCancel()
+
+		// El proveedor puede agotar su timeout justo al producir el fallback. Envío,
+		// auditoría y estado usan otro contexto para que esa respuesta no se pierda.
+		commitCtx, commitCancel := context.WithTimeout(context.Background(), 20*time.Second)
 		sentAll := true
 		for _, txt := range replies {
-			id, err := whatsapp.SendText(ctx, sendCfg, m.From, txt)
+			id, err := whatsapp.SendText(commitCtx, sendCfg, m.From, txt)
 			if err != nil {
 				if strings.Contains(err.Error(), "131037") {
 					con.whatsAppLogger().Error("wa send: Meta bloqueó el número hasta aprobar su nombre para mostrar", "err", err.Error(), "action", "WhatsApp Manager > Números de teléfono > Nombre para mostrar")
@@ -181,25 +246,28 @@ func (con *Controller) processWhatsApp(body []byte) {
 				sentAll = false
 				break
 			}
-			if saved, err := models.InsertOutboundMessage(ctx, pool, chatID, id, "text", txt); err != nil {
+			if saved, err := models.InsertOutboundMessage(commitCtx, pool, chatID, id, "text", txt); err != nil {
 				con.whatsAppLogger().Error("wa guardar respuesta", "err", err.Error())
 			} else if saved != nil {
-				con.publishChat(ctx, "message", bot.ID, chatID, saved)
-				con.reconcileStatusEvents(ctx, id)
+				con.publishChat(commitCtx, "message", bot.ID, chatID, saved)
+				con.reconcileStatusEvents(commitCtx, id)
 			}
 		}
 		if sentAll && newState != nil {
-			_ = models.SetChatState(ctx, pool, chatID, newState)
+			if err := models.SetChatState(commitCtx, pool, chatID, newState); err != nil {
+				con.whatsAppLogger().Error("wa guardar estado", "chat", chatID, "message", m.WaID, "err", err.Error())
+			}
 		}
 		// El flujo escaló a un humano (action: handoff).
 		if handoff {
-			if err := models.HandoffChat(ctx, pool, chatID, handoffWindow); err != nil {
+			if err := models.HandoffChat(commitCtx, pool, chatID, handoffWindow); err != nil {
 				con.whatsAppLogger().Error("handoff", "chat", chatID, "err", err.Error())
 			} else {
 				con.whatsAppLogger().Info("chat escalado a humano", "chat", chatID)
-				con.publishMode(ctx, bot.ID, chatID)
+				con.publishMode(commitCtx, bot.ID, chatID)
 			}
 		}
+		commitCancel()
 		_, _ = lockConn.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1,0))`, chatID)
 		lockConn.Release()
 	}
@@ -540,8 +608,8 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 	}
 	beforeProcess()
 
-	// Inyecta el nodo IA si hay al menos un proveedor configurado. La capacidad
-	// declarada por cada nodo decide después: image → MiniMax-M3; resto → DeepSeek.
+	// Inyecta el nodo IA si hay al menos un proveedor configurado. El contrato del
+	// nodo decide después: imagen u orquestador → MiniMax-M3; especialista → DeepSeek.
 	flowContext := models.FlowContext(ctx, pool, bot.ID, m.From)
 	flowContext["source_intent"] = ""
 	if correlated, err := models.CorrelationContext(ctx, pool, bot.ID, correlation); err != nil {
@@ -566,7 +634,7 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 			ReactionRemoved: m.ReactionRemoved,
 		},
 	}
-	if con.Env.TextAgent != nil || con.Env.VisionAgent != nil {
+	if con.Env.TextAgent != nil || con.Env.OrchestratorAgent != nil || con.Env.VisionAgent != nil {
 		deps.AgentStructured = func(request engine.AgentRequest) (engine.AgentResult, error) {
 			nodeID := request.NodeID
 			if mediaErr := con.attachCurrentAgentMedia(ctx, bot, &request, mediaSource); mediaErr != nil {
@@ -668,6 +736,8 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 			return con.execDataMutate(ctx, bot, m.From, m.WaID, args)
 		case "data_query":
 			return con.execDataQuery(ctx, bot, m.From, args)
+		case "subscription_activate":
+			return con.execSubscriptionActivate(ctx, bot, m.From, args)
 		default:
 			return "", fmt.Errorf("herramienta %q no implementada", ref)
 		}

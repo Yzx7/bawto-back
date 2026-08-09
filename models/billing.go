@@ -154,13 +154,38 @@ func getBillingProfile(ctx context.Context, pool *pgxpool.Pool, orgID string) (*
 		if org.RUC != nil {
 			profile.TaxID = *org.RUC
 		}
+		if err := applySubscriptionProfile(ctx, pool, &profile); err != nil {
+			return nil, err
+		}
 		return &profile, nil
 	}
 	if err != nil {
 		return nil, err
 	}
 	profile.Configured = true
+	if err := applySubscriptionProfile(ctx, pool, &profile); err != nil {
+		return nil, err
+	}
 	return &profile, nil
+}
+
+// El perfil fiscal conserva razón social, correo e impuestos. El plan y su
+// estado, en cambio, se derivan siempre del ledger Data para no mantener dos
+// verdades que puedan divergir después de una venta o anulación por WhatsApp.
+func applySubscriptionProfile(ctx context.Context, pool *pgxpool.Pool, profile *BillingProfile) error {
+	subscription, err := GetOrganizationSubscription(ctx, pool, profile.OrganizationID)
+	if err != nil {
+		return err
+	}
+	profile.PlanName = subscription.PlanName
+	profile.Status = "unconfigured"
+	if subscription.Status == "activa" && subscription.EndsAt != nil && subscription.EndsAt.After(time.Now()) {
+		profile.Status = "active"
+	} else if subscription.Status == "cancelada" || subscription.Status == "vencida" ||
+		(subscription.EndsAt != nil && !subscription.EndsAt.After(time.Now())) {
+		profile.Status = "suspended"
+	}
+	return nil
 }
 
 func calculateBillingEstimate(ctx context.Context, pool *pgxpool.Pool, profile *BillingProfile, usage *CostReport, orgID string, from, to time.Time) (*BillingEstimate, error) {

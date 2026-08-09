@@ -52,6 +52,7 @@ type TemplateSend struct {
 // silencio, herramientas— y cada una obligaba a tocar todos los llamadores.
 type AgentRequest struct {
 	NodeID      string
+	AgentRole   string
 	Instruction string
 	Vars        map[string]string
 	Outputs     []string
@@ -303,6 +304,7 @@ func Advance(flow *Flow, state *State, userInput string, deps Deps) (Result, err
 			}
 			request := AgentRequest{
 				NodeID:       n.ID,
+				AgentRole:    n.AgentRole,
 				Instruction:  interpolate(n.Instruction, vars),
 				Vars:         agentContextVars(vars),
 				Outputs:      n.Outputs,
@@ -339,8 +341,10 @@ func Advance(flow *Flow, state *State, userInput string, deps Deps) (Result, err
 			if n.SaveAs != "" {
 				saveAgentResult(vars, n.SaveAs, agentResult, n.OutputFields)
 			}
-			// Un clasificador (silent) no habla: su rama ya lleva al mensaje oficial.
-			if agentResult.Reply != "" && !n.Silent {
+			// La respuesta puede limitarse a ramas concretas. El caso principal es
+			// un orquestador que pregunta en `aclarar`, pero calla cuando ya entrega
+			// el turno a un especialista que responderá en este mismo avance.
+			if agentResult.Reply != "" && agentShouldReply(n, agentResult.Branch) {
 				sends = append(sends, agentResult.Reply)
 				if keepHistory {
 					history = appendChatMessage(history, "assistant", agentResult.Reply)
@@ -371,6 +375,21 @@ func Advance(flow *Flow, state *State, userInput string, deps Deps) (Result, err
 	}
 
 	return Result{Sends: sends, Templates: templates, Done: true, Handoff: handoff}, nil
+}
+
+func agentShouldReply(node *Node, branch string) bool {
+	if node.Silent {
+		return false
+	}
+	if len(node.ReplyOn) == 0 {
+		return true
+	}
+	for _, allowed := range node.ReplyOn {
+		if allowed == branch {
+			return true
+		}
+	}
+	return false
 }
 
 func interpolateArgs(args map[string]string, vars map[string]string) map[string]string {

@@ -39,6 +39,7 @@ func RegisterHTTP(app *fiber.App, e *env.Env) {
 	org.Post("/:orgId/bots", con.CreateBot)
 	org.Get("/:orgId/costs", con.GetOrganizationCosts)
 	org.Get("/:orgId/billing", con.GetOrganizationBilling)
+	org.Get("/:orgId/subscription", con.GetOrganizationSubscription)
 	org.Get("/:orgId/billing/statements/:statementId", con.GetOrganizationBillingStatement)
 	org.Get("/:orgId/data-objects", con.ListOrgDataObjects)
 	org.Post("/:orgId/data-objects", con.CreateOrgDataObject)
@@ -60,6 +61,13 @@ func RegisterHTTP(app *fiber.App, e *env.Env) {
 	org.Post("/:orgId/data-objects/:objectId/views", con.CreateOrgDataView)
 	org.Put("/:orgId/data-objects/:objectId/views/:viewId", con.UpdateOrgDataView)
 	org.Delete("/:orgId/data-objects/:objectId/views/:viewId", con.DeleteOrgDataView)
+
+	// Administración comercial: sólo owner/admin de la organización que posee
+	// el ledger reservado de suscripciones puede cruzar tenants.
+	platform := app.Group("/platform/subscriptions", authmw.VerifyToken)
+	platform.Get("/", con.ListPlatformSubscriptions)
+	platform.Post("/", con.AssignPlatformSubscription)
+	platform.Put("/:recordId/cancel", con.CancelPlatformSubscription)
 
 	// ---- Bots (protegido; autz por membresía en la org dueña) ----
 	bots := app.Group("/bots", authmw.VerifyToken)

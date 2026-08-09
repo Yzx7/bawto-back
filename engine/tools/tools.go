@@ -135,8 +135,14 @@ var registry = map[string]Spec{
 				Key:      "object",
 				Label:    "Objeto de datos",
 				Help:     "Clave técnica del objeto en el que puede buscar. El modelo no puede salirse de él.",
-				Required: true,
+				Required: false,
 				Kind:     "data_object",
+			},
+			{
+				Key:   "objects",
+				Label: "Objetos de datos",
+				Help:  "Claves fijas separadas por coma. Úsalo cuando un único agente consulta más de un catálogo.",
+				Kind:  "text",
 			},
 			{
 				Key:   "fields",
@@ -170,6 +176,18 @@ var registry = map[string]Spec{
 		Accepts: []PayloadType{
 			PayloadStructuredData, PayloadDataRecords,
 		},
+		Produces: PayloadDataRecord,
+		Effect:   EffectWrite,
+		ForAgent: false,
+		ForGraph: true,
+	},
+
+	"subscription_activate": {
+		Name:  "subscription_activate",
+		Label: "Activar suscripción Bawto",
+		Help: "Valida el código y el plan contra Data, y asigna acceso a otra organización. " +
+			"Sólo funciona en el bot de la organización comercial propietaria del ledger.",
+		Accepts:  []PayloadType{PayloadDataRecord, PayloadStructuredData},
 		Produces: PayloadDataRecord,
 		Effect:   EffectWrite,
 		ForAgent: false,

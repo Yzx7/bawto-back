@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -47,6 +48,71 @@ func InsertInboundMessage(ctx context.Context, pool *pgxpool.Pool, chatID, waID,
 		return 0, false, nil
 	}
 	return id, err == nil, err
+}
+
+// HasNewerInboundText detecta si este mensaje forma parte de una ráfaga que ya
+// tiene otro fragmento textual posterior. Se compara por id —orden de inserción
+// durable— y no por el orden impredecible en que las goroutines ganan el lock.
+//
+// El caller solo debe absorber texto/interacciones. Una imagen nunca se agrupa:
+// el mensaje actual es el que autoriza al nodo visual a leer sus bytes.
+func HasNewerInboundText(ctx context.Context, pool *pgxpool.Pool, chatID string, messageID int64, window time.Duration) (bool, error) {
+	var newer bool
+	err := pool.QueryRow(ctx, `
+		WITH current_message AS (
+			SELECT created_at FROM messages WHERE id=$2 AND chat_id=$1::uuid
+		)
+		SELECT EXISTS (
+			SELECT 1
+			  FROM messages newer, current_message current
+			 WHERE newer.chat_id=$1::uuid
+			   AND NOT newer.from_me
+			   AND newer.id>$2
+			   AND newer.type IN ('text','interactive','reply')
+			   AND newer.created_at <= current.created_at + ($3 * interval '1 millisecond')
+		)`, chatID, messageID, window.Milliseconds()).Scan(&newer)
+	return newer, err
+}
+
+// InboundTextBurst devuelve los fragmentos textuales que pertenecen al turno
+// representado por messageID. Un mensaje saliente actúa como frontera: nunca se
+// vuelve a inyectar texto que el bot ya contestó en un turno anterior.
+func InboundTextBurst(ctx context.Context, pool *pgxpool.Pool, chatID string, messageID int64, window time.Duration) ([]string, error) {
+	rows, err := pool.Query(ctx, `
+		WITH current_message AS (
+			SELECT created_at FROM messages WHERE id=$2 AND chat_id=$1::uuid
+		)
+		SELECT COALESCE(fragment.body,'')
+		  FROM messages fragment, current_message current
+		 WHERE fragment.chat_id=$1::uuid
+		   AND NOT fragment.from_me
+		   AND fragment.id<=$2
+		   AND fragment.type IN ('text','interactive','reply')
+		   AND fragment.created_at >= current.created_at - ($3 * interval '1 millisecond')
+		   AND NOT EXISTS (
+			 SELECT 1 FROM messages response
+			  WHERE response.chat_id=fragment.chat_id
+			    AND response.from_me
+			    AND response.id>fragment.id
+			    AND response.id<=$2
+		   )
+		 ORDER BY fragment.id
+		 LIMIT 20`, chatID, messageID, window.Milliseconds())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var fragments []string
+	for rows.Next() {
+		var body string
+		if err := rows.Scan(&body); err != nil {
+			return nil, err
+		}
+		if body = strings.TrimSpace(body); body != "" {
+			fragments = append(fragments, body)
+		}
+	}
+	return fragments, rows.Err()
 }
 
 func SaveMessageMedia(ctx context.Context, pool *pgxpool.Pool, messageID int64, providerID, mimeType string, data []byte) error {

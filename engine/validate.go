@@ -259,6 +259,12 @@ func validateNode(n *Node, triggerType string) error {
 		if n.AgentRef != "" {
 			return fmt.Errorf("agentRef aún no está implementado")
 		}
+		if n.AgentRole != "" && n.AgentRole != "specialist" && n.AgentRole != "orchestrator" {
+			return fmt.Errorf("agentRole %q inválido", n.AgentRole)
+		}
+		if n.AgentRole == "orchestrator" && len(n.Tools) > 0 {
+			return fmt.Errorf("un orquestador no puede tener herramientas; solo clasifica y enruta")
+		}
 		if n.ContextMode != "" && n.ContextMode != "none" && n.ContextMode != "recent" {
 			return fmt.Errorf("contextMode %q inválido", n.ContextMode)
 		}
@@ -280,6 +286,7 @@ func validateNode(n *Node, triggerType string) error {
 			return err
 		}
 		seenOutputs := make(map[string]struct{}, len(n.Outputs))
+		outputNames := make(map[string]struct{}, len(n.Outputs))
 		for _, output := range n.Outputs {
 			if !branchNameRe.MatchString(output) {
 				return fmt.Errorf("rama %q inválida: usa 1–64 letras ASCII, números, guion o guion bajo", output)
@@ -289,6 +296,24 @@ func validateNode(n *Node, triggerType string) error {
 				return fmt.Errorf("rama duplicada %q", output)
 			}
 			seenOutputs[key] = struct{}{}
+			outputNames[output] = struct{}{}
+		}
+		if n.Silent && len(n.ReplyOn) > 0 {
+			return fmt.Errorf("un agente silencioso no puede declarar ramas de respuesta")
+		}
+		if n.AgentRole == "orchestrator" && !n.Silent && len(n.ReplyOn) == 0 {
+			return fmt.Errorf("un orquestador que habla debe limitar su respuesta a ramas concretas")
+		}
+		seenReplyOn := make(map[string]struct{}, len(n.ReplyOn))
+		for _, branch := range n.ReplyOn {
+			if _, exists := outputNames[branch]; !exists {
+				return fmt.Errorf("la rama de respuesta %q no existe en outputs", branch)
+			}
+			key := strings.ToLower(branch)
+			if _, exists := seenReplyOn[key]; exists {
+				return fmt.Errorf("rama de respuesta duplicada %q", branch)
+			}
+			seenReplyOn[key] = struct{}{}
 		}
 	case "wait":
 		if triggerType != "message" {
@@ -319,6 +344,10 @@ func validateNode(n *Node, triggerType string) error {
 			}
 		case "data_query":
 			if err := validateDataQueryArgs(n.Args); err != nil {
+				return err
+			}
+		case "subscription_activate":
+			if err := validateSubscriptionActivateArgs(n.Args); err != nil {
 				return err
 			}
 		}
@@ -528,6 +557,23 @@ func validateDataMutateArgs(args map[string]string) error {
 	return nil
 }
 
+func validateSubscriptionActivateArgs(args map[string]string) error {
+	required := []string{"activationCode", "planKey", "billingCycle", "paymentRecordId", "idempotencyKey"}
+	allowed := map[string]bool{"activationCode": true, "planKey": true, "billingCycle": true,
+		"paymentRecordId": true, "phone": true, "idempotencyKey": true}
+	for _, key := range required {
+		if strings.TrimSpace(args[key]) == "" {
+			return fmt.Errorf("subscription_activate requiere %s", key)
+		}
+	}
+	for key := range args {
+		if !allowed[key] {
+			return fmt.Errorf("subscription_activate no admite el argumento %q", key)
+		}
+	}
+	return nil
+}
+
 // validateAgentTools comprueba las herramientas que el nodo le ofrece al modelo.
 //
 // No hay ramas que validar aquí, a diferencia del bloque `tool`: el resultado de
@@ -559,6 +605,19 @@ func validateAgentTools(nodeTools []NodeTool) error {
 		for key := range nodeTool.Config {
 			if !specHasConfig(spec, key) {
 				return fmt.Errorf("la herramienta %q no admite la configuración %q", nodeTool.Ref, key)
+			}
+		}
+		if nodeTool.Ref == "data_query" {
+			object := strings.TrimSpace(nodeTool.Config["object"])
+			objects := strings.TrimSpace(nodeTool.Config["objects"])
+			if (object == "") == (objects == "") {
+				return fmt.Errorf("la herramienta data_query requiere Objeto de datos (object) u objects, pero no ambos")
+			}
+			if strings.Contains(object, "{") || strings.Contains(objects, "{") {
+				return fmt.Errorf("la herramienta data_query requiere objetos fijos")
+			}
+			if objects != "" && (strings.TrimSpace(nodeTool.Config["fields"]) != "" || strings.TrimSpace(nodeTool.Config["filterFields"]) != "") {
+				return fmt.Errorf("data_query con varios objetos no admite fields ni filterFields compartidos")
 			}
 		}
 	}

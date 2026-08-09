@@ -10,16 +10,17 @@ import (
 )
 
 type Organization struct {
-	ID        string    `db:"id" json:"id"`
-	Name      string    `db:"name" json:"name"`
-	RUC       *string   `db:"ruc" json:"ruc,omitempty"`
-	Cel       *string   `db:"cel" json:"cel,omitempty"`
-	CreatedBy *string   `db:"created_by" json:"createdBy,omitempty"`
-	CreatedAt time.Time `db:"created_at" json:"createdAt"`
-	UpdatedAt time.Time `db:"updated_at" json:"updatedAt"`
+	ID             string    `db:"id" json:"id"`
+	Name           string    `db:"name" json:"name"`
+	RUC            *string   `db:"ruc" json:"ruc,omitempty"`
+	Cel            *string   `db:"cel" json:"cel,omitempty"`
+	ActivationCode string    `db:"activation_code" json:"activationCode"`
+	CreatedBy      *string   `db:"created_by" json:"createdBy,omitempty"`
+	CreatedAt      time.Time `db:"created_at" json:"createdAt"`
+	UpdatedAt      time.Time `db:"updated_at" json:"updatedAt"`
 }
 
-const orgCols = `id::text AS id, name, ruc, cel, created_by, created_at, updated_at`
+const orgCols = `id::text AS id, name, ruc, cel, activation_code, created_by, created_at, updated_at`
 
 // CreateOrganization crea la org y su membership owner en una transacción.
 func CreateOrganization(ctx context.Context, pool *pgxpool.Pool, userID, name string, ruc, cel *string) (*Organization, error) {
@@ -55,7 +56,7 @@ func CreateOrganization(ctx context.Context, pool *pgxpool.Pool, userID, name st
 // GetUserOrganizations devuelve las orgs donde el usuario es miembro.
 func GetUserOrganizations(ctx context.Context, pool *pgxpool.Pool, userID string) ([]Organization, error) {
 	rows, err := pool.Query(ctx,
-		`SELECT o.id::text AS id, o.name, o.ruc, o.cel, o.created_by, o.created_at, o.updated_at
+		`SELECT o.id::text AS id, o.name, o.ruc, o.cel, o.activation_code, o.created_by, o.created_at, o.updated_at
 		 FROM organizations o
 		 JOIN memberships m ON m.org_id = o.id
 		 WHERE m.user_id = $1

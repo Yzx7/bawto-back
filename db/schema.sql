@@ -18,11 +18,15 @@ CREATE TABLE IF NOT EXISTS organizations (
     name        TEXT        NOT NULL,
     ruc         TEXT,
     cel         TEXT,
+    activation_code TEXT    NOT NULL DEFAULT upper(substr(encode(gen_random_bytes(8), 'hex'), 1, 10)),
     created_by  TEXT        REFERENCES "user"(id) ON DELETE SET NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CHECK (length(trim(name)) > 0)
+    CHECK (length(trim(name)) > 0),
+    CHECK (activation_code ~ '^[A-F0-9]{10}$')
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_organizations_activation_code
+    ON organizations (upper(activation_code));
 
 -- MEMBERSHIPS (roles por org: multi-tenant) -------------------
 CREATE TABLE IF NOT EXISTS memberships (
@@ -151,6 +155,10 @@ CREATE TABLE IF NOT EXISTS data_objects (
     UNIQUE (org_id, key),
     CHECK (key ~ '^[a-z][a-z0-9_]{0,62}$')
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_data_objects_planes_bawto
+    ON data_objects (key) WHERE key = 'planes_bawto';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_data_objects_suscripciones_bawto
+    ON data_objects (key) WHERE key = 'suscripciones_bawto';
 
 CREATE TABLE IF NOT EXISTS data_fields (
     id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),

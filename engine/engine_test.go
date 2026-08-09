@@ -56,7 +56,7 @@ func TestAdvanceAgentProjectsDeclaredStructuredOutput(t *testing.T) {
 		Trigger: Trigger{Type: "message", Match: "any"},
 		Nodes: []Node{
 			{
-				ID: "vision", Kind: "agent", Instruction: "Extrae el comprobante", Outputs: []string{"comprobante", "revision"},
+				ID: "vision", Kind: "agent", AgentRole: "specialist", Instruction: "Extrae el comprobante", Outputs: []string{"comprobante", "revision"},
 				SaveAs: "pago", OutputFields: []AgentOutputField{
 					{Key: "provider", Type: "string"},
 					{Key: "amount", Type: "number"},
@@ -73,6 +73,9 @@ func TestAdvanceAgentProjectsDeclaredStructuredOutput(t *testing.T) {
 	result, err := Advance(flow, nil, "captura", Deps{
 		InputType: "image",
 		AgentStructured: func(request AgentRequest) (AgentResult, error) {
+			if request.AgentRole != "specialist" {
+				t.Fatalf("rol no propagado: %q", request.AgentRole)
+			}
 			if len(request.OutputFields) != 2 || request.OutputFields[1].Key != "amount" {
 				t.Fatalf("esquema no propagado: %#v", request.OutputFields)
 			}
@@ -388,6 +391,26 @@ func TestAdvanceAgentBranch(t *testing.T) {
 	}
 	if len(r.Sends) != 1 || r.Sends[0] != "validado" {
 		t.Fatalf("agente silencioso: %v", r.Sends)
+	}
+
+	// Un orquestador puede preguntar solo en una rama y callar cuando ya pudo
+	// entregar el turno a un especialista.
+	flow.Nodes[0].Silent = false
+	flow.Nodes[0].ReplyOn = []string{"bad"}
+	r, err = Advance(flow, nil, "comprobante", deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Sends) != 1 || r.Sends[0] != "validado" {
+		t.Fatalf("respuesta fuera de replyOn: %v", r.Sends)
+	}
+	flow.Nodes[0].ReplyOn = []string{"ok"}
+	r, err = Advance(flow, nil, "comprobante", deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Sends) != 2 || r.Sends[0] != "revisando…" {
+		t.Fatalf("respuesta dentro de replyOn: %v", r.Sends)
 	}
 }
 

@@ -38,6 +38,10 @@ type Node struct {
 	Outputs      []string           `json:"outputs,omitempty"`
 	OutputFields []AgentOutputField `json:"outputFields,omitempty"`
 	AgentRef     string             `json:"agentRef,omitempty"`
+	// AgentRole hace explícita la responsabilidad del modelo. Vacío conserva el
+	// comportamiento histórico de especialista; orchestrator siempre usa el
+	// modelo de enrutamiento y no puede tener herramientas.
+	AgentRole string `json:"agentRole,omitempty"` // specialist | orchestrator
 	// Tools son las herramientas que el modelo puede llamar durante el turno.
 	// Van en el nodo y no en el bot a propósito: la versión publicada del flujo es
 	// inmutable, así que queda registrado qué podía hacer el agente en el momento
@@ -50,6 +54,10 @@ type Node struct {
 	// Silent: el agente solo decide la rama y no le escribe al cliente. Evita el
 	// mensaje duplicado cuando la rama ya termina en un `send` con el texto oficial.
 	Silent bool `json:"silent,omitempty"`
+	// ReplyOn limita la respuesta a ramas concretas. Vacío conserva el contrato
+	// histórico (responde en todas si no es silent). Permite que un orquestador
+	// pregunte al aclarar y calle al entregar el turno a un especialista.
+	ReplyOn []string `json:"replyOn,omitempty"`
 	// wait
 	Expect string `json:"expect,omitempty"`
 	// Accepts declara formatos adicionales en agent y conserva el contrato tipado

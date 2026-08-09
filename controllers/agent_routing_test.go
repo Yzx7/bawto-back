@@ -56,6 +56,46 @@ func TestRunAgentRoutesImageCapabilityToMiniMax(t *testing.T) {
 	}
 }
 
+func TestRunAgentRoutesOrchestratorRoleToMiniMax(t *testing.T) {
+	var textCalls, orchestratorCalls atomic.Int32
+	con := New(&env.Env{
+		TextAgent:         routingTestAgent(t, "deepseek", "deepseek-v4-flash", &textCalls),
+		OrchestratorAgent: routingTestAgent(t, "minimax", "MiniMax-M3", &orchestratorCalls),
+	})
+
+	result, usage, err := con.runAgent(context.Background(), "org-1", engine.AgentRequest{
+		AgentRole: "orchestrator", Vars: map[string]string{"input": "quiero automatizar ventas"},
+		Outputs: []string{"continuar"}, Silent: true,
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("runAgent: %v", err)
+	}
+	if result.Branch != "continuar" || usage.Provider != "minimax" || usage.Model != "MiniMax-M3" {
+		t.Fatalf("resultado de orquestación inesperado: result=%+v usage=%+v", result, usage)
+	}
+	if textCalls.Load() != 0 || orchestratorCalls.Load() != 1 {
+		t.Fatalf("llamadas inesperadas: texto=%d orquestador=%d", textCalls.Load(), orchestratorCalls.Load())
+	}
+}
+
+func TestRunAgentDoesNotFallbackToDeepSeekWhenOrchestratorIsMissing(t *testing.T) {
+	var textCalls atomic.Int32
+	con := New(&env.Env{
+		TextAgent: routingTestAgent(t, "deepseek", "deepseek-v4-flash", &textCalls),
+	})
+
+	_, _, err := con.runAgent(context.Background(), "org-1", engine.AgentRequest{
+		AgentRole: "orchestrator", Vars: map[string]string{"input": "hola"},
+		Outputs: []string{"continuar"}, Silent: true,
+	}, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "MINIMAX_M3_API_KEY") {
+		t.Fatalf("se esperaba error de orquestador, got %v", err)
+	}
+	if textCalls.Load() != 0 {
+		t.Fatalf("hubo fallback silencioso a DeepSeek: llamadas=%d", textCalls.Load())
+	}
+}
+
 func TestRunAgentDoesNotFallbackToTextWhenVisionIsMissing(t *testing.T) {
 	var textCalls atomic.Int32
 	con := New(&env.Env{

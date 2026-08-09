@@ -170,6 +170,36 @@ func TestValidateRejectsRawImageConnectedToTextAgent(t *testing.T) {
 	}
 }
 
+func TestValidateOrchestratorReplyPolicy(t *testing.T) {
+	base := validAgentFlow()
+	base.Nodes[0].AgentRole = "orchestrator"
+	base.Nodes[0].Silent = true
+	base.Nodes[0].Tools = []NodeTool{{Ref: "data_query", Config: map[string]string{"object": "catalogo"}}}
+	if err := Validate(base); err == nil || !strings.Contains(err.Error(), "no puede tener herramientas") {
+		t.Fatalf("se esperaba rechazo de herramientas, got %v", err)
+	}
+
+	base.Nodes[0].Tools = nil
+	base.Nodes[0].Silent = false
+	if err := Validate(base); err == nil || !strings.Contains(err.Error(), "limitar su respuesta") {
+		t.Fatalf("se esperaba política de ramas, got %v", err)
+	}
+
+	base.Nodes[0].ReplyOn = []string{"retry"}
+	if err := Validate(base); err != nil {
+		t.Fatalf("orquestador conversacional rechazado: %v", err)
+	}
+	base.Nodes[0].ReplyOn = []string{"inexistente"}
+	if err := Validate(base); err == nil || !strings.Contains(err.Error(), "no existe") {
+		t.Fatalf("se esperaba rama inexistente, got %v", err)
+	}
+	base.Nodes[0].ReplyOn = []string{"retry"}
+	base.Nodes[0].Silent = true
+	if err := Validate(base); err == nil || !strings.Contains(err.Error(), "silencioso") {
+		t.Fatalf("se esperaba incompatibilidad con silent, got %v", err)
+	}
+}
+
 func TestValidateRejectsLoopbackWithoutWait(t *testing.T) {
 	flow := validAgentFlow()
 	flow.Nodes[2] = Node{
@@ -194,6 +224,19 @@ func TestValidateHerramientasDelAgente(t *testing.T) {
 		{
 			name:  "válida con su configuración",
 			tools: []NodeTool{{Ref: "data_query", Config: map[string]string{"object": "servicios"}}},
+		},
+		{
+			name: "válida con varios catálogos fijos",
+			tools: []NodeTool{{Ref: "data_query", Config: map[string]string{
+				"objects": "servicios,planes_bawto", "maxLimit": "8",
+			}}},
+		},
+		{
+			name: "rechaza objeto simple y múltiple a la vez",
+			tools: []NodeTool{{Ref: "data_query", Config: map[string]string{
+				"object": "servicios", "objects": "servicios,planes_bawto",
+			}}},
+			want: "pero no ambos",
 		},
 		{
 			name:  "inexistente",
@@ -285,6 +328,30 @@ func TestValidateDataMutateRequiresSafeDeclarativeScope(t *testing.T) {
 	}
 	if err := Validate(&invalid); err == nil || !strings.Contains(err.Error(), "objeto fijo") {
 		t.Fatalf("se esperaba rechazar objeto dinámico: %v", err)
+	}
+}
+
+func TestValidateSubscriptionActivateRequiresBoundSaleData(t *testing.T) {
+	valid := &Flow{ID: "f", Name: "F", Trigger: Trigger{Type: "message", Match: "any"}, Nodes: []Node{
+		{ID: "activate", Kind: "tool", ToolRef: "subscription_activate", Args: map[string]string{
+			"activationCode": "{sale.organizationCode}", "planKey": "{sale.planKey}",
+			"billingCycle": "{sale.billingCycle}", "paymentRecordId": "{payment.recordId}",
+			"phone": "{contact_phone}", "idempotencyKey": "subscription:{payment.recordId}",
+		}},
+		{ID: "ok", Kind: "action", Action: "end"}, {ID: "error", Kind: "action", Action: "end"},
+	}, Edges: []Edge{
+		{ID: "start", Source: "trigger", Target: "activate"},
+		{ID: "ok", Source: "activate", SourceHandle: "ok", Target: "ok"},
+		{ID: "error", Source: "activate", SourceHandle: "error", Target: "error"},
+	}}
+	if err := Validate(valid); err != nil {
+		t.Fatalf("subscription_activate válido rechazado: %v", err)
+	}
+	invalid := *valid
+	invalid.Nodes = append([]Node(nil), valid.Nodes...)
+	invalid.Nodes[0].Args = map[string]string{"activationCode": "ABC"}
+	if err := Validate(&invalid); err == nil || !strings.Contains(err.Error(), "planKey") {
+		t.Fatalf("se esperaba rechazar venta incompleta: %v", err)
 	}
 }
 

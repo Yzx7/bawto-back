@@ -121,16 +121,17 @@ func Build(ctx context.Context) (*Runtime, error) {
 	hub.Start(ctx)
 
 	e := &env.Env{
-		Config:         cfg,
-		Postgres:       pool,
-		Logger:         logs.General,
-		HTTPLogger:     logs.HTTP,
-		WhatsAppLogger: logs.WhatsApp,
-		LogCloser:      logs,
-		Cipher:         cph,
-		TextAgent:      textAgent,
-		VisionAgent:    visionAgent,
-		Events:         hub,
+		Config:            cfg,
+		Postgres:          pool,
+		Logger:            logs.General,
+		HTTPLogger:        logs.HTTP,
+		WhatsAppLogger:    logs.WhatsApp,
+		LogCloser:         logs,
+		Cipher:            cph,
+		TextAgent:         textAgent,
+		OrchestratorAgent: visionAgent,
+		VisionAgent:       visionAgent,
+		Events:            hub,
 	}
 
 	app := fiber.New(fiber.Config{

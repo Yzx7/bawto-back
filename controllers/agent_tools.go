@@ -78,8 +78,11 @@ func (con *Controller) agentTooling(ctx context.Context, bot *models.BotChannel,
 // error técnico: se le dice al modelo por qué no vale, que es lo que le permite
 // reintentar bien en vez de repetir la misma llamada.
 func (con *Controller) execAgentDataQuery(ctx context.Context, bot *models.BotChannel, config map[string]string, input json.RawMessage) (string, error) {
-	objectKey := strings.TrimSpace(config["object"])
-	if objectKey == "" {
+	objectKeys := splitList(config["objects"])
+	if objectKey := strings.TrimSpace(config["object"]); objectKey != "" {
+		objectKeys = []string{objectKey}
+	}
+	if len(objectKeys) == 0 {
 		return "", fmt.Errorf("la herramienta no tiene objeto de datos configurado")
 	}
 	var args struct {
@@ -118,22 +121,35 @@ func (con *Controller) execAgentDataQuery(ctx context.Context, bot *models.BotCh
 			limit = parsed
 		}
 	}
-	result, err := models.QueryDataRecords(ctx, con.Env.Postgres, models.DataQueryInput{
-		OrgID: bot.OrgID, ObjectKey: objectKey, Fields: splitList(config["fields"]),
-		Where: rules, Text: args.Query, Limit: limit,
-	})
-	if err != nil {
-		return "", err
+	var b strings.Builder
+	total := 0
+	for _, objectKey := range objectKeys {
+		result, err := models.QueryDataRecords(ctx, con.Env.Postgres, models.DataQueryInput{
+			OrgID: bot.OrgID, ObjectKey: objectKey, Fields: splitList(config["fields"]),
+			Where: rules, Text: args.Query, Limit: limit,
+		})
+		if err != nil {
+			return "", err
+		}
+		if !result.Found {
+			continue
+		}
+		fmt.Fprintf(&b, "%d resultado(s) en %s:\n", result.Count, objectKey)
+		for _, record := range result.Records {
+			total++
+			fmt.Fprintf(&b, "\n%d. %s", total, renderValues(record.Data))
+			if total >= limit {
+				break
+			}
+		}
+		if total >= limit {
+			break
+		}
 	}
-	if !result.Found {
+	if total == 0 {
 		// Se le dice explícitamente que no hay nada, en vez de devolver vacío: un
 		// resultado en blanco invita a rellenar el hueco inventando.
-		return fmt.Sprintf("Sin resultados en %s. No hay información registrada sobre eso.", objectKey), nil
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "%d resultado(s) en %s:\n", result.Count, objectKey)
-	for i, record := range result.Records {
-		fmt.Fprintf(&b, "\n%d. %s", i+1, renderValues(record.Data))
+		return fmt.Sprintf("Sin resultados en %s. No hay información registrada sobre eso.", strings.Join(objectKeys, ", ")), nil
 	}
 	return b.String(), nil
 }
@@ -174,6 +190,11 @@ func (con *Controller) runAgent(ctx context.Context, tenantID string, request en
 		configured = con.Env.VisionAgent
 		if configured == nil {
 			return engine.AgentResult{}, ai.Usage{}, fmt.Errorf("agente visual no configurado: falta MINIMAX_M3_API_KEY")
+		}
+	} else if request.AgentRole == "orchestrator" {
+		configured = con.Env.OrchestratorAgent
+		if configured == nil {
+			return engine.AgentResult{}, ai.Usage{}, fmt.Errorf("orquestador no configurado: falta MINIMAX_M3_API_KEY")
 		}
 	} else if configured == nil {
 		return engine.AgentResult{}, ai.Usage{}, fmt.Errorf("agente de texto no configurado")
