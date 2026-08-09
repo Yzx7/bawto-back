@@ -1,18 +1,16 @@
 package main
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
-func TestPaymentMessageIsDeterministicAndComplete(t *testing.T) {
-	message := paymentMessage(" Yape ", " 999 111 222 ", " Sistemuino SAC ", "No colocar descripción.")
-	for _, expected := range []string{
-		"usa Yape", "Destino: 999 111 222", "Titular: Sistemuino SAC",
-		"Moneda: PEN", "No colocar descripción.", "captura completa y nítida",
-	} {
-		if !strings.Contains(message, expected) {
-			t.Fatalf("falta %q en %q", expected, message)
+func TestValidMethodKey(t *testing.T) {
+	for _, valid := range []string{"yape", "plin_1", "bcp_cuenta"} {
+		if !validMethodKey(valid) {
+			t.Fatalf("clave válida rechazada: %s", valid)
+		}
+	}
+	for _, invalid := range []string{"", "1yape", "Yape", "bcp-cuenta", "ámbito"} {
+		if validMethodKey(invalid) {
+			t.Fatalf("clave inválida aceptada: %s", invalid)
 		}
 	}
 }

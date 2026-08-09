@@ -346,6 +346,10 @@ func validateNode(n *Node, triggerType string) error {
 			if err := validateDataQueryArgs(n.Args); err != nil {
 				return err
 			}
+		case "payment_methods_render":
+			if len(n.Args) != 0 {
+				return fmt.Errorf("payment_methods_render no admite argumentos")
+			}
 		case "subscription_activate":
 			if err := validateSubscriptionActivateArgs(n.Args); err != nil {
 				return err

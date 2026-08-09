@@ -736,6 +736,8 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 			return con.execDataMutate(ctx, bot, m.From, m.WaID, args)
 		case "data_query":
 			return con.execDataQuery(ctx, bot, m.From, args)
+		case "payment_methods_render":
+			return con.execPaymentMethodsRender(ctx, bot)
 		case "subscription_activate":
 			return con.execSubscriptionActivate(ctx, bot, m.From, args)
 		default:

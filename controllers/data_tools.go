@@ -83,6 +83,18 @@ func (con *Controller) execDataQuery(ctx context.Context, bot *models.BotChannel
 	return string(raw), err
 }
 
+// execPaymentMethodsRender mantiene la composición fuera de la IA: el bot fija
+// la organización, Data contiene las filas activas y el backend solo las ordena
+// y presenta. No recibe argumentos del grafo ni del cliente.
+func (con *Controller) execPaymentMethodsRender(ctx context.Context, bot *models.BotChannel) (string, error) {
+	result, err := models.PaymentInstructionsForOrg(ctx, con.Env.Postgres, bot.OrgID)
+	if err != nil {
+		return "", err
+	}
+	raw, err := json.Marshal(result)
+	return string(raw), err
+}
+
 // dataQueryRulesFromArgs recompone las condiciones numeradas del bloque.
 //
 // Se recorren por índice y no iterando el mapa porque el orden de un `map` en Go

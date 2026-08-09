@@ -193,6 +193,18 @@ var registry = map[string]Spec{
 		ForAgent: false,
 		ForGraph: true,
 	},
+
+	"payment_methods_render": {
+		Name:  "payment_methods_render",
+		Label: "Preparar métodos de pago",
+		Help: "Lee todos los métodos de pago Bawto activos en Data, los ordena por prioridad " +
+			"y devuelve un único mensaje exacto. La IA no redacta números ni cuentas.",
+		Accepts:  []PayloadType{PayloadDataRecords},
+		Produces: PayloadStructuredData,
+		Effect:   EffectRead,
+		ForAgent: false,
+		ForGraph: true,
+	},
 }
 
 // Get devuelve la ficha (nil si no existe).

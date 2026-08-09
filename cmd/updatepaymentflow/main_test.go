@@ -24,7 +24,7 @@ func TestUpdateDocumentAddsIdempotentPaymentRoute(t *testing.T) {
 	updateDocument(document)
 
 	nodes := objectSlice(document, "nodes")
-	for _, id := range []string{"n_read_payment_method", "n_payment_method_router", "n_send_payment_instructions", "n_payment_method_unavailable", "n_payment_method_handoff"} {
+	for _, id := range []string{"n_render_payment_methods", "n_payment_method_router", "n_send_payment_instructions", "n_payment_method_unavailable", "n_payment_method_handoff"} {
 		if countNodes(nodes, id) != 1 {
 			t.Fatalf("%s debe existir una sola vez", id)
 		}
@@ -36,7 +36,7 @@ func TestUpdateDocumentAddsIdempotentPaymentRoute(t *testing.T) {
 		}
 	}
 	for _, edge := range objectSlice(document, "edges") {
-		if strings.HasSuffix(textValue(edge["id"]), "_charge") && textValue(edge["target"]) != "n_read_payment_method" {
+		if strings.HasSuffix(textValue(edge["id"]), "_charge") && textValue(edge["target"]) != "n_render_payment_methods" {
 			t.Fatalf("la rama cobrar todavía salta a %s", edge["target"])
 		}
 	}

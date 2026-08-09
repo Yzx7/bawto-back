@@ -82,6 +82,7 @@ func updateDocument(document map[string]any) {
 	nodes := objectSlice(document, "nodes")
 	managedNodes := map[string]bool{
 		"n_read_payment_method": true, "n_payment_method_router": true,
+		"n_render_payment_methods":    true,
 		"n_send_payment_instructions": true, "n_payment_method_unavailable": true,
 		"n_payment_method_handoff": true,
 	}
@@ -107,16 +108,12 @@ func updateDocument(document map[string]any) {
 	}
 
 	nodes = append(nodes,
-		map[string]any{"id": "n_read_payment_method", "kind": "tool", "toolRef": "data_query", "saveAs": "payment_method", "pos": map[string]any{"x": -300.0, "y": -1260.0}, "args": map[string]any{
-			"object": "instrucciones_pago_bawto", "fields": "clave,medio,destino,titular,moneda,mensaje,activo", "limit": "1",
-			"where.1.field": "clave", "where.1.op": "eq", "where.1.value": "venta_bawto",
-			"where.2.field": "activo", "where.2.op": "eq", "where.2.value": "true",
-		}},
+		map[string]any{"id": "n_render_payment_methods", "kind": "tool", "toolRef": "payment_methods_render", "saveAs": "payment_options", "pos": map[string]any{"x": -300.0, "y": -1260.0}, "args": map[string]any{}},
 		map[string]any{"id": "n_payment_method_router", "kind": "router", "pos": map[string]any{"x": 10.0, "y": -1260.0}, "cases": []any{
-			map[string]any{"id": "configured", "label": "Medio activo", "expression": "payment_method.found == true && payment_method.first.data.activo == true && !empty(payment_method.first.data.mensaje)"},
+			map[string]any{"id": "configured", "label": "Métodos activos", "expression": "payment_options.found == true && !empty(payment_options.message)"},
 		}},
-		map[string]any{"id": "n_send_payment_instructions", "kind": "send", "pos": map[string]any{"x": 330.0, "y": -1420.0}, "body": "{payment_method.first.data.mensaje}"},
-		map[string]any{"id": "n_payment_method_unavailable", "kind": "send", "pos": map[string]any{"x": 330.0, "y": -1100.0}, "body": "Ahora mismo no tengo un medio de pago activo que pueda darte con seguridad. Te derivaré con el equipo para continuar sin exponerte a datos incorrectos."},
+		map[string]any{"id": "n_send_payment_instructions", "kind": "send", "pos": map[string]any{"x": 330.0, "y": -1420.0}, "body": "{payment_options.message}"},
+		map[string]any{"id": "n_payment_method_unavailable", "kind": "send", "pos": map[string]any{"x": 330.0, "y": -1100.0}, "body": "Ahora mismo no tengo métodos de pago activos que pueda darte con seguridad. Te derivaré con el equipo para continuar sin exponerte a datos incorrectos."},
 		map[string]any{"id": "n_payment_method_handoff", "kind": "action", "action": "handoff", "pos": map[string]any{"x": 650.0, "y": -1100.0}},
 	)
 	node(nodes, "n_payment_wait")["pos"] = map[string]any{"x": 650.0, "y": -1420.0}
@@ -139,12 +136,12 @@ func updateDocument(document map[string]any) {
 	for _, edge := range edges {
 		switch textValue(edge["id"]) {
 		case "e_bawto_charge", "e_services_charge", "e_payment_charge":
-			edge["target"] = "n_read_payment_method"
+			edge["target"] = "n_render_payment_methods"
 		}
 	}
 	edges = append(edges,
-		map[string]any{"id": "e_payment_method_read", "source": "n_read_payment_method", "target": "n_payment_method_router", "sourceHandle": "ok"},
-		map[string]any{"id": "e_payment_method_read_error", "source": "n_read_payment_method", "target": "n_payment_method_unavailable", "sourceHandle": "error"},
+		map[string]any{"id": "e_payment_method_read", "source": "n_render_payment_methods", "target": "n_payment_method_router", "sourceHandle": "ok"},
+		map[string]any{"id": "e_payment_method_read_error", "source": "n_render_payment_methods", "target": "n_payment_method_unavailable", "sourceHandle": "error"},
 		map[string]any{"id": "e_payment_method_configured", "source": "n_payment_method_router", "target": "n_send_payment_instructions", "sourceHandle": "configured"},
 		map[string]any{"id": "e_payment_method_missing", "source": "n_payment_method_router", "target": "n_payment_method_unavailable", "sourceHandle": "default"},
 		map[string]any{"id": "e_payment_instructions_sent", "source": "n_send_payment_instructions", "target": "n_payment_wait"},
