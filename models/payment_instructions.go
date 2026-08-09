@@ -10,6 +10,8 @@ import (
 
 const PlatformPaymentMethodsObject = "instrucciones_pago_bawto"
 
+const maxActivePaymentMethods = 10
+
 type PaymentInstructionsResult struct {
 	Found   bool   `json:"found"`
 	Count   int    `json:"count"`
@@ -32,13 +34,25 @@ func PaymentInstructionsForOrg(ctx context.Context, pool *pgxpool.Pool, orgID st
 		OrgID: orgID, ObjectKey: PlatformPaymentMethodsObject,
 		Fields:  []string{"clave", "medio", "destino", "titular", "moneda", "nota", "prioridad", "activo"},
 		Where:   []DataQueryRule{{Field: "activo", Op: "eq", Value: "true"}},
-		OrderBy: "prioridad", Limit: 10,
+		OrderBy: "prioridad", Limit: maxActivePaymentMethods + 1,
 	})
 	if err != nil {
 		return nil, err
 	}
+	if len(result.Records) > maxActivePaymentMethods {
+		return nil, fmt.Errorf("hay más de %d métodos de pago activos", maxActivePaymentMethods)
+	}
 	methods := make([]paymentMethod, 0, len(result.Records))
+	seenKeys := make(map[string]struct{}, len(result.Records))
 	for _, record := range result.Records {
+		key := paymentText(record.Data["clave"])
+		if key == "" {
+			return nil, fmt.Errorf("el método de pago %s está activo pero no tiene clave", record.RecordID)
+		}
+		if _, duplicated := seenKeys[key]; duplicated {
+			return nil, fmt.Errorf("hay más de un método de pago activo con clave %q", key)
+		}
+		seenKeys[key] = struct{}{}
 		method := paymentMethod{
 			Medium:      paymentText(record.Data["medio"]),
 			Destination: paymentText(record.Data["destino"]),

@@ -52,6 +52,19 @@ func TestPaymentInstructionsForOrgReadsAllActiveMethodsInPriorityOrder(t *testin
 	if strings.Contains(result.Message, "Plin pausado") {
 		t.Fatal("un método inactivo no puede llegar al cliente")
 	}
+	if _, err = MutateDataRecord(ctx, pool, DataMutationInput{
+		OrgID: bot.OrgID, ObjectKey: PlatformPaymentMethodsObject, Operation: "create",
+		Values: map[string]any{
+			"clave": "yape", "medio": "Yape duplicado", "destino": "777",
+			"titular": "Sistemuino", "moneda": "PEN", "prioridad": 30, "activo": true,
+		},
+		IdempotencyKey: randID("duplicate_payment_method_"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = PaymentInstructionsForOrg(ctx, pool, bot.OrgID); err == nil || !strings.Contains(err.Error(), "más de un método") {
+		t.Fatalf("un duplicado activo debe fallar de forma segura: %v", err)
+	}
 }
 
 func seedPaymentMethods(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID string) {
