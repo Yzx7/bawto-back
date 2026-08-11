@@ -42,3 +42,20 @@ func TestValidateTargetRechazaDestinosPeligrosos(t *testing.T) {
 		})
 	}
 }
+
+// La regla que impide que el bot acabe con acceso total a la tienda. Vive en el
+// driver y no en quien guarda la conexión porque es conocimiento de Meudim: el
+// prefijo distingue publicable de secreta.
+func TestValidateCredentialRechazaLaClaveSecreta(t *testing.T) {
+	if err := ValidateCredential(DriverMeudim, "pk_live_abc"); err != nil {
+		t.Fatalf("una clave publicable fue rechazada: %v", err)
+	}
+	if err := ValidateCredential(DriverMeudim, "pk_test_abc"); err != nil {
+		t.Fatalf("una clave publicable de pruebas fue rechazada: %v", err)
+	}
+	for _, credential := range []string{"sk_live_abc", "sk_test_abc", "abc", "  "} {
+		if err := ValidateCredential(DriverMeudim, credential); err == nil {
+			t.Errorf("se aceptó la credencial %q", credential)
+		}
+	}
+}

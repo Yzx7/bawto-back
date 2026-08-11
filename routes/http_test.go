@@ -98,3 +98,22 @@ func TestRutasDeAudienciasRetiradas(t *testing.T) {
 		}
 	}
 }
+
+// Las conexiones externas cuelgan de `/orgs/:orgId`, que ya tiene muchas rutas
+// paramétricas. Se comprueba contra la tabla por la misma razón que el resto:
+// el grupo lleva VerifyToken, así que una petición sin token responde 401 exista
+// la ruta o no, y un test por HTTP pasaría siempre sin probar nada.
+func TestRutasDeConexionesExternasRegistradas(t *testing.T) {
+	paths := registeredPaths(t)
+	esperadas := []string{
+		http.MethodGet + " /orgs/:orgId/connections",
+		http.MethodPost + " /orgs/:orgId/connections",
+		http.MethodPost + " /orgs/:orgId/connections/:key/test",
+		http.MethodDelete + " /orgs/:orgId/connections/:key",
+	}
+	for _, ruta := range esperadas {
+		if !paths[ruta] {
+			t.Errorf("ruta no registrada: %s", ruta)
+		}
+	}
+}

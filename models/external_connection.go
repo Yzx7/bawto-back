@@ -69,32 +69,48 @@ func SaveExternalConnection(ctx context.Context, pool *pgxpool.Pool, input Exter
 	if status == "" {
 		status = "active"
 	}
+	// Son dos sentencias y no un upsert ingenioso a propósito.
+	//
+	// El intento de resolverlo con `COALESCE(NULLIF(EXCLUDED.credential, ''))`
+	// **no funciona**: PostgreSQL comprueba el NOT NULL al formar la fila
+	// propuesta, antes de detectar el conflicto, así que una actualización sin
+	// credencial fallaba con 23502 en vez de conservar la guardada. Lo descubrió
+	// la prueba, no una revisión.
+	var rows pgx.Rows
+	var err error
 	if len(input.CredentialEnc) == 0 {
-		// El INSERT sí la exige: una conexión nueva sin credencial no serviría
-		// para nada y la columna es NOT NULL.
-		var exists bool
-		if err := pool.QueryRow(ctx,
-			`SELECT true FROM external_connections WHERE org_id = $1::uuid AND key = $2`,
-			input.OrgID, key).Scan(&exists); err != nil {
-			return nil, errors.New("la conexión nueva requiere una credencial")
-		}
+		// Actualización que conserva la clave: es lo que permite corregir el
+		// nombre o la URL desde el panel, que nunca tiene la credencial en claro.
+		rows, err = pool.Query(ctx,
+			`UPDATE external_connections
+			 SET driver = $3, label = $4, base_url = $5, status = $6
+			 WHERE org_id = $1::uuid AND key = $2
+			 RETURNING `+externalConnectionCols,
+			input.OrgID, key, strings.TrimSpace(input.Driver), label,
+			strings.TrimSpace(input.BaseURL), status)
+	} else {
+		rows, err = pool.Query(ctx,
+			`INSERT INTO external_connections (org_id, key, driver, label, base_url, credential, status)
+			 VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)
+			 ON CONFLICT (org_id, key) DO UPDATE SET
+			     driver     = EXCLUDED.driver,
+			     label      = EXCLUDED.label,
+			     base_url   = EXCLUDED.base_url,
+			     credential = EXCLUDED.credential,
+			     status     = EXCLUDED.status
+			 RETURNING `+externalConnectionCols,
+			input.OrgID, key, strings.TrimSpace(input.Driver), label,
+			strings.TrimSpace(input.BaseURL), input.CredentialEnc, status)
 	}
-	rows, err := pool.Query(ctx,
-		`INSERT INTO external_connections (org_id, key, driver, label, base_url, credential, status)
-		 VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)
-		 ON CONFLICT (org_id, key) DO UPDATE SET
-		     driver     = EXCLUDED.driver,
-		     label      = EXCLUDED.label,
-		     base_url   = EXCLUDED.base_url,
-		     credential = COALESCE(NULLIF(EXCLUDED.credential, ''::bytea), external_connections.credential),
-		     status     = EXCLUDED.status
-		 RETURNING `+externalConnectionCols,
-		input.OrgID, key, strings.TrimSpace(input.Driver), label,
-		strings.TrimSpace(input.BaseURL), input.CredentialEnc, status)
 	if err != nil {
 		return nil, err
 	}
 	connection, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[ExternalConnection])
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Solo puede pasar en la rama sin credencial: no hay fila que actualizar,
+		// y un alta sin clave no serviría para nada.
+		return nil, errors.New("la conexión nueva requiere una credencial")
+	}
 	if err != nil {
 		return nil, err
 	}

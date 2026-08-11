@@ -71,6 +71,23 @@ func ValidateTarget(driver, baseURL string) error {
 		host, driver, strings.Join(hosts, ", "))
 }
 
+// ValidateCredential comprueba que la clave es del tipo que el bot debe usar.
+//
+// Vive aquí y no en quien guarda la conexión porque es conocimiento del driver:
+// Meudim distingue clave publicable de clave secreta por su prefijo, y una `sk_`
+// da acceso total a la tienda —confirmar pagos, borrar productos—. El bot solo
+// necesita leer catálogo y cerrar la compra, y eso lo cubre una `pk_`.
+func ValidateCredential(driver, credential string) error {
+	credential = strings.TrimSpace(credential)
+	if credential == "" {
+		return fmt.Errorf("la conexión requiere una credencial")
+	}
+	if driver == DriverMeudim && !strings.HasPrefix(credential, "pk_") {
+		return fmt.Errorf("Meudim exige una clave publicable (pk_); una clave secreta daría al bot acceso total a la tienda")
+	}
+	return nil
+}
+
 // DefaultBaseURL es la URL con la que se crea una conexión cuando el
 // administrador no escribe ninguna.
 func DefaultBaseURL(driver string) string {
