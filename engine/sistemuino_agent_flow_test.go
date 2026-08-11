@@ -518,3 +518,61 @@ func TestSistemuinoCuentaPorQueFallaElPedido(t *testing.T) {
 		t.Fatalf("el cliente debe enterarse de por qué falló: %v", result.Sends)
 	}
 }
+
+// Un comprobante que no cubre el pedido no se declara como su pago.
+//
+// El agente visual ya extraía el importe y nadie lo miraba: una captura de S/ 5
+// se declaraba contra un pedido de S/ 17.80 y el desajuste solo aparecía cuando
+// el dueño iba a confirmar, con el pago ya marcado como declarado.
+func TestSistemuinoNoDeclaraUnComprobanteQueNoCubreElPedido(t *testing.T) {
+	flow := loadSistemuinoAgentFlow(t)
+
+	esperando, err := Advance(flow, nil, "quiero uno", Deps{
+		InputType: "text", WaID: "wamid-c1",
+		AgentStructured: func(request AgentRequest) (AgentResult, error) {
+			if request.NodeID == "n_agente" {
+				return AgentResult{Branch: "productos"}, nil
+			}
+			return AgentResult{Branch: "comprar", Data: map[string]any{
+				"productId": "51", "cantidad": 1.0, "correo": "ana@example.com",
+			}}, nil
+		},
+		Tool: func(ref string, _, _ map[string]string) (string, error) {
+			switch ref {
+			case "data_query":
+				return `{"found":false,"count":0,"first":null,"records":[]}`, nil
+			case "order_create":
+				return `{"orderId":11,"orderNumber":"ORD-1","total":17.8,"currency":"PEN","summary":"1 × Sensor"}`, nil
+			case "payment_intent_create":
+				return `{"paymentId":2,"orderId":11,"amount":17.8,"currency":"PEN","message":"Paga S/ 17.80."}`, nil
+			}
+			t.Fatalf("herramienta inesperada: %s", ref)
+			return "", nil
+		},
+	})
+	if err != nil || esperando.State == nil || esperando.State.NodeID != "n_store_receipt_wait" {
+		t.Fatalf("no quedó esperando el comprobante: %+v err=%v", esperando, err)
+	}
+
+	corto, err := Advance(flow, esperando.State, "", Deps{
+		InputType: "image", MediaID: "media-1",
+		AgentStructured: func(AgentRequest) (AgentResult, error) {
+			return AgentResult{Branch: "valid", Data: map[string]any{
+				"operationCode": "00987", "amount": 5.0,
+			}}, nil
+		},
+		Tool: func(ref string, _, _ map[string]string) (string, error) {
+			t.Fatalf("no debe declarar un pago que no cubre el pedido (%s)", ref)
+			return "", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if !corto.Handoff {
+		t.Fatalf("un importe que no cuadra debe llegar a una persona: %+v", corto)
+	}
+	if len(corto.Sends) == 0 || !strings.Contains(corto.Sends[len(corto.Sends)-1], "17.8") {
+		t.Fatalf("el cliente debe ver los dos importes: %v", corto.Sends)
+	}
+}

@@ -338,6 +338,18 @@ func compareExpressionValues(left, right, operator string) (bool, error) {
 	case "!=":
 		return left != right, nil
 	case ">", ">=", "<", "<=":
+		// Una variable ausente es «no sé», y no sé no es mayor que nada: se
+		// resuelve como falso en vez de reventar.
+		//
+		// No es una tolerancia cosmética. `validateExpression` evalúa contra un
+		// mapa vacío, así que sin esto **cualquier** comparación numérica entre
+		// dos variables era imposible de publicar —los dos lados llegaban vacíos
+		// y el validador la rechazaba—, y el operador solo servía entre literales,
+		// que no compara nada. Un valor presente pero no numérico sigue siendo un
+		// error: eso sí es un fallo de quien escribió el flujo o de los datos.
+		if strings.TrimSpace(left) == "" || strings.TrimSpace(right) == "" {
+			return false, nil
+		}
 		leftNumber, leftErr := strconv.ParseFloat(left, 64)
 		rightNumber, rightErr := strconv.ParseFloat(right, 64)
 		if leftErr != nil || rightErr != nil {

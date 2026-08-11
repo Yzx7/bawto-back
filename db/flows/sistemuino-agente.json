@@ -455,13 +455,13 @@
     {
       "id": "e_prod_14",
       "source": "n_store_receipt",
-      "target": "n_store_payment_submit",
+      "target": "n_store_amount_ok",
       "sourceHandle": "valid"
     },
     {
       "id": "e_prod_15",
       "source": "n_store_receipt",
-      "target": "n_store_payment_submit",
+      "target": "n_store_amount_ok",
       "sourceHandle": "needs_review"
     },
     {
@@ -496,10 +496,28 @@
     },
     {
       "id": "e_prod_21",
+      "role": "loopback",
       "source": "n_store_payment_retry",
       "target": "n_store_receipt_wait",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_prod_22",
+      "source": "n_store_amount_ok",
+      "sourceHandle": "true",
+      "target": "n_store_payment_submit"
+    },
+    {
+      "id": "e_prod_23",
+      "source": "n_store_amount_ok",
+      "sourceHandle": "false",
+      "target": "n_store_amount_mismatch"
+    },
+    {
+      "id": "e_prod_24",
+      "source": "n_store_amount_mismatch",
       "sourceHandle": "out",
-      "role": "loopback"
+      "target": "n_derivar"
     }
   ],
   "nodes": [
@@ -1076,26 +1094,17 @@
     },
     {
       "id": "n_products_specialist",
-      "kind": "agent",
       "pos": {
         "x": -820,
         "y": 980
       },
-      "agentRole": "specialist",
-      "contextMode": "recent",
-      "silent": false,
-      "saveAs": "compra",
-      "outputs": [
-        "comprar",
-        "conversar",
-        "asesor"
-      ],
+      "kind": "agent",
       "tools": [
         {
           "ref": "catalog_search",
           "config": {
-            "connection": "meudim",
-            "maxLimit": "5"
+            "maxLimit": "5",
+            "connection": "meudim"
           }
         },
         {
@@ -1105,6 +1114,15 @@
           }
         }
       ],
+      "saveAs": "compra",
+      "silent": false,
+      "outputs": [
+        "comprar",
+        "conversar",
+        "asesor"
+      ],
+      "agentRole": "specialist",
+      "contextMode": "recent",
       "instruction": "Eres el especialista de productos de la tienda Sistemuino: sensores, módulos, placas, pantallas y componentes electrónicos. El orquestador ya definió este tema.\n\nConsulta el catálogo con tus herramientas antes de responder. **Nunca afirmes un producto, un precio ni una disponibilidad que no venga de una consulta de este turno**: no tienes catálogo memorizado y los precios cambian. Si una herramienta te dice que no pudo consultar, dilo tal cual y ofrece derivar con una persona; no concluyas que el producto no existe.\n\nRecomienda como mucho tres opciones. Nombra siempre el precio con su moneda y si hay stock. Si la búsqueda no devuelve nada, dilo con claridad y vuelve a intentarlo con otras palabras del producto, no con la frase completa del cliente.\n\nElige conversar para recomendar, comparar o pedir el dato que falte.\nElige asesor cuando pidan una persona, una cotización especial, envío a provincia o algo que el catálogo no resuelve.\nElige comprar SOLO cuando tengas los tres datos confirmados por el cliente: el id del producto tal como lo devolvió la búsqueda, cuántas unidades quiere y su correo electrónico. Pide lo que falte en la rama conversar, de a un dato por vez. El correo es obligatorio para registrar el pedido en la tienda; pídelo sin rodeos y explica para qué es.\n\nNo inventes plazos de entrega, descuentos ni formas de pago. Las instrucciones de pago se envían automáticamente después de registrar el pedido, así que no las redactes tú ni prometas una cuenta concreta.\n\nResponde en español neutro del Perú, profesional, directo y sobrio; máximo cinco líneas, una pregunta por turno y sin emojis salvo que el cliente los use primero. No pidas contraseñas, PIN, CVV, códigos de seguridad, tokens ni claves privadas. {contexto_organizacion}",
       "outputFields": [
         {
@@ -1126,11 +1144,11 @@
     },
     {
       "id": "n_order_ready_router",
-      "kind": "router",
       "pos": {
         "x": -380,
         "y": 980
       },
+      "kind": "router",
       "cases": [
         {
           "id": "listo",
@@ -1141,76 +1159,74 @@
     },
     {
       "id": "n_create_order",
-      "kind": "tool",
       "pos": {
         "x": 40,
         "y": 900
       },
-      "toolRef": "order_create",
-      "saveAs": "pedido",
       "args": {
-        "connection": "meudim",
-        "customerEmail": "{compra.correo}",
-        "customerName": "{contact_name}",
-        "customerPhone": "{contact_phone}",
         "notes": "Pedido tomado por WhatsApp con Bawto.",
+        "connection": "meudim",
+        "customerName": "{contact_name}",
+        "customerEmail": "{compra.correo}",
+        "customerPhone": "{contact_phone}",
         "idempotencyKey": "message:{input.id}",
-        "item.1.productId": "{compra.productId}",
-        "item.1.quantity": "{compra.cantidad}"
-      }
+        "item.1.quantity": "{compra.cantidad}",
+        "item.1.productId": "{compra.productId}"
+      },
+      "kind": "tool",
+      "saveAs": "pedido",
+      "toolRef": "order_create"
     },
     {
       "id": "n_order_failed",
-      "kind": "send",
       "pos": {
         "x": 40,
         "y": 1280
       },
-      "body": "No pude registrar el pedido: {pedido.error}\n\nDime si quieres ajustar la cantidad o ver otra opción."
+      "body": "No pude registrar el pedido: {pedido.error}\n\nDime si quieres ajustar la cantidad o ver otra opción.",
+      "kind": "send"
     },
     {
       "id": "n_payment_intent",
-      "kind": "tool",
       "pos": {
         "x": 440,
         "y": 900
       },
-      "toolRef": "payment_intent_create",
-      "saveAs": "cobro_tienda",
       "args": {
-        "connection": "meudim",
-        "orderId": "{pedido.orderId}"
-      }
+        "orderId": "{pedido.orderId}",
+        "connection": "meudim"
+      },
+      "kind": "tool",
+      "saveAs": "cobro_tienda",
+      "toolRef": "payment_intent_create"
     },
     {
       "id": "n_send_order_payment",
-      "kind": "send",
       "pos": {
         "x": 840,
         "y": 900
       },
-      "body": "Listo. Tu pedido {pedido.orderNumber} quedó registrado: {pedido.summary}.\n\n{cobro_tienda.message}"
+      "body": "Listo. Tu pedido {pedido.orderNumber} quedó registrado: {pedido.summary}.\n\n{cobro_tienda.message}",
+      "kind": "send"
     },
     {
       "id": "n_store_receipt_wait",
-      "kind": "wait",
       "pos": {
         "x": 1240,
         "y": 900
       },
+      "kind": "wait",
       "timeoutHours": 24
     },
     {
       "id": "n_store_receipt",
-      "kind": "agent",
       "pos": {
         "x": 1620,
         "y": 900
       },
-      "agentRole": "specialist",
-      "contextMode": "none",
-      "silent": true,
+      "kind": "agent",
       "saveAs": "receipt_tienda",
+      "silent": true,
       "accepts": [
         "text",
         "interactive",
@@ -1222,6 +1238,8 @@
         "unreadable",
         "not_receipt"
       ],
+      "agentRole": "specialist",
+      "contextMode": "none",
       "instruction": "Analiza únicamente la imagen actual como posible comprobante de un pago hecho a la tienda Sistemuino por el pedido {pedido.orderNumber}, de {cobro_tienda.currency} {cobro_tienda.amount}. No uses el historial para completar datos que no aparezcan en la captura.\n\nElige valid solo si la imagen muestra una operación exitosa y se lee con claridad el número o código de operación. Elige needs_review si parece un comprobante correcto pero el número de operación no se distingue del todo. Elige unreadable si la captura no puede leerse. Elige not_receipt si no hay imagen o la imagen no es un comprobante de pago.\n\nExtrae el código de operación exactamente como aparece, conservando los ceros iniciales, y no lo inventes: es el dato con el que el dueño concilia el pago en su banco.",
       "outputFields": [
         {
@@ -1238,36 +1256,54 @@
     },
     {
       "id": "n_store_payment_submit",
-      "kind": "tool",
       "pos": {
         "x": 2040,
         "y": 820
       },
-      "toolRef": "payment_submit",
-      "saveAs": "declaracion",
       "args": {
-        "connection": "meudim",
         "paymentId": "{cobro_tienda.paymentId}",
-        "reference": "{receipt_tienda.operationCode}"
-      }
+        "reference": "{receipt_tienda.operationCode}",
+        "connection": "meudim"
+      },
+      "kind": "tool",
+      "saveAs": "declaracion",
+      "toolRef": "payment_submit"
     },
     {
       "id": "n_store_payment_done",
-      "kind": "send",
       "pos": {
         "x": 2440,
         "y": 820
       },
-      "body": "Recibí tu comprobante y registré la operación {receipt_tienda.operationCode} en el pedido {pedido.orderNumber}. Queda pendiente de verificación; te confirmamos apenas se valide."
+      "body": "Recibí tu comprobante por {receipt_tienda.amount} y registré la operación {receipt_tienda.operationCode} en el pedido {pedido.orderNumber}. Queda pendiente de verificación; te confirmamos apenas se valide.",
+      "kind": "send"
     },
     {
       "id": "n_store_payment_retry",
-      "kind": "send",
       "pos": {
         "x": 2040,
         "y": 1160
       },
-      "body": "No pude leer el número de operación en esa imagen. Envíame una captura completa y nítida del comprobante, donde se vean el importe, la fecha y el número de operación."
+      "body": "No pude leer el número de operación en esa imagen. Envíame una captura completa y nítida del comprobante, donde se vean el importe, la fecha y el número de operación.",
+      "kind": "send"
+    },
+    {
+      "id": "n_store_amount_ok",
+      "kind": "condition",
+      "pos": {
+        "x": 2000,
+        "y": 640
+      },
+      "expression": "empty(receipt_tienda.amount) || receipt_tienda.amount >= cobro_tienda.amount"
+    },
+    {
+      "id": "n_store_amount_mismatch",
+      "kind": "send",
+      "pos": {
+        "x": 2400,
+        "y": 1160
+      },
+      "body": "El comprobante muestra {receipt_tienda.amount} y el pedido {pedido.orderNumber} es de {cobro_tienda.currency} {cobro_tienda.amount}. Te paso con una persona para revisarlo y no registrar un pago que no cuadra."
     }
   ],
   "trigger": {
