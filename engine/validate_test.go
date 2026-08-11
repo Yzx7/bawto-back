@@ -425,3 +425,118 @@ func TestValidateDataQuerySeparaConfiguracionDeValores(t *testing.T) {
 		})
 	}
 }
+
+// La asimetría del catálogo es la misma que la de data_query y es lo que impide
+// que el mensaje del cliente decida a qué tienda se pregunta: **solo `query`
+// interpola variables**; conexión, categoría, orden y tope los fija el autor.
+func TestValidateCatalogSearchSeparaDestinoDeValores(t *testing.T) {
+	base := func(args map[string]string) *Flow {
+		return &Flow{ID: "f", Name: "F", Trigger: Trigger{Type: "message", Match: "any"}, Nodes: []Node{
+			{ID: "buscar", Kind: "tool", ToolRef: "catalog_search", Args: args},
+			{ID: "ok", Kind: "action", Action: "end"}, {ID: "error", Kind: "action", Action: "end"},
+		}, Edges: []Edge{
+			{ID: "start", Source: "trigger", Target: "buscar"},
+			{ID: "ok", Source: "buscar", SourceHandle: "ok", Target: "ok"},
+			{ID: "error", Source: "buscar", SourceHandle: "error", Target: "error"},
+		}}
+	}
+
+	valid := base(map[string]string{
+		"connection": "meudim", "query": "{input.text}", "categoryId": "3",
+		"includeDescendants": "true", "sort": "price-asc", "limit": "5",
+		"urlTemplate": "https://sistemuino.com/productos/{slug}",
+	})
+	if err := Validate(valid); err != nil {
+		t.Fatalf("catalog_search válido rechazado: %v", err)
+	}
+
+	for name, tc := range map[string]struct {
+		args map[string]string
+		want string
+	}{
+		"sin conexión": {
+			map[string]string{"query": "esp32"}, "requiere una conexión",
+		},
+		"conexión dinámica": {
+			map[string]string{"connection": "{input.text}"}, "conexión fija",
+		},
+		"categoría dinámica": {
+			map[string]string{"connection": "meudim", "categoryId": "{input.text}"}, "categoryId fijo",
+		},
+		"categoría no numérica": {
+			map[string]string{"connection": "meudim", "categoryId": "sensores"}, "numérica",
+		},
+		"orden inventado": {
+			map[string]string{"connection": "meudim", "sort": "price-random"}, "orden",
+		},
+		"tope por encima del máximo": {
+			map[string]string{"connection": "meudim", "limit": "50"}, "como mucho",
+		},
+		"argumento desconocido": {
+			map[string]string{"connection": "meudim", "status": "draft"}, "no admite el argumento",
+		},
+		"enlace sin TLS": {
+			map[string]string{"connection": "meudim", "urlTemplate": "http://tienda.com/{slug}"}, "https",
+		},
+		"enlace con variable ajena": {
+			map[string]string{"connection": "meudim", "urlTemplate": "https://t.com/{input.text}"}, "solo admite",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := Validate(base(tc.args))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("esperaba %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestValidateCatalogProductExigeUnSoloIdentificador(t *testing.T) {
+	base := func(args map[string]string) *Flow {
+		return &Flow{ID: "f", Name: "F", Trigger: Trigger{Type: "message", Match: "any"}, Nodes: []Node{
+			{ID: "ver", Kind: "tool", ToolRef: "catalog_product", Args: args},
+			{ID: "ok", Kind: "action", Action: "end"}, {ID: "error", Kind: "action", Action: "end"},
+		}, Edges: []Edge{
+			{ID: "start", Source: "trigger", Target: "ver"},
+			{ID: "ok", Source: "ver", SourceHandle: "ok", Target: "ok"},
+			{ID: "error", Source: "ver", SourceHandle: "error", Target: "error"},
+		}}
+	}
+	if err := Validate(base(map[string]string{"connection": "meudim", "slug": "{elegido.slug}"})); err != nil {
+		t.Fatalf("catalog_product por slug rechazado: %v", err)
+	}
+	if err := Validate(base(map[string]string{"connection": "meudim"})); err == nil {
+		t.Fatal("se aceptó un bloque sin producto")
+	}
+	if err := Validate(base(map[string]string{"connection": "meudim", "slug": "x", "productId": "7"})); err == nil {
+		t.Fatal("se aceptaron los dos identificadores a la vez")
+	}
+}
+
+// El agente recibe la misma restricción: puede redactar la búsqueda, nunca el
+// alcance. Un tope por encima del máximo tampoco pasa por aquí, porque cada
+// resultado se reenvía en todas las iteraciones siguientes del turno.
+func TestValidateCatalogEnUnAgente(t *testing.T) {
+	base := func(config map[string]string) *Flow {
+		return &Flow{ID: "f", Name: "F", Trigger: Trigger{Type: "message", Match: "any"}, Nodes: []Node{
+			{ID: "a", Kind: "agent", Instruction: "vende", Outputs: []string{"seguir"},
+				Tools: []NodeTool{{Ref: "catalog_search", Config: config}}},
+			{ID: "fin", Kind: "action", Action: "end"},
+		}, Edges: []Edge{
+			{ID: "start", Source: "trigger", Target: "a"},
+			{ID: "seguir", Source: "a", SourceHandle: "seguir", Target: "fin"},
+		}}
+	}
+	if err := Validate(base(map[string]string{"connection": "meudim", "maxLimit": "5"})); err != nil {
+		t.Fatalf("agente con catálogo rechazado: %v", err)
+	}
+	if err := Validate(base(map[string]string{})); err == nil {
+		t.Fatal("se aceptó un agente con catálogo sin conexión")
+	}
+	if err := Validate(base(map[string]string{"connection": "{input.text}"})); err == nil {
+		t.Fatal("se aceptó una conexión elegida por una variable")
+	}
+	if err := Validate(base(map[string]string{"connection": "meudim", "maxLimit": "40"})); err == nil {
+		t.Fatal("se aceptó un tope por encima del máximo")
+	}
+}

@@ -623,6 +623,11 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 		MessageID: inboundMessageID,
 		Inbound:   m,
 	}
+	// El presupuesto de llamadas externas es del turno, no del bloque: lo comparten
+	// el agente y los bloques del grafo. Si cada uno tuviera el suyo, un flujo con
+	// tres bloques de catálogo multiplicaría por tres el gasto de cuota que el
+	// límite pretende acotar.
+	turnBudget := newCatalogBudget()
 	deps := engine.Deps{
 		Context: flowContext, InputType: string(m.Type), MediaID: m.MediaID, WaID: m.WaID,
 		Input: engine.InboundInput{
@@ -640,7 +645,7 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 			if mediaErr := con.attachCurrentAgentMedia(ctx, bot, &request, mediaSource); mediaErr != nil {
 				return engine.AgentResult{}, mediaErr
 			}
-			agentTools, toolExec, toolErr := con.agentTooling(ctx, bot, request.Tools)
+			agentTools, toolExec, toolErr := con.agentTooling(ctx, bot, request.Tools, turnBudget)
 			if toolErr != nil {
 				return engine.AgentResult{}, toolErr
 			}
@@ -736,6 +741,10 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 			return con.execDataMutate(ctx, bot, m.From, m.WaID, args)
 		case "data_query":
 			return con.execDataQuery(ctx, bot, m.From, args)
+		case "catalog_search":
+			return con.execCatalogSearch(ctx, bot, turnBudget, args)
+		case "catalog_product":
+			return con.execCatalogProduct(ctx, bot, turnBudget, args)
 		case "payment_methods_render":
 			return con.execPaymentMethodsRender(ctx, bot)
 		case "subscription_activate":

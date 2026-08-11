@@ -346,6 +346,14 @@ func validateNode(n *Node, triggerType string) error {
 			if err := validateDataQueryArgs(n.Args); err != nil {
 				return err
 			}
+		case "catalog_search":
+			if err := validateCatalogSearchArgs(n.Args); err != nil {
+				return err
+			}
+		case "catalog_product":
+			if err := validateCatalogProductArgs(n.Args); err != nil {
+				return err
+			}
 		case "payment_methods_render":
 			if len(n.Args) != 0 {
 				return fmt.Errorf("payment_methods_render no admite argumentos")
@@ -516,6 +524,122 @@ func validDataQueryOp(op string) bool {
 	return false
 }
 
+// maxCatalogResults es el tope duro de productos que vuelven en una llamada.
+//
+// No es una preferencia estética: cada resultado se reenvía al modelo en todas
+// las iteraciones siguientes del turno, así que un catálogo entero encarece el
+// bucle completo, no solo el paso que lo pidió. Además, la respuesta se le lee a
+// alguien por WhatsApp: diez productos ya no se leen.
+const maxCatalogResults = 10
+
+// validateCatalogSearchArgs comprueba el bloque del grafo.
+//
+// La asimetría es la misma que en data_query y es el contrato: **solo `query`
+// interpola variables**. La conexión, la categoría y el tope los fija el autor,
+// así que llevan `{` prohibido. Sin esa asimetría, el texto del cliente podría
+// elegir a qué tienda se pregunta.
+func validateCatalogSearchArgs(args map[string]string) error {
+	if err := requireFixedConnection(args, "catalog_search"); err != nil {
+		return err
+	}
+	allowed := map[string]bool{
+		"connection": true, "query": true, "categoryId": true, "includeDescendants": true,
+		"minPrice": true, "maxPrice": true, "sort": true, "limit": true, "urlTemplate": true,
+	}
+	for key := range args {
+		if !allowed[key] {
+			return fmt.Errorf("catalog_search no admite el argumento %q", key)
+		}
+	}
+	for _, key := range []string{"categoryId", "includeDescendants", "sort", "limit"} {
+		if strings.Contains(args[key], "{") {
+			return fmt.Errorf("catalog_search requiere un %s fijo, sin variables", key)
+		}
+	}
+	if raw := strings.TrimSpace(args["categoryId"]); raw != "" {
+		if id, err := strconv.Atoi(raw); err != nil || id <= 0 {
+			return fmt.Errorf("catalog_search requiere una categoría numérica")
+		}
+	}
+	if raw := strings.TrimSpace(args["includeDescendants"]); raw != "" {
+		if _, err := strconv.ParseBool(raw); err != nil {
+			return fmt.Errorf("includeDescendants debe ser true o false")
+		}
+	}
+	if raw := strings.TrimSpace(args["limit"]); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil || limit <= 0 {
+			return fmt.Errorf("catalog_search requiere un limit positivo")
+		}
+		if limit > maxCatalogResults {
+			return fmt.Errorf("catalog_search admite como mucho %d productos por consulta", maxCatalogResults)
+		}
+	}
+	if sort := strings.TrimSpace(args["sort"]); sort != "" && !validCatalogSort(sort) {
+		return fmt.Errorf("catalog_search no admite el orden %q", sort)
+	}
+	return validateURLTemplate(args["urlTemplate"])
+}
+
+func validateCatalogProductArgs(args map[string]string) error {
+	if err := requireFixedConnection(args, "catalog_product"); err != nil {
+		return err
+	}
+	allowed := map[string]bool{"connection": true, "productId": true, "slug": true, "urlTemplate": true}
+	for key := range args {
+		if !allowed[key] {
+			return fmt.Errorf("catalog_product no admite el argumento %q", key)
+		}
+	}
+	productID := strings.TrimSpace(args["productId"])
+	slug := strings.TrimSpace(args["slug"])
+	if (productID == "") == (slug == "") {
+		return fmt.Errorf("catalog_product requiere productId o slug, pero no ambos")
+	}
+	return validateURLTemplate(args["urlTemplate"])
+}
+
+// requireFixedConnection impide que el destino de la llamada dependa de una
+// variable. Es la barrera que mantiene fuera del alcance del cliente la
+// pregunta «¿a qué tienda se consulta?».
+func requireFixedConnection(args map[string]string, tool string) error {
+	connection := strings.TrimSpace(args["connection"])
+	if connection == "" {
+		return fmt.Errorf("%s requiere una conexión elegida por el autor", tool)
+	}
+	if strings.Contains(connection, "{") {
+		return fmt.Errorf("%s requiere una conexión fija, no una variable", tool)
+	}
+	return nil
+}
+
+// validateURLTemplate acota la plantilla del enlace a un https con un único
+// hueco conocido. Sin esto sería un sitio cómodo para colar cualquier URL en un
+// mensaje que el cliente va a tocar.
+func validateURLTemplate(template string) error {
+	template = strings.TrimSpace(template)
+	if template == "" {
+		return nil
+	}
+	if !strings.HasPrefix(template, "https://") {
+		return fmt.Errorf("la plantilla del enlace debe empezar por https://")
+	}
+	for _, match := range varRe.FindAllStringSubmatch(template, -1) {
+		if match[1] != "slug" && match[1] != "id" {
+			return fmt.Errorf("la plantilla del enlace solo admite {slug} o {id}, no %q", match[1])
+		}
+	}
+	return nil
+}
+
+func validCatalogSort(sort string) bool {
+	switch sort {
+	case "price-asc", "price-desc", "name-asc", "name-desc", "newest", "oldest":
+		return true
+	}
+	return false
+}
+
 func validateDataMutateArgs(args map[string]string) error {
 	object := strings.TrimSpace(args["object"])
 	operation := strings.TrimSpace(args["operation"])
@@ -622,6 +746,34 @@ func validateAgentTools(nodeTools []NodeTool) error {
 			}
 			if objects != "" && (strings.TrimSpace(nodeTool.Config["fields"]) != "" || strings.TrimSpace(nodeTool.Config["filterFields"]) != "") {
 				return fmt.Errorf("data_query con varios objetos no admite fields ni filterFields compartidos")
+			}
+		}
+		if nodeTool.Ref == "catalog_search" || nodeTool.Ref == "catalog_product" {
+			// Ninguna configuración del catálogo interpola: el modelo redacta los
+			// valores de búsqueda, nunca a qué tienda se pregunta ni con qué tope.
+			for key, value := range nodeTool.Config {
+				if strings.Contains(value, "{") && key != "urlTemplate" {
+					return fmt.Errorf("la herramienta %s requiere un %s fijo, sin variables", nodeTool.Ref, key)
+				}
+			}
+			if err := validateURLTemplate(nodeTool.Config["urlTemplate"]); err != nil {
+				return err
+			}
+		}
+		if nodeTool.Ref == "catalog_search" {
+			if raw := strings.TrimSpace(nodeTool.Config["maxLimit"]); raw != "" {
+				limit, err := strconv.Atoi(raw)
+				if err != nil || limit <= 0 {
+					return fmt.Errorf("catalog_search requiere un máximo de productos positivo")
+				}
+				if limit > maxCatalogResults {
+					return fmt.Errorf("catalog_search admite como mucho %d productos por consulta", maxCatalogResults)
+				}
+			}
+			if raw := strings.TrimSpace(nodeTool.Config["categoryId"]); raw != "" {
+				if id, err := strconv.Atoi(raw); err != nil || id <= 0 {
+					return fmt.Errorf("catalog_search requiere una categoría numérica")
+				}
 			}
 		}
 	}

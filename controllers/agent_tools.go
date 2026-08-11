@@ -41,7 +41,8 @@ type agentMediaSource struct {
 // agentTooling traduce las herramientas declaradas en el nodo a lo que el
 // adaptador de IA necesita: las fichas que ve el modelo y un ejecutor que
 // despacha por nombre.
-func (con *Controller) agentTooling(ctx context.Context, bot *models.BotChannel, nodeTools []engine.NodeTool) ([]ai.AgentTool, ai.ToolExecutor, error) {
+func (con *Controller) agentTooling(ctx context.Context, bot *models.BotChannel, nodeTools []engine.NodeTool,
+	budget *catalogBudget) ([]ai.AgentTool, ai.ToolExecutor, error) {
 	if len(nodeTools) == 0 {
 		return nil, nil, nil
 	}
@@ -64,6 +65,10 @@ func (con *Controller) agentTooling(ctx context.Context, bot *models.BotChannel,
 		switch name {
 		case "data_query":
 			return con.execAgentDataQuery(ctx, bot, config[name], input)
+		case "catalog_search":
+			return con.execAgentCatalogSearch(ctx, bot, budget, config[name], input)
+		case "catalog_product":
+			return con.execAgentCatalogProduct(ctx, bot, budget, config[name], input)
 		default:
 			return "", fmt.Errorf("herramienta %q sin ejecutor", name)
 		}

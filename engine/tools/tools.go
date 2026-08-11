@@ -59,7 +59,8 @@ type ConfigKey struct {
 	Help     string
 	Required bool
 	// Kind orienta al editor sobre qué control pintar. "data_object" pide la
-	// clave de un objeto de datos de la organización.
+	// clave de un objeto de datos de la organización; "connection", la clave de
+	// una conexión externa configurada por la organización.
 	Kind string
 }
 
@@ -161,6 +162,130 @@ var registry = map[string]Spec{
 				Key:   "maxLimit",
 				Label: "Máximo de registros",
 				Help:  "Tope de resultados que vuelven al modelo. Por defecto 8.",
+				Kind:  "text",
+			},
+		},
+		Effect:   EffectRead,
+		ForAgent: true,
+		ForGraph: true,
+	},
+
+	// catalog_search y catalog_product consultan la tienda **en el momento**, no
+	// una copia. Por eso su rama `error` importa más que en una lectura local: el
+	// flujo tiene que poder distinguir «no lo vendemos» de «la tienda no
+	// responde», y sin esa diferencia el bot acabaría afirmando que algo no
+	// existe cada vez que se cae una API.
+	"catalog_search": {
+		Name:  "catalog_search",
+		Label: "Buscar en el catálogo",
+		Help: "Consulta el catálogo de una tienda conectada, en directo. El bloque fija la conexión, la categoría y el tope de resultados. " +
+			"Devuelve `found`, `count`, `first` y la lista completa.",
+		Description: "Consulta el catálogo real de la tienda: qué productos existen, su precio, " +
+			"su stock y su enlace. Úsala **antes** de afirmar que algo se vende, cuánto cuesta o " +
+			"si queda disponible: es la fuente de verdad y evita inventar. Si no devuelve " +
+			"resultados, dilo claramente en vez de suponer que existe.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{
+					"type": "string",
+					"description": "Palabras a buscar en el nombre y la descripción, en español. " +
+						"Usa términos del producto («sensor de movimiento», «ESP32»), no la frase " +
+						"completa del cliente.",
+				},
+				"minPrice": map[string]any{
+					"type":        "number",
+					"description": "Precio mínimo. Omítelo salvo que el cliente diera un rango.",
+				},
+				"maxPrice": map[string]any{
+					"type":        "number",
+					"description": "Precio máximo. Útil cuando el cliente pide algo «hasta X».",
+				},
+				"sort": map[string]any{
+					"type":        "string",
+					"enum":        []string{"price-asc", "price-desc", "name-asc", "newest"},
+					"description": "Orden. Usa price-asc cuando pidan lo más barato.",
+				},
+			},
+			"additionalProperties": false,
+		},
+		Accepts:  []PayloadType{PayloadDataQuery},
+		Produces: PayloadDataRecords,
+		Config: []ConfigKey{
+			{
+				Key:      "connection",
+				Label:    "Conexión",
+				Help:     "Clave técnica de la conexión externa de la organización. El modelo no puede cambiarla.",
+				Required: true,
+				Kind:     "connection",
+			},
+			{
+				Key:   "categoryId",
+				Label: "Categoría",
+				Help:  "ID de categoría de la tienda. Acota la búsqueda; vacío busca en todo el catálogo.",
+				Kind:  "text",
+			},
+			{
+				Key:   "includeDescendants",
+				Label: "Incluir subcategorías",
+				Help:  "true incluye la rama completa bajo esa categoría.",
+				Kind:  "text",
+			},
+			{
+				Key:   "maxLimit",
+				Label: "Máximo de productos",
+				Help:  "Tope de resultados. Por defecto 5; el máximo admitido es 10.",
+				Kind:  "text",
+			},
+			{
+				Key:   "urlTemplate",
+				Label: "Plantilla del enlace",
+				Help: "Cómo se arma el enlace público, por ejemplo https://tutienda.com/productos/{slug}. " +
+					"Vacío deja `url` sin rellenar: la API no conoce las rutas del storefront.",
+				Kind: "text",
+			},
+		},
+		Effect:   EffectRead,
+		ForAgent: true,
+		ForGraph: true,
+	},
+
+	"catalog_product": {
+		Name:  "catalog_product",
+		Label: "Ver un producto",
+		Help: "Trae el detalle de un producto de la tienda conectada: descripción, especificaciones e imágenes. " +
+			"Existe aparte de la búsqueda porque la lista de la API no incluye esos campos.",
+		Description: "Trae el detalle completo de un producto concreto: descripción larga, " +
+			"especificaciones técnicas e imágenes. Úsala cuando ya sabes de qué producto se habla " +
+			"—porque la búsqueda te dio su id— y necesitas más detalle del que dio la lista.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"productId": map[string]any{
+					"type":        "integer",
+					"description": "ID del producto, tal como lo devolvió la búsqueda. No lo inventes.",
+				},
+				"slug": map[string]any{
+					"type":        "string",
+					"description": "Alternativa al id, si es lo que conoces.",
+				},
+			},
+			"additionalProperties": false,
+		},
+		Accepts:  []PayloadType{PayloadDataQuery},
+		Produces: PayloadDataRecords,
+		Config: []ConfigKey{
+			{
+				Key:      "connection",
+				Label:    "Conexión",
+				Help:     "Clave técnica de la conexión externa de la organización.",
+				Required: true,
+				Kind:     "connection",
+			},
+			{
+				Key:   "urlTemplate",
+				Label: "Plantilla del enlace",
+				Help:  "Igual que en la búsqueda: https://tutienda.com/productos/{slug}.",
 				Kind:  "text",
 			},
 		},
