@@ -872,3 +872,48 @@ func TestDataQueryProyectaVariablesParaElRouter(t *testing.T) {
 		t.Fatalf("sends=%v", fallo.Sends)
 	}
 }
+
+// La rama de error de una herramienta puede contarle al cliente **por qué**
+// falló. El motor descartaba ese texto: la herramienta conservaba el mensaje de
+// dominio de la tienda —«stock insuficiente para X (disponible: 2)»— y el flujo
+// solo podía responder un genérico, porque no existía ninguna variable con él.
+func TestToolErrorQuedaDisponibleEnLaRamaDeError(t *testing.T) {
+	flow := &Flow{ID: "f", Name: "F", Trigger: Trigger{Type: "message", Match: "any"}, Nodes: []Node{
+		{ID: "pedido", Kind: "tool", ToolRef: "data_mutate", SaveAs: "pedido"},
+		{ID: "ok", Kind: "send", Body: "listo"},
+		{ID: "falla", Kind: "send", Body: "No pude registrarlo: {pedido.error}"},
+	}, Edges: []Edge{
+		{ID: "start", Source: "trigger", Target: "pedido"},
+		{ID: "ok", Source: "pedido", SourceHandle: "ok", Target: "ok"},
+		{ID: "error", Source: "pedido", SourceHandle: "error", Target: "falla"},
+	}}
+
+	result, err := Advance(flow, nil, "compro", Deps{
+		InputType: "text",
+		Tool: func(string, map[string]string, map[string]string) (string, error) {
+			return "", errors.New("stock insuficiente para 'ESP32' (disponible: 2, solicitado: 5)")
+		},
+	})
+	if err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if len(result.Sends) != 1 {
+		t.Fatalf("mensajes: %v", result.Sends)
+	}
+	want := "No pude registrarlo: stock insuficiente para 'ESP32' (disponible: 2, solicitado: 5)"
+	if result.Sends[0] != want {
+		t.Fatalf("el motor perdió la causa:\n  got  %q\n  want %q", result.Sends[0], want)
+	}
+
+	// Un acierto no deja la variable puesta: si lo hiciera, un {pedido.error} mal
+	// colocado imprimiría el error de una ejecución anterior.
+	ok, err := Advance(flow, nil, "compro", Deps{
+		InputType: "text",
+		Tool: func(string, map[string]string, map[string]string) (string, error) {
+			return `{"orderId":11}`, nil
+		},
+	})
+	if err != nil || len(ok.Sends) != 1 || ok.Sends[0] != "listo" {
+		t.Fatalf("camino correcto: %v %v", ok.Sends, err)
+	}
+}

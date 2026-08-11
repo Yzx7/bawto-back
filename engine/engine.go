@@ -364,6 +364,14 @@ func Advance(flow *Flow, state *State, userInput string, deps Deps) (Result, err
 				saveToolResult(vars, n.SaveAs, result)
 			}
 			if err != nil {
+				// La causa se expone como `<saveAs>.error` para que la rama de
+				// error pueda decírsela al cliente. Sin esto, el motor descartaba
+				// el mensaje de dominio que la herramienta se había molestado en
+				// conservar —«stock insuficiente para X (disponible: 2)»— y el
+				// flujo solo podía responder un genérico.
+				if n.SaveAs != "" {
+					vars[n.SaveAs+".error"] = toolErrorText(err)
+				}
 				cur = flow.next(cur, "error")
 			} else {
 				cur = flow.next(cur, "ok")
@@ -447,6 +455,20 @@ func evalRouter(cases []RouterCase, vars map[string]string) string {
 // saveToolResult conserva la salida cruda por compatibilidad y proyecta los
 // escalares de un objeto JSON a variables con punto. Así el grafo puede decidir
 // por `receipt.decision` sin enseñarle al motor el esquema de cada integración.
+// maxToolErrorRunes acota lo que puede acabar dentro de un mensaje al cliente.
+// Un error de una API externa puede traer un cuerpo entero, y el flujo lo
+// interpolaría tal cual en un WhatsApp.
+const maxToolErrorRunes = 300
+
+func toolErrorText(err error) string {
+	text := strings.TrimSpace(err.Error())
+	runes := []rune(text)
+	if len(runes) > maxToolErrorRunes {
+		return string(runes[:maxToolErrorRunes-1]) + "…"
+	}
+	return text
+}
+
 func saveToolResult(vars map[string]string, prefix, result string) {
 	vars[prefix] = result
 	var value any
