@@ -23,8 +23,23 @@ type Store struct {
 		Currency       string `json:"currency"`
 		CurrencySymbol string `json:"currencySymbol"`
 		ContactEmail   string `json:"contactEmail"`
+		// Payments dice si la tienda puede cobrar. Sin cuentas configuradas el
+		// bot llega a crear el pedido y se detiene en el cobro, así que conviene
+		// poder responderlo sin crear un pedido para averiguarlo.
+		Payments struct {
+			Manual struct {
+				Instructions string           `json:"instructions"`
+				Accounts     []PaymentAccount `json:"accounts"`
+				QRUrls       []string         `json:"qr_urls"`
+			} `json:"manual"`
+		} `json:"payments"`
 	} `json:"settings"`
 }
+
+// CanCharge responde si la tienda tiene con qué cobrar. `settings` llega siempre
+// completo, así que la lista vacía es un «no configurado» fiable y no un dato
+// ausente.
+func (s Store) CanCharge() bool { return len(s.Settings.Payments.Manual.Accounts) > 0 }
 
 // Product es un producto del catálogo.
 //

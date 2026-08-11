@@ -107,6 +107,11 @@ func main() {
 		fmt.Printf("Dominio    %s\n", store.Domain)
 	}
 	fmt.Printf("Moneda     %s %s\n", store.Settings.Currency, store.Settings.CurrencySymbol)
+	if store.CanCharge() {
+		fmt.Printf("Cobro      %d medio(s) configurado(s)\n", len(store.Settings.Payments.Manual.Accounts))
+	} else {
+		fmt.Println("Cobro      SIN CONFIGURAR: la venta llegará al pedido y se detendrá al cobrar")
+	}
 	fmt.Printf("Cuota      %s peticiones restantes este minuto\n", remaining(meta))
 
 	if *search != "" {
