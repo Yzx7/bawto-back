@@ -698,6 +698,32 @@ CREATE TABLE IF NOT EXISTS bot_knowledge (
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_bot ON bot_knowledge (bot_id);
 
+-- CONEXIONES EXTERNAS (API de terceros consultada en directo) --
+-- Espejo de db/migrations/021_external_connections.sql. La credencial va
+-- cifrada con TOKEN_ENC_KEY; aquí no se guarda ninguna copia del catálogo
+-- externo, solo a quién se llama y si la última llamada funcionó.
+CREATE TABLE IF NOT EXISTS external_connections (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id      UUID        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    key         TEXT        NOT NULL,   -- clave técnica que referencia el flujo
+    driver      TEXT        NOT NULL,   -- lista permitida en connectors.ValidateTarget
+    label       TEXT        NOT NULL,
+    base_url    TEXT        NOT NULL,
+    credential  BYTEA       NOT NULL,
+    status      TEXT        NOT NULL DEFAULT 'active',
+    last_ok_at  TIMESTAMPTZ,
+    last_error  TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (org_id, key),
+    CHECK (key ~ '^[a-z][a-z0-9_]{0,63}$'),
+    CHECK (length(trim(label)) > 0),
+    CHECK (length(credential) > 0),
+    CHECK (status IN ('active', 'disabled'))
+);
+CREATE INDEX IF NOT EXISTS idx_external_connections_org
+    ON external_connections (org_id);
+
 -- ============================================================
 -- FUNCIÓN + TRIGGERS: updated_at automático
 -- ============================================================
@@ -712,7 +738,7 @@ $$ LANGUAGE plpgsql;
 DO $$
 DECLARE t TEXT;
 BEGIN
-    FOREACH t IN ARRAY ARRAY['organizations','memberships','bots','chats','contacts','billing_records','contact_fields','audiences','data_objects','data_fields','data_records','data_views','flows','channel_health','contact_preferences']
+    FOREACH t IN ARRAY ARRAY['organizations','memberships','bots','chats','contacts','billing_records','contact_fields','audiences','data_objects','data_fields','data_records','data_views','flows','channel_health','contact_preferences','external_connections']
     LOOP
         EXECUTE format('DROP TRIGGER IF EXISTS trg_%1$s_updated_at ON %1$s;', t);
         EXECUTE format(
