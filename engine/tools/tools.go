@@ -307,6 +307,46 @@ var registry = map[string]Spec{
 		ForGraph: true,
 	},
 
+	// Las tres herramientas de venta son **solo de grafo**. La escritura no se le
+	// entrega al modelo: el agente recopila qué quiere el cliente y el grafo
+	// ejecuta, igual que en el circuito de cobros. Un modelo que puede crear
+	// pedidos puede crear pedidos por error.
+	"order_create": {
+		Name:  "order_create",
+		Label: "Crear pedido",
+		Help: "Crea el pedido en la tienda conectada. El precio, el stock y los totales los calcula la tienda: " +
+			"lo que se envíe como precio se ignora. Requiere clave de idempotencia.",
+		Accepts:  []PayloadType{PayloadStructuredData, PayloadDataRecords},
+		Produces: PayloadDataRecord,
+		Effect:   EffectWrite,
+		ForAgent: false,
+		ForGraph: true,
+	},
+
+	"payment_intent_create": {
+		Name:  "payment_intent_create",
+		Label: "Preparar el pago del pedido",
+		Help: "Abre el cobro del pedido y compone el mensaje exacto con las cuentas de la tienda. " +
+			"La IA no redacta números de cuenta.",
+		Accepts:  []PayloadType{PayloadDataRecord},
+		Produces: PayloadStructuredData,
+		Effect:   EffectWrite,
+		ForAgent: false,
+		ForGraph: true,
+	},
+
+	"payment_submit": {
+		Name:  "payment_submit",
+		Label: "Declarar el pago",
+		Help: "Registra el número de operación que declaró el comprador. Reenviarlo corrige la declaración " +
+			"en vez de duplicarla. Confirmar el pago sigue siendo del dueño de la tienda.",
+		Accepts:  []PayloadType{PayloadStructuredData, PayloadDataRecord},
+		Produces: PayloadDataRecord,
+		Effect:   EffectWrite,
+		ForAgent: false,
+		ForGraph: true,
+	},
+
 	"subscription_activate": {
 		Name:  "subscription_activate",
 		Label: "Activar suscripción Bawto",

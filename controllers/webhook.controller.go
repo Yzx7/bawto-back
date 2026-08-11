@@ -742,9 +742,15 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 		case "data_query":
 			return con.execDataQuery(ctx, bot, m.From, args)
 		case "catalog_search":
-			return con.execCatalogSearch(ctx, bot, turnBudget, args)
+			return con.execCatalogSearch(ctx, bot, args)
 		case "catalog_product":
-			return con.execCatalogProduct(ctx, bot, turnBudget, args)
+			return con.execCatalogProduct(ctx, bot, args)
+		case "order_create":
+			return con.execOrderCreate(ctx, bot, m.WaID, args)
+		case "payment_intent_create":
+			return con.execPaymentIntentCreate(ctx, bot, args)
+		case "payment_submit":
+			return con.execPaymentSubmit(ctx, bot, args)
 		case "payment_methods_render":
 			return con.execPaymentMethodsRender(ctx, bot)
 		case "subscription_activate":

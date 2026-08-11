@@ -354,6 +354,18 @@ func validateNode(n *Node, triggerType string) error {
 			if err := validateCatalogProductArgs(n.Args); err != nil {
 				return err
 			}
+		case "order_create":
+			if err := validateOrderCreateArgs(n.Args); err != nil {
+				return err
+			}
+		case "payment_intent_create":
+			if err := validatePaymentIntentArgs(n.Args); err != nil {
+				return err
+			}
+		case "payment_submit":
+			if err := validatePaymentSubmitArgs(n.Args); err != nil {
+				return err
+			}
 		case "payment_methods_render":
 			if len(n.Args) != 0 {
 				return fmt.Errorf("payment_methods_render no admite argumentos")
@@ -638,6 +650,112 @@ func validCatalogSort(sort string) bool {
 		return true
 	}
 	return false
+}
+
+// maxOrderLines acota las líneas de un pedido. No es un límite de negocio: es
+// que un carrito armado por conversación con más de diez líneas distintas ya no
+// se pudo confirmar leyéndoselo a nadie por WhatsApp.
+const maxOrderLines = 10
+
+var orderLineRe = regexp.MustCompile(`^item\.([1-9]|10)\.(productId|quantity|variantId)$`)
+
+// validateOrderCreateArgs comprueba el bloque que cierra la venta.
+//
+// La clave de idempotencia es obligatoria, igual que en data_mutate y por la
+// misma razón elevada al cuadrado: aquí un reintento no duplica una fila, duplica
+// un pedido con mercadería y dinero detrás.
+func validateOrderCreateArgs(args map[string]string) error {
+	if err := requireFixedConnection(args, "order_create"); err != nil {
+		return err
+	}
+	if strings.TrimSpace(args["customerEmail"]) == "" {
+		return fmt.Errorf("order_create requiere el correo del comprador, que es lo único que la tienda exige")
+	}
+	if strings.TrimSpace(args["idempotencyKey"]) == "" {
+		return fmt.Errorf("order_create requiere idempotencyKey: sin ella un webhook reintentado crea dos pedidos")
+	}
+	allowed := map[string]bool{
+		"connection": true, "customerEmail": true, "customerName": true, "customerPhone": true,
+		"notes": true, "couponCode": true, "currency": true, "idempotencyKey": true,
+		"shipping.name": true, "shipping.phone": true, "shipping.address": true,
+		"shipping.city": true, "shipping.state": true, "shipping.postalCode": true,
+		"shipping.country": true, "shipping.reference": true,
+	}
+	lines := map[string]bool{}
+	for key := range args {
+		if allowed[key] {
+			continue
+		}
+		match := orderLineRe.FindStringSubmatch(key)
+		if match == nil {
+			return fmt.Errorf("order_create no admite el argumento %q", key)
+		}
+		if match[2] == "productId" {
+			lines[match[1]] = true
+		}
+	}
+	if len(lines) == 0 {
+		return fmt.Errorf("order_create requiere al menos una línea con item.1.productId")
+	}
+	if len(lines) > maxOrderLines {
+		return fmt.Errorf("order_create admite como mucho %d líneas", maxOrderLines)
+	}
+	for key := range args {
+		match := orderLineRe.FindStringSubmatch(key)
+		if match == nil || match[2] == "productId" {
+			continue
+		}
+		if !lines[match[1]] {
+			return fmt.Errorf("la línea %s de order_create no declara producto", match[1])
+		}
+	}
+	for index := range lines {
+		if strings.TrimSpace(args["item."+index+".quantity"]) == "" {
+			return fmt.Errorf("la línea %s de order_create no declara cantidad", index)
+		}
+	}
+	// El precio no es un argumento y no debe llegar a serlo: la tienda lo lee de
+	// su catálogo dentro de la transacción y descarta cualquiera que se le mande.
+	// Aceptarlo aquí haría creer que el flujo controla el importe.
+	return nil
+}
+
+func validatePaymentIntentArgs(args map[string]string) error {
+	if err := requireFixedConnection(args, "payment_intent_create"); err != nil {
+		return err
+	}
+	if strings.TrimSpace(args["orderId"]) == "" {
+		return fmt.Errorf("payment_intent_create requiere orderId")
+	}
+	allowed := map[string]bool{"connection": true, "orderId": true, "provider": true}
+	for key := range args {
+		if !allowed[key] {
+			return fmt.Errorf("payment_intent_create no admite el argumento %q", key)
+		}
+	}
+	if provider := strings.TrimSpace(args["provider"]); provider != "" && provider != "manual" {
+		return fmt.Errorf("payment_intent_create solo admite el proveedor manual")
+	}
+	return nil
+}
+
+func validatePaymentSubmitArgs(args map[string]string) error {
+	if err := requireFixedConnection(args, "payment_submit"); err != nil {
+		return err
+	}
+	if strings.TrimSpace(args["paymentId"]) == "" {
+		return fmt.Errorf("payment_submit requiere paymentId")
+	}
+	if strings.TrimSpace(args["reference"]) == "" {
+		return fmt.Errorf("payment_submit requiere el número de operación declarado")
+	}
+	allowed := map[string]bool{"connection": true, "paymentId": true, "reference": true, "receiptUrl": true}
+	for key := range args {
+		if !allowed[key] {
+			return fmt.Errorf("payment_submit no admite el argumento %q", key)
+		}
+	}
+	return nil
 }
 
 func validateDataMutateArgs(args map[string]string) error {

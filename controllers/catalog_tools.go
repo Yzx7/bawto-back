@@ -47,8 +47,17 @@ const (
 	maxAgentCatalogResults = 5
 )
 
-// catalogBudget es el presupuesto de un turno. Un acierto de caché no consume:
-// no costó una petición, así que cobrarla castigaría justo el camino barato.
+// catalogBudget acota lo que **el modelo** puede pedir en un turno.
+//
+// Los bloques del grafo quedan fuera a propósito, y no por descuido: un bloque lo
+// puso el autor y su número de ejecuciones lo fija el grafo, mientras que un
+// bucle agéntico mal instruido no tiene techo. Además, compartir el presupuesto
+// tenía una consecuencia inaceptable: el cliente confirmaba la compra y el
+// pedido fallaba porque el agente había buscado de más. Quien decide gastar es
+// quien paga.
+//
+// Un acierto de caché tampoco consume: no costó una petición, así que cobrarlo
+// castigaría justo el camino barato.
 type catalogBudget struct {
 	remaining int
 }
@@ -353,7 +362,7 @@ func (con *Controller) logCatalogCall(operation, connection string, meta meudim.
 // execCatalogSearch ejecuta la búsqueda desde un bloque. Los argumentos llegan
 // ya interpolados; el validador garantizó que solo `query` podía traer variables.
 func (con *Controller) execCatalogSearch(ctx context.Context, bot *models.BotChannel,
-	budget *catalogBudget, args map[string]string) (string, error) {
+	args map[string]string) (string, error) {
 	params := catalogSearchParams{
 		Connection:  args["connection"],
 		Query:       strings.TrimSpace(args["query"]),
@@ -369,7 +378,8 @@ func (con *Controller) execCatalogSearch(ctx context.Context, bot *models.BotCha
 	if raw := strings.TrimSpace(args["limit"]); raw != "" {
 		params.Limit, _ = strconv.Atoi(raw)
 	}
-	result, err := con.searchCatalog(ctx, bot, budget, params)
+	// Sin presupuesto: lo consume el modelo, no el grafo.
+	result, err := con.searchCatalog(ctx, bot, nil, params)
 	if err != nil {
 		return "", err
 	}
@@ -379,8 +389,8 @@ func (con *Controller) execCatalogSearch(ctx context.Context, bot *models.BotCha
 
 // execCatalogProduct trae el detalle desde un bloque.
 func (con *Controller) execCatalogProduct(ctx context.Context, bot *models.BotChannel,
-	budget *catalogBudget, args map[string]string) (string, error) {
-	result, err := con.catalogProduct(ctx, bot, budget, args["connection"],
+	args map[string]string) (string, error) {
+	result, err := con.catalogProduct(ctx, bot, nil, args["connection"],
 		strings.TrimSpace(args["productId"]), strings.TrimSpace(args["slug"]),
 		strings.TrimSpace(args["urlTemplate"]))
 	if err != nil {

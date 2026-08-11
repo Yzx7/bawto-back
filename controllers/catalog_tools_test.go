@@ -189,8 +189,7 @@ func TestCatalogSearchDesdeElGrafo(t *testing.T) {
 		}
 	})
 
-	budget := newCatalogBudget()
-	raw, err := fixture.con.execCatalogSearch(context.Background(), fixture.bot, budget, map[string]string{
+	raw, err := fixture.con.execCatalogSearch(context.Background(), fixture.bot, map[string]string{
 		"connection": "meudim", "query": "oled", "urlTemplate": "https://tienda.com/productos/{slug}",
 	})
 	if err != nil {
@@ -218,19 +217,8 @@ func TestCatalogSearchDesdeElGrafo(t *testing.T) {
 	if peticionesTrasLaPrimera != 2 {
 		t.Fatalf("peticiones tras la primera búsqueda: %d", peticionesTrasLaPrimera)
 	}
-	// Pero solo una consume presupuesto. El presupuesto acota lo que el **modelo**
-	// puede pedir; la moneda no la pide él, sale como mucho una vez por búsqueda y
-	// se cachea diez minutos. Cobrarla le dejaba tres consultas de las cuatro.
-	if budget.remaining != maxCatalogCallsPerTurn-1 {
-		t.Fatalf("la consulta de la tienda consumió presupuesto: quedan %d de %d",
-			budget.remaining, maxCatalogCallsPerTurn)
-	}
-
-	// La misma búsqueda dentro del turno no vuelve a salir a la red, y por tanto
-	// tampoco consume presupuesto: cobrar un acierto de caché castigaría el
-	// camino barato.
-	presupuestoAntes := budget.remaining
-	if _, err := fixture.con.execCatalogSearch(context.Background(), fixture.bot, budget, map[string]string{
+	// La misma búsqueda dentro del turno no vuelve a salir a la red.
+	if _, err := fixture.con.execCatalogSearch(context.Background(), fixture.bot, map[string]string{
 		"connection": "meudim", "query": "oled", "urlTemplate": "https://tienda.com/productos/{slug}",
 	}); err != nil {
 		t.Fatalf("segunda búsqueda: %v", err)
@@ -238,8 +226,66 @@ func TestCatalogSearchDesdeElGrafo(t *testing.T) {
 	if *fixture.requests != peticionesTrasLaPrimera {
 		t.Fatalf("la caché no evitó la segunda llamada: %d peticiones", *fixture.requests)
 	}
-	if budget.remaining != presupuestoAntes {
-		t.Fatalf("un acierto de caché consumió presupuesto: %d → %d", presupuestoAntes, budget.remaining)
+}
+
+// Quien decide gastar es quien paga: el presupuesto acota lo que pide el modelo.
+//
+// Un bloque del grafo no lo consume —lo puso el autor y el grafo fija cuántas
+// veces corre—, y compartirlo tenía una consecuencia inaceptable: el cliente
+// confirmaba la compra y el pedido fallaba porque el agente había buscado de
+// más. La consulta de la moneda tampoco consume: no la pide el modelo.
+func TestCatalogPresupuestoSoloLoConsumeElAgente(t *testing.T) {
+	fixture := setupCatalogFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/store") {
+			w.Write([]byte(`{"ok":true,"data":{"id":6,"name":"Tienda","settings":{"currency":"PEN"}}}`))
+			return
+		}
+		w.Write([]byte(`{"ok":true,"data":[{"id":56,"name":"Pantalla OLED","slug":"oled",
+			"price":19.9,"stock_quantity":10,"track_inventory":true,"status":"active"}],
+			"metadata":{"total":1}}`))
+	})
+	ctx := context.Background()
+	budget := newCatalogBudget()
+	config := map[string]string{"connection": "meudim"}
+
+	args, _ := json.Marshal(map[string]any{"query": "oled"})
+	if _, err := fixture.con.execAgentCatalogSearch(ctx, fixture.bot, budget, config, args); err != nil {
+		t.Fatalf("búsqueda del agente: %v", err)
+	}
+	// Dos peticiones —catálogo y tienda—, pero solo la del modelo se cobra.
+	if *fixture.requests != 2 {
+		t.Fatalf("peticiones: %d", *fixture.requests)
+	}
+	if budget.remaining != maxCatalogCallsPerTurn-1 {
+		t.Fatalf("la consulta de la tienda consumió presupuesto: quedan %d", budget.remaining)
+	}
+
+	// Un acierto de caché no consume.
+	args, _ = json.Marshal(map[string]any{"query": "oled"})
+	if _, err := fixture.con.execAgentCatalogSearch(ctx, fixture.bot, budget, config, args); err != nil {
+		t.Fatalf("segunda búsqueda del agente: %v", err)
+	}
+	if budget.remaining != maxCatalogCallsPerTurn-1 {
+		t.Fatalf("un acierto de caché consumió presupuesto: quedan %d", budget.remaining)
+	}
+
+	// Agotado el presupuesto, el modelo recibe una instrucción, no un error: el
+	// nodo no revienta y el bot responde con lo que ya obtuvo.
+	budget.remaining = 0
+	args, _ = json.Marshal(map[string]any{"query": "otra cosa"})
+	out, err := fixture.con.execAgentCatalogSearch(ctx, fixture.bot, budget, config, args)
+	if err != nil {
+		t.Fatalf("el presupuesto agotado reventó el nodo: %v", err)
+	}
+	if !strings.Contains(out, "demasiadas veces") {
+		t.Fatalf("mensaje inesperado al agotar el presupuesto: %q", out)
+	}
+
+	// Y el grafo sigue pudiendo consultar aunque el modelo se haya pasado.
+	if _, err := fixture.con.execCatalogSearch(ctx, fixture.bot, map[string]string{
+		"connection": "meudim", "query": "otra cosa",
+	}); err != nil {
+		t.Fatalf("el presupuesto del modelo bloqueó un bloque del grafo: %v", err)
 	}
 }
 
@@ -251,7 +297,7 @@ func TestCatalogProductInexistenteEsFoundFalse(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`{"ok":false,"msg":"Producto no encontrado","data":null}`))
 	})
-	raw, err := fixture.con.execCatalogProduct(context.Background(), fixture.bot, newCatalogBudget(),
+	raw, err := fixture.con.execCatalogProduct(context.Background(), fixture.bot,
 		map[string]string{"connection": "meudim", "slug": "no-existe"})
 	if err != nil {
 		t.Fatalf("un 404 se trató como fallo técnico: %v", err)
@@ -272,7 +318,7 @@ func TestCatalogTiendaCaidaSalePorError(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(`{"ok":false,"msg":"boom","data":null}`))
 	})
-	if _, err := fixture.con.execCatalogSearch(context.Background(), fixture.bot, newCatalogBudget(),
+	if _, err := fixture.con.execCatalogSearch(context.Background(), fixture.bot,
 		map[string]string{"connection": "meudim", "query": "oled"}); err == nil {
 		t.Fatal("una tienda caída no debe salir por ok")
 	}
@@ -286,7 +332,7 @@ func TestCatalogConexionNoCruzaOrganizaciones(t *testing.T) {
 		t.Error("se llamó a la tienda de otra organización")
 	})
 	ajeno := &models.BotChannel{ID: randHex("bot_"), OrgID: "00000000-0000-0000-0000-000000000000"}
-	_, err := fixture.con.execCatalogSearch(context.Background(), ajeno, newCatalogBudget(),
+	_, err := fixture.con.execCatalogSearch(context.Background(), ajeno,
 		map[string]string{"connection": "meudim", "query": "oled"})
 	if err == nil || !strings.Contains(err.Error(), "no tiene una conexión") {
 		t.Fatalf("esperaba que la conexión no resolviera para otra organización: %v", err)

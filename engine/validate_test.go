@@ -540,3 +540,129 @@ func TestValidateCatalogEnUnAgente(t *testing.T) {
 		t.Fatal("se aceptó un tope por encima del máximo")
 	}
 }
+
+// El bloque que cierra la venta. La clave de idempotencia es obligatoria por la
+// misma razón que en data_mutate, elevada al cuadrado: aquí un reintento no
+// duplica una fila, duplica un pedido con mercadería y dinero detrás.
+func TestValidateOrderCreate(t *testing.T) {
+	base := func(args map[string]string) *Flow {
+		return &Flow{ID: "f", Name: "F", Trigger: Trigger{Type: "message", Match: "any"}, Nodes: []Node{
+			{ID: "pedido", Kind: "tool", ToolRef: "order_create", Args: args},
+			{ID: "ok", Kind: "action", Action: "end"}, {ID: "error", Kind: "action", Action: "end"},
+		}, Edges: []Edge{
+			{ID: "start", Source: "trigger", Target: "pedido"},
+			{ID: "ok", Source: "pedido", SourceHandle: "ok", Target: "ok"},
+			{ID: "error", Source: "pedido", SourceHandle: "error", Target: "error"},
+		}}
+	}
+	valido := map[string]string{
+		"connection": "meudim", "customerEmail": "{perfil.first.data.correo}",
+		"customerName": "{contact_name}", "idempotencyKey": "message:{input.id}",
+		"item.1.productId": "{elegido.id}", "item.1.quantity": "1",
+	}
+	if err := Validate(base(valido)); err != nil {
+		t.Fatalf("order_create válido rechazado: %v", err)
+	}
+
+	for name, tc := range map[string]struct {
+		args map[string]string
+		want string
+	}{
+		"sin conexión": {
+			map[string]string{"customerEmail": "a@b.c", "idempotencyKey": "k", "item.1.productId": "1", "item.1.quantity": "1"},
+			"requiere una conexión",
+		},
+		"sin correo": {
+			map[string]string{"connection": "meudim", "idempotencyKey": "k", "item.1.productId": "1", "item.1.quantity": "1"},
+			"correo del comprador",
+		},
+		"sin idempotencia": {
+			map[string]string{"connection": "meudim", "customerEmail": "a@b.c", "item.1.productId": "1", "item.1.quantity": "1"},
+			"idempotencyKey",
+		},
+		"sin líneas": {
+			map[string]string{"connection": "meudim", "customerEmail": "a@b.c", "idempotencyKey": "k"},
+			"al menos una línea",
+		},
+		"línea sin cantidad": {
+			map[string]string{"connection": "meudim", "customerEmail": "a@b.c", "idempotencyKey": "k", "item.1.productId": "1"},
+			"no declara cantidad",
+		},
+		"cantidad sin producto": {
+			map[string]string{"connection": "meudim", "customerEmail": "a@b.c", "idempotencyKey": "k",
+				"item.1.productId": "1", "item.1.quantity": "1", "item.2.quantity": "3"},
+			"no declara producto",
+		},
+		// El precio no es un argumento y no debe llegar a serlo: la tienda lo lee
+		// de su catálogo y descarta el que se le mande. Aceptarlo aquí haría creer
+		// que el flujo controla el importe.
+		"precio del flujo": {
+			map[string]string{"connection": "meudim", "customerEmail": "a@b.c", "idempotencyKey": "k",
+				"item.1.productId": "1", "item.1.quantity": "1", "item.1.unitPrice": "9.90"},
+			"no admite el argumento",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := Validate(base(tc.args))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("esperaba %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestValidatePagosDelPedido(t *testing.T) {
+	base := func(ref string, args map[string]string) *Flow {
+		return &Flow{ID: "f", Name: "F", Trigger: Trigger{Type: "message", Match: "any"}, Nodes: []Node{
+			{ID: "pago", Kind: "tool", ToolRef: ref, Args: args},
+			{ID: "ok", Kind: "action", Action: "end"}, {ID: "error", Kind: "action", Action: "end"},
+		}, Edges: []Edge{
+			{ID: "start", Source: "trigger", Target: "pago"},
+			{ID: "ok", Source: "pago", SourceHandle: "ok", Target: "ok"},
+			{ID: "error", Source: "pago", SourceHandle: "error", Target: "error"},
+		}}
+	}
+	if err := Validate(base("payment_intent_create", map[string]string{
+		"connection": "meudim", "orderId": "{pedido.orderId}",
+	})); err != nil {
+		t.Fatalf("payment_intent_create válido rechazado: %v", err)
+	}
+	if err := Validate(base("payment_intent_create", map[string]string{"connection": "meudim"})); err == nil {
+		t.Fatal("se aceptó un intent sin pedido")
+	}
+	if err := Validate(base("payment_intent_create", map[string]string{
+		"connection": "meudim", "orderId": "1", "provider": "culqi",
+	})); err == nil {
+		t.Fatal("se aceptó un proveedor que no existe")
+	}
+
+	// La referencia sale del agente visual: receipt.operationCode.
+	if err := Validate(base("payment_submit", map[string]string{
+		"connection": "meudim", "paymentId": "{cobro.paymentId}", "reference": "{receipt.operationCode}",
+	})); err != nil {
+		t.Fatalf("payment_submit válido rechazado: %v", err)
+	}
+	if err := Validate(base("payment_submit", map[string]string{
+		"connection": "meudim", "paymentId": "11",
+	})); err == nil {
+		t.Fatal("se aceptó una declaración sin número de operación")
+	}
+}
+
+// Las tres son de escritura y ninguna se le ofrece al modelo: un modelo que
+// puede crear pedidos puede crear pedidos por error.
+func TestValidateVentaNoSeLeOfreceAlAgente(t *testing.T) {
+	for _, ref := range []string{"order_create", "payment_intent_create", "payment_submit"} {
+		flow := &Flow{ID: "f", Name: "F", Trigger: Trigger{Type: "message", Match: "any"}, Nodes: []Node{
+			{ID: "a", Kind: "agent", Instruction: "vende", Outputs: []string{"seguir"},
+				Tools: []NodeTool{{Ref: ref}}},
+			{ID: "fin", Kind: "action", Action: "end"},
+		}, Edges: []Edge{
+			{ID: "start", Source: "trigger", Target: "a"},
+			{ID: "seguir", Source: "a", SourceHandle: "seguir", Target: "fin"},
+		}}
+		if err := Validate(flow); err == nil {
+			t.Errorf("se le ofreció %q al modelo", ref)
+		}
+	}
+}
