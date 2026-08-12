@@ -196,8 +196,8 @@ func ApplyFlowOperations(raw json.RawMessage, operations []FlowOperation, option
 	if err != nil {
 		return nil, err
 	}
-	if err := ValidateCandidate(candidate); err != nil {
-		return nil, fmt.Errorf("el candidato final no es válido: %w", err)
+	if err := ValidateIntermediateCandidate(candidate); err != nil {
+		return nil, fmt.Errorf("el candidato intermedio no es válido: %w", err)
 	}
 	_, candidateChecksum, err := engine.CanonicalChecksum(candidate)
 	if err != nil {
@@ -212,6 +212,24 @@ func ApplyFlowOperations(raw json.RawMessage, operations []FlowOperation, option
 		AliasToNodeID: cloneStringMap(workspace.nodeAliases),
 		AliasToEdgeID: cloneStringMap(workspace.edgeAliases), Diff: diff,
 	}, nil
+}
+
+// ValidateIntermediateCandidate valida la estructura e integridad de cada nodo y arista
+// sin requerir que el grafo esté completo y totalmente conectado (para mutaciones intermedias).
+func ValidateIntermediateCandidate(raw []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	var flow engine.Flow
+	if err := decoder.Decode(&flow); err != nil {
+		return fmt.Errorf("vista tipada inválida: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("hay contenido después del flujo")
+		}
+		return fmt.Errorf("contenido extra inválido: %w", err)
+	}
+	return engine.ValidateStructural(&flow)
 }
 
 // ValidateCandidate builds only the typed view required by the runtime and

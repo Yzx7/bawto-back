@@ -176,6 +176,91 @@ func Validate(flow *Flow) error {
 	return nil
 }
 
+// ValidateStructural valida la integridad de cada nodo y arista sin exigir
+// que el grafo esté completo ni totalmente conectado (usado en mutaciones intermedias de autoría).
+func ValidateStructural(flow *Flow) error {
+	if flow == nil || strings.TrimSpace(flow.ID) == "" || strings.TrimSpace(flow.Name) == "" {
+		return fmt.Errorf("el flujo requiere id y nombre")
+	}
+	if len(flow.Nodes) > 200 {
+		return fmt.Errorf("el flujo supera el máximo de 200 nodos")
+	}
+	switch flow.Trigger.Type {
+	case "message":
+		if flow.Trigger.Match == "keyword" && len(flow.Trigger.Keywords) == 0 {
+			return fmt.Errorf("el trigger por palabras clave requiere al menos una palabra")
+		}
+		if flow.Trigger.RouteBy != "" && flow.Trigger.RouteBy != "single" && flow.Trigger.RouteBy != "content_type" {
+			return fmt.Errorf("modo de salida del trigger inválido")
+		}
+		if err := validateInputTypes(flow.Trigger.Accepts); err != nil {
+			return fmt.Errorf("trigger: %w", err)
+		}
+	case "schedule":
+		if strings.TrimSpace(flow.Trigger.Cron) == "" || strings.TrimSpace(flow.Trigger.ViewID) == "" {
+			return fmt.Errorf("el trigger programado requiere cron y vista de datos")
+		}
+	case "event":
+		return fmt.Errorf("los triggers event aún no tienen receptor implementado")
+	default:
+		return fmt.Errorf("tipo de trigger inválido")
+	}
+
+	nodes := map[string]*Node{}
+	for i := range flow.Nodes {
+		n := &flow.Nodes[i]
+		if n.ID == "" || n.ID == "trigger" {
+			return fmt.Errorf("nodo %d tiene un id inválido", i+1)
+		}
+		if nodes[n.ID] != nil {
+			return fmt.Errorf("id de nodo duplicado: %s", n.ID)
+		}
+		nodes[n.ID] = n
+		if err := validateNode(n, flow.Trigger.Type); err != nil {
+			return fmt.Errorf("nodo %s: %w", n.ID, err)
+		}
+	}
+
+	out := map[string]map[string]int{}
+	for _, edge := range flow.Edges {
+		if edge.Source != "trigger" && nodes[edge.Source] == nil {
+			return fmt.Errorf("arista %s parte de un nodo inexistente", edge.ID)
+		}
+		if nodes[edge.Target] == nil {
+			return fmt.Errorf("arista %s apunta a un nodo inexistente", edge.ID)
+		}
+		if edge.Role != "" && edge.Role != "loopback" {
+			return fmt.Errorf("arista %s tiene rol %q inválido", edge.ID, edge.Role)
+		}
+		if out[edge.Source] == nil {
+			out[edge.Source] = map[string]int{}
+		}
+		out[edge.Source][edge.SourceHandle]++
+		if out[edge.Source][edge.SourceHandle] > 1 {
+			return fmt.Errorf("%s tiene más de una salida para la rama %q", edge.Source, edge.SourceHandle)
+		}
+	}
+	for _, edge := range flow.Edges {
+		if inputType := edgeInputType(flow, nodes, edge); inputType != "" {
+			if err := validateInputDestination(inputType, nodes[edge.Target]); err != nil {
+				return fmt.Errorf("conexión %s → %s: %w", edge.Source, edge.Target, err)
+			}
+		}
+		if edge.Source != "trigger" && edge.SourceHandle == "ok" {
+			source := nodes[edge.Source]
+			if source != nil && source.Kind == "tool" {
+				if err := validatePayloadDestination(tools.Get(source.ToolRef).Produces, nodes[edge.Target]); err != nil {
+					return fmt.Errorf("conexión %s → %s: %w", edge.Source, edge.Target, err)
+				}
+			}
+		}
+	}
+	if cycle := automaticCycleWithoutWait(flow.Nodes, flow.Edges, nodes); len(cycle) > 0 {
+		return fmt.Errorf("el flujo contiene un ciclo sin un nodo wait entre los nodos: %s", strings.Join(cycle, ", "))
+	}
+	return nil
+}
+
 func edgeInputType(flow *Flow, nodes map[string]*Node, edge Edge) string {
 	if edge.Source == "trigger" && flow.Trigger.RouteBy == "content_type" {
 		return normalizedInputType(edge.SourceHandle)

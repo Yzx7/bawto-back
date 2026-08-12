@@ -235,3 +235,49 @@ func TestNodePatchUsesLiteralDynamicMapKeys(t *testing.T) {
 		t.Fatalf("args=%v", args)
 	}
 }
+
+func TestApplyFlowOperationsAllowsIntermediateDisconnectedState(t *testing.T) {
+	emptyFlow := json.RawMessage(`{
+		"id": "empty", "name": "Vacio",
+		"trigger": {"type": "message", "match": "any"},
+		"nodes": [], "edges": []
+	}`)
+	emptyChecksum := checksumForTest(t, emptyFlow)
+
+	// Paso intermedio: agregar un nodo agent sin conectar todavía al disparador
+	operations := []FlowOperation{
+		{
+			Type: OperationAddNode,
+			AddNode: &AddNodeOperation{
+				Alias: "agent_1",
+				Kind:  "agent",
+				Set: map[string]any{
+					"instruction": "Orienta al usuario y responde preguntas.",
+					"outputs":     []string{"ok", "error"},
+				},
+			},
+		},
+	}
+
+	result, err := ApplyFlowOperations(emptyFlow, operations, ApplyOptions{
+		ExpectedCandidateChecksum: emptyChecksum,
+	})
+	if err != nil {
+		t.Fatalf("ApplyFlowOperations debe permitir estados intermedios, pero falló con: %v", err)
+	}
+
+	if result == nil || len(result.Candidate) == 0 {
+		t.Fatal("el resultado debe contener el nuevo candidato")
+	}
+
+	agentID := result.AliasToNodeID["agent_1"]
+	if agentID == "" {
+		t.Fatal("se esperaba id para agent_1")
+	}
+
+	// ValidateForAuthoring debe reportar diagnósticos que guíen a conectar el nodo
+	report := ValidateForAuthoring(result.Candidate, AuthoringResourceSnapshot{})
+	if !report.HasErrors() {
+		t.Error("un nodo no conectado debe tener diagnósticos informativos")
+	}
+}

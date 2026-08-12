@@ -10,6 +10,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/Yzx7/sacs-chatbots/config"
+	"github.com/Yzx7/sacs-chatbots/copilot"
 	"github.com/Yzx7/sacs-chatbots/db"
 	"github.com/Yzx7/sacs-chatbots/engine/ai"
 	"github.com/Yzx7/sacs-chatbots/env"
@@ -115,6 +116,44 @@ func Build(ctx context.Context) (*Runtime, error) {
 			"tarifario", pricing.Source)
 	}
 
+	// Copilot de autoría: se construye solo si la configuración está completa.
+	// Su ausencia degrada en silencio únicamente al Copilot; el editor manual y
+	// la publicación siguen funcionando igual.
+	var copilotRunner *copilot.Runner
+	if ready, reason := cfg.CopilotReadiness(); ready {
+		copilotRates := copilot.Rates{}
+		pricing, pricingErr := ai.ResolvePricing(cfg.CopilotAIProvider, cfg.CopilotAIModel, nil)
+		if pricingErr != nil {
+			// Un modelo fuera del catálogo no aborta el arranque: el Copilot queda
+			// habilitado pero registrará consumo sin coste hasta que se añada su
+			// tarifario. El log lo deja visible.
+			logs.General.Warn("copilot: tarifario desconocido; el consumo se registrará sin coste",
+				"provider", cfg.CopilotAIProvider, "model", cfg.CopilotAIModel, "err", pricingErr)
+		} else {
+			copilotRates = copilot.Rates{
+				InputPerMillion:      pricing.Rates.InputPerMillion,
+				OutputPerMillion:     pricing.Rates.OutputPerMillion,
+				CacheReadPerMillion:  pricing.Rates.CacheReadPerMillion,
+				CacheWritePerMillion: pricing.Rates.CacheWritePerMillion,
+			}
+		}
+		copilotProvider := copilot.NewAnthropicProvider(
+			cfg.CopilotAIAPIKey, cfg.CopilotAIBaseURL, cfg.CopilotAIProvider,
+			cfg.CopilotAIModel, cfg.CopilotAIReasoningEffort, copilotRates)
+		copilotRunner = copilot.NewRunner(&copilot.Agent{
+			Provider: copilotProvider,
+			Config: copilot.RunnerConfig{
+				MaxSteps: cfg.CopilotAIMaxSteps,
+				Timeout:  cfg.CopilotAITimeout,
+			},
+		})
+		logs.General.Info("Copilot de autoría habilitado",
+			"provider", cfg.CopilotAIProvider, "model", cfg.CopilotAIModel,
+			"reasoning", cfg.CopilotAIReasoningEffort, "max_steps", cfg.CopilotAIMaxSteps)
+	} else {
+		logs.General.Info("Copilot de autoría deshabilitado", "razón", reason)
+	}
+
 	// Eventos de chat en vivo: viajan por LISTEN/NOTIFY, así que funcionan igual
 	// con varias instancias del backend.
 	hub := events.NewHub(pool, logs.General)
@@ -131,6 +170,7 @@ func Build(ctx context.Context) (*Runtime, error) {
 		TextAgent:         textAgent,
 		OrchestratorAgent: visionAgent,
 		VisionAgent:       visionAgent,
+		Copilot:           copilotRunner,
 		Events:            hub,
 	}
 

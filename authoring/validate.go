@@ -71,10 +71,10 @@ type ContactFieldResource struct {
 // AuthoringResourceSnapshot is deliberately detached from models and contains
 // schemas, never table rows, credentials or private endpoints.
 type AuthoringResourceSnapshot struct {
-	DataObjects []DataObjectResource `json:"dataObjects,omitempty"`
-	Connections []ConnectionResource `json:"connections,omitempty"`
-	Templates   []TemplateResource   `json:"templates,omitempty"`
-	Variables   []VariableResource   `json:"variables,omitempty"`
+	DataObjects   []DataObjectResource   `json:"dataObjects,omitempty"`
+	Connections   []ConnectionResource   `json:"connections,omitempty"`
+	Templates     []TemplateResource     `json:"templates,omitempty"`
+	Variables     []VariableResource     `json:"variables,omitempty"`
 	ContactFields []ContactFieldResource `json:"contactFields,omitempty"`
 }
 

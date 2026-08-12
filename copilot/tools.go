@@ -11,23 +11,23 @@ import (
 )
 
 const (
-	ToolGetFlowOutline        = "get_flow_outline"
-	ToolGetNodes              = "get_nodes"
-	ToolGetAuthoringCatalog   = "get_authoring_catalog"
-	ToolGetRuntimeToolCatalog = "get_runtime_tool_catalog"
-	ToolListDataObjects       = "list_data_objects"
-	ToolGetDataObjectSchema   = "get_data_object_schema"
-	ToolListContactFields     = "list_contact_fields"
-	ToolListConnectionsSafe   = "list_connections_safe"
-	ToolListWhatsAppTemplates = "list_whatsapp_templates"
-	ToolListTemplates         = ToolListWhatsAppTemplates
-	ToolListVariables         = "list_variables"
+	ToolGetFlowOutline         = "get_flow_outline"
+	ToolGetNodes               = "get_nodes"
+	ToolGetAuthoringCatalog    = "get_authoring_catalog"
+	ToolGetRuntimeToolCatalog  = "get_runtime_tool_catalog"
+	ToolListDataObjects        = "list_data_objects"
+	ToolGetDataObjectSchema    = "get_data_object_schema"
+	ToolListContactFields      = "list_contact_fields"
+	ToolListConnectionsSafe    = "list_connections_safe"
+	ToolListWhatsAppTemplates  = "list_whatsapp_templates"
+	ToolListTemplates          = ToolListWhatsAppTemplates
+	ToolListVariables          = "list_variables"
 	ToolInspectVariablesAtNode = "inspect_variables_at_node"
-	ToolListPlaybooks         = "list_playbooks"
-	ToolGetPlaybook           = "get_playbook"
-	ToolValidateCandidate     = "validate_candidate"
-	ToolApplyFlowOperations   = "apply_flow_operations"
-	ToolSubmitProposal        = "submit_proposal"
+	ToolListPlaybooks          = "list_playbooks"
+	ToolGetPlaybook            = "get_playbook"
+	ToolValidateCandidate      = "validate_candidate"
+	ToolApplyFlowOperations    = "apply_flow_operations"
+	ToolSubmitProposal         = "submit_proposal"
 )
 
 type FunctionDefinition struct {
@@ -37,11 +37,11 @@ type FunctionDefinition struct {
 }
 
 type FlowOutline struct {
-	ID      string        `json:"id"`
-	Name    string        `json:"name"`
+	ID      string         `json:"id"`
+	Name    string         `json:"name"`
 	Trigger map[string]any `json:"trigger"`
-	Nodes   []OutlineNode `json:"nodes"`
-	Edges   []OutlineEdge `json:"edges"`
+	Nodes   []OutlineNode  `json:"nodes"`
+	Edges   []OutlineEdge  `json:"edges"`
 }
 
 type OutlineNode struct {
@@ -111,22 +111,115 @@ func applyOperationsSchema() map[string]any {
 		string(authoring.OperationRemoveNode), string(authoring.OperationConnectNodes),
 		string(authoring.OperationDisconnectNodes), string(authoring.OperationUpdateTriggerConfig),
 	}
+
+	nodeRefSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"id":    map[string]any{"type": "string", "description": "ID existente de nodo o 'trigger'"},
+			"alias": map[string]any{"type": "string", "description": "Alias local de nodo creado en este lote"},
+		},
+		"additionalProperties": false,
+	}
+
+	edgeRefSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"id":    map[string]any{"type": "string", "description": "ID existente de arista"},
+			"alias": map[string]any{"type": "string", "description": "Alias local de arista creado en este lote"},
+		},
+		"additionalProperties": false,
+	}
+
+	addNodeSchema := map[string]any{
+		"type":        "object",
+		"description": "Agrega un nodo nuevo. Sus propiedades van dentro de 'set'.",
+		"properties": map[string]any{
+			"alias":  map[string]any{"type": "string", "description": "Alias local único del nodo (ej: 'agente_1', 'send_bienvenida')"},
+			"kind":   map[string]any{"type": "string", "enum": []string{"send", "agent", "wait", "tool", "router", "condition", "action"}, "description": "Tipo de nodo"},
+			"anchor": nodeRefSchema,
+			"set": map[string]any{
+				"type":        "object",
+				"description": "Propiedades del nodo. Para 'send': {body: 'texto'}. Para 'agent': {instruction: '...', outputs: ['ok','error']}. Para 'action': {action: 'end'|'handoff'|'set'}. Para 'router': {cases: [{id:'c1', label:'...', expression:'...'}]}.",
+			},
+		},
+		"required":             []string{"alias", "kind"},
+		"additionalProperties": false,
+	}
+
+	connectNodesSchema := map[string]any{
+		"type":        "object",
+		"description": "Conecta una arista entre origen y destino.",
+		"properties": map[string]any{
+			"alias":        map[string]any{"type": "string", "description": "Alias local de la arista (ej: 'e1')"},
+			"source":       nodeRefSchema,
+			"target":       nodeRefSchema,
+			"sourceHandle": map[string]any{"type": "string", "description": "Puerto de salida de origen: 'out' (send/wait/action), 'ok'/'error' (agent/tool), 'default'/'caso_id' (router), 'true'/'false' (condition)"},
+			"role":         map[string]any{"type": "string", "enum": []string{"", "loopback"}},
+			"label":        map[string]any{"type": "string"},
+		},
+		"required":             []string{"alias", "source", "target"},
+		"additionalProperties": false,
+	}
+
+	updateNodeConfigSchema := map[string]any{
+		"type":        "object",
+		"description": "Actualiza propiedades de un nodo existente.",
+		"properties": map[string]any{
+			"node":       nodeRefSchema,
+			"set":        map[string]any{"type": "object", "description": "Propiedades a modificar"},
+			"unsetPaths": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		},
+		"required":             []string{"node"},
+		"additionalProperties": false,
+	}
+
+	removeNodeSchema := map[string]any{
+		"type":        "object",
+		"description": "Elimina un nodo desconectado.",
+		"properties": map[string]any{
+			"node": nodeRefSchema,
+		},
+		"required":             []string{"node"},
+		"additionalProperties": false,
+	}
+
+	disconnectNodesSchema := map[string]any{
+		"type":        "object",
+		"description": "Elimina una arista existente.",
+		"properties": map[string]any{
+			"edge": edgeRefSchema,
+		},
+		"required":             []string{"edge"},
+		"additionalProperties": false,
+	}
+
+	updateTriggerConfigSchema := map[string]any{
+		"type":        "object",
+		"description": "Actualiza la configuración del trigger.",
+		"properties": map[string]any{
+			"set":        map[string]any{"type": "object"},
+			"unsetPaths": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		},
+		"additionalProperties": false,
+	}
+
 	return objectSchema(map[string]any{
-		"expectedCandidateChecksum": map[string]any{"type": "string"},
+		"expectedCandidateChecksum": map[string]any{"type": "string", "description": "Checksum SHA256 actual del candidato"},
 		"operations": map[string]any{
 			"type": "array", "minItems": 1, "maxItems": 60,
 			"items": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"type": map[string]any{"type": "string", "enum": operationTypes},
-					"addNode": map[string]any{"type": "object"},
-					"updateNodeConfig": map[string]any{"type": "object"},
-					"removeNode": map[string]any{"type": "object"},
-					"connectNodes": map[string]any{"type": "object"},
-					"disconnectNodes": map[string]any{"type": "object"},
-					"updateTriggerConfig": map[string]any{"type": "object"},
+					"type":                map[string]any{"type": "string", "enum": operationTypes},
+					"addNode":             addNodeSchema,
+					"updateNodeConfig":    updateNodeConfigSchema,
+					"removeNode":          removeNodeSchema,
+					"connectNodes":        connectNodesSchema,
+					"disconnectNodes":     disconnectNodesSchema,
+					"updateTriggerConfig": updateTriggerConfigSchema,
 				},
-				"required": []string{"type"}, "additionalProperties": false,
+				"required":             []string{"type"},
+				"additionalProperties": false,
 			},
 		},
 	}, []string{"expectedCandidateChecksum", "operations"})
@@ -135,12 +228,12 @@ func applyOperationsSchema() map[string]any {
 func submitProposalSchema() map[string]any {
 	stringList := map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 20}
 	return objectSchema(map[string]any{
-		"mode": map[string]any{"type": "string", "enum": []string{string(TerminalQuestion), string(TerminalExplanation), string(TerminalProposal)}},
-		"response": map[string]any{"type": "string"},
-		"assumptions": stringList,
-		"pendingDecisions": stringList,
-		"intentSummary": map[string]any{"type": "string"},
-		"warnings": stringList,
+		"mode":                      map[string]any{"type": "string", "enum": []string{string(TerminalQuestion), string(TerminalExplanation), string(TerminalProposal)}},
+		"response":                  map[string]any{"type": "string"},
+		"assumptions":               stringList,
+		"pendingDecisions":          stringList,
+		"intentSummary":             map[string]any{"type": "string"},
+		"warnings":                  stringList,
 		"expectedCandidateChecksum": map[string]any{"type": "string"},
 		"playbooks": map[string]any{
 			"type": "array", "items": objectSchema(map[string]any{

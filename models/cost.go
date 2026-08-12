@@ -85,6 +85,7 @@ type CostReport struct {
 	To         time.Time           `json:"to"`
 	WhatsApp   WhatsAppCostSummary `json:"whatsApp"`
 	AI         AIUsageSummary      `json:"ai"`
+	Copilot    CopilotUsageSummary `json:"copilot"`
 	Disclaimer string              `json:"disclaimer"`
 }
 
@@ -148,6 +149,17 @@ type AIModelUsage struct {
 	EstimatedCostUSD         float64 `json:"estimatedCostUsd"`
 }
 
+// CopilotUsageSummary es el consumo del asistente de autoría, mantenido aparte
+// del runtime: todo se filtra por purpose='flow_authoring', así que nunca se
+// mezcla con la IA que atiende a los clientes.
+type CopilotUsageSummary struct {
+	Requests         int64   `json:"requests"`
+	Turns            int64   `json:"turns"`
+	Sessions         int64   `json:"sessions"`
+	EstimatedCostUSD float64 `json:"estimatedCostUsd"`
+	Currency         string  `json:"currency"`
+}
+
 // GetCostReport combina dos fuentes independientes:
 //   - WhatsApp: entrega + billable/categoría confirmados por webhook, valorizados
 //     con el tarifario público que corresponda a fecha, mercado y nivel mensual.
@@ -167,7 +179,8 @@ func GetCostReport(ctx context.Context, pool *pgxpool.Pool, orgID, botID string,
 			SourceURL:  metaPricingSource,
 			ByCategory: make([]WhatsAppCategoryCost, 0),
 		},
-		AI: AIUsageSummary{Currency: "USD", ByModel: make([]AIModelUsage, 0)},
+		AI:      AIUsageSummary{Currency: "USD", ByModel: make([]AIModelUsage, 0)},
+		Copilot: CopilotUsageSummary{Currency: "USD"},
 		Disclaimer: "WhatsApp es una estimación de tarifa pública basada en entregas y pricing del webhook; " +
 			"la factura puede variar por descuentos del portafolio, impuestos o ajustes de Meta. " +
 			"IA usa tokens reales de la respuesta y la tarifa configurada para ese request.",
@@ -176,6 +189,9 @@ func GetCostReport(ctx context.Context, pool *pgxpool.Pool, orgID, botID string,
 		return nil, err
 	}
 	if err := loadAIUsage(ctx, pool, report, orgID, botID, from.UTC(), to.UTC()); err != nil {
+		return nil, err
+	}
+	if err := loadCopilotUsage(ctx, pool, report, orgID, botID, from.UTC(), to.UTC()); err != nil {
 		return nil, err
 	}
 	tiers, err := activeProviderRateTiers(ctx, pool, metaPricingProvider, "PE", to.Add(-time.Nanosecond))
@@ -316,6 +332,44 @@ func loadAIUsage(ctx context.Context, pool *pgxpool.Pool, report *CostReport, or
 		report.AI.CacheReadInputTokens + report.AI.CacheCreationInputTokens
 	report.AI.EstimatedCostUSD = roundCostUSD(report.AI.EstimatedCostUSD)
 	return rows.Err()
+}
+
+// loadCopilotUsage agrega el consumo del asistente de autoría en el periodo. El
+// costo sale de ai_usage_events filtrado por purpose='flow_authoring'; los
+// turnos y sesiones salen de las tablas del Copilot. Nada de esto toca las
+// métricas del runtime.
+func loadCopilotUsage(ctx context.Context, pool *pgxpool.Pool, report *CostReport, orgID, botID string, from, to time.Time) error {
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)::bigint,
+		       COALESCE(SUM(estimated_cost_usd),0)::float8
+		  FROM ai_usage_events
+		 WHERE organization_id=$1::uuid
+		   AND ($2='' OR bot_id=$2::uuid)
+		   AND purpose='flow_authoring'
+		   AND occurred_at >= $3 AND occurred_at < $4`, orgID, botID, from, to).
+		Scan(&report.Copilot.Requests, &report.Copilot.EstimatedCostUSD); err != nil {
+		return err
+	}
+	report.Copilot.EstimatedCostUSD = roundCostUSD(report.Copilot.EstimatedCostUSD)
+
+	if err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)::bigint
+		  FROM flow_copilot_turns t
+		  JOIN flow_copilot_sessions s ON s.id=t.session_id
+		 WHERE t.organization_id=$1::uuid
+		   AND ($2='' OR s.bot_id=$2::uuid)
+		   AND t.created_at >= $3 AND t.created_at < $4`, orgID, botID, from, to).
+		Scan(&report.Copilot.Turns); err != nil {
+		return err
+	}
+
+	return pool.QueryRow(ctx, `
+		SELECT COUNT(*)::bigint
+		  FROM flow_copilot_sessions
+		 WHERE organization_id=$1::uuid
+		   AND ($2='' OR bot_id=$2::uuid)
+		   AND created_at >= $3 AND created_at < $4`, orgID, botID, from, to).
+		Scan(&report.Copilot.Sessions)
 }
 
 func activeProviderRateTiers(ctx context.Context, pool *pgxpool.Pool, provider, market string, at time.Time) ([]ProviderRateTier, error) {

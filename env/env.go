@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Yzx7/sacs-chatbots/config"
+	"github.com/Yzx7/sacs-chatbots/copilot"
 	"github.com/Yzx7/sacs-chatbots/engine/ai"
 	"github.com/Yzx7/sacs-chatbots/events"
 	"github.com/Yzx7/sacs-chatbots/helpers"
@@ -25,5 +26,6 @@ type Env struct {
 	TextAgent         *ai.Agent       // DeepSeek para especialistas de texto
 	OrchestratorAgent *ai.Agent       // MiniMax-M3 para clasificar/enrutar sin herramientas
 	VisionAgent       *ai.Agent       // MiniMax-M3 para nodos con `accepts: image`
+	Copilot           *copilot.Runner // agente de autoría; nil lo deshabilita sin tocar el editor manual
 	Events            *events.Hub     // eventos de chat en vivo (SSE); nil deshabilita el stream
 }

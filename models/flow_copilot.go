@@ -103,6 +103,7 @@ type FlowCopilotSessionDetail struct {
 	Session   *FlowCopilotSession   `json:"session"`
 	Turns     []FlowCopilotTurn     `json:"turns"`
 	Proposals []FlowCopilotProposal `json:"proposals"`
+	CostUSD   float64               `json:"costUsd"`
 }
 
 type FlowCopilotConflictError struct {
@@ -281,7 +282,35 @@ func GetFlowCopilotSession(
 	if err != nil {
 		return nil, err
 	}
-	return &FlowCopilotSessionDetail{Session: &session, Turns: turns, Proposals: proposals}, nil
+	turnIDs := make([]string, 0, len(turns))
+	for _, turn := range turns {
+		turnIDs = append(turnIDs, turn.ID)
+	}
+	cost, err := FlowCopilotSessionCost(ctx, p, organizationID, turnIDs)
+	if err != nil {
+		return nil, err
+	}
+	return &FlowCopilotSessionDetail{Session: &session, Turns: turns, Proposals: proposals, CostUSD: cost}, nil
+}
+
+// FlowCopilotSessionCost suma el costo en USD de los turnos de una sesión a
+// partir de ai_usage_events. La atribución usa el turnId que el recorder de uso
+// guarda en metadata, así que cubre también turnos fallidos o cancelados que sí
+// consumieron llamadas al proveedor. Se muestra el costo, no los tokens.
+func FlowCopilotSessionCost(ctx context.Context, p *pgxpool.Pool, organizationID string, turnIDs []string) (float64, error) {
+	if len(turnIDs) == 0 {
+		return 0, nil
+	}
+	var total float64
+	if err := p.QueryRow(ctx,
+		`SELECT COALESCE(SUM(estimated_cost_usd),0)::float8
+		   FROM ai_usage_events
+		  WHERE organization_id=$1::uuid
+		    AND purpose='flow_authoring'
+		    AND metadata->>'turnId' = ANY($2::text[])`, organizationID, turnIDs).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 type CreateFlowCopilotTurnParams struct {

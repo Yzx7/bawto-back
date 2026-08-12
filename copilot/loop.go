@@ -29,11 +29,11 @@ type applyFlowOperationsInput struct {
 }
 
 type applyFlowOperationsOutput struct {
-	CandidateChecksum string                         `json:"candidateChecksum"`
-	AliasToNodeID     map[string]string              `json:"aliasToNodeId,omitempty"`
-	AliasToEdgeID     map[string]string              `json:"aliasToEdgeId,omitempty"`
-	Diff              authoring.FlowDiff             `json:"diff"`
-	Diagnostics       []authoring.Diagnostic         `json:"diagnostics,omitempty"`
+	CandidateChecksum string                 `json:"candidateChecksum"`
+	AliasToNodeID     map[string]string      `json:"aliasToNodeId,omitempty"`
+	AliasToEdgeID     map[string]string      `json:"aliasToEdgeId,omitempty"`
+	Diff              authoring.FlowDiff     `json:"diff"`
+	Diagnostics       []authoring.Diagnostic `json:"diagnostics,omitempty"`
 }
 
 type functionExecutionError struct {
@@ -113,14 +113,41 @@ func runTurn(ctx context.Context, provider ModelProvider, config RunnerConfig, r
 		modelRequest.RequireTerminal = step == config.MaxSteps
 		response, err := provider.Next(ctx, modelRequest)
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return &TurnResult{
+					Terminal: SubmitProposalInput{
+						Mode:     TerminalQuestion,
+						Response: "El procesamiento de este turno tomó más tiempo del límite configurado mientras diseñaba el flujo. ¿Deseas que continúe en el siguiente mensaje?",
+						Warnings: []string{"Se alcanzó el tiempo límite de ejecución en este turno."},
+					},
+					Trace: result.Trace,
+					Usage: result.Usage,
+				}, nil
+			}
 			return nil, err
 		}
 		response.Usage.Step = step
 		recordModelUsage(ctx, response.Usage)
 		accumulateUsage(&result.Usage, response.Usage)
+		if response.Thought != "" {
+			if result.Thought != "" {
+				result.Thought += "\n\n"
+			}
+			result.Thought += response.Thought
+			emitThought(ctx, ThoughtEvent{Step: step, Content: response.Thought})
+		}
 		if len(response.Calls) == 0 {
-			if invalidTerminalCount >= config.InvalidTerminalRetries {
-				return nil, fmt.Errorf("%w: el proveedor no llamó submit_proposal", ErrInvalidTerminal)
+			if step == config.MaxSteps || invalidTerminalCount >= config.InvalidTerminalRetries {
+				text := strings.TrimSpace(response.Text)
+				if text == "" {
+					text = "He alcanzado el límite de pasos de este turno mientras diseñaba el flujo. ¿Deseas que continúe en el siguiente mensaje?"
+				}
+				result.Terminal = SubmitProposalInput{
+					Mode:     TerminalQuestion,
+					Response: text,
+					Warnings: []string{"Se alcanzó el límite de pasos presupuestados en este turno."},
+				}
+				return result, nil
 			}
 			invalidTerminalCount++
 			modelRequest.Initial = nil
@@ -131,9 +158,6 @@ func runTurn(ctx context.Context, provider ModelProvider, config RunnerConfig, r
 
 		terminalIndex := -1
 		for index, call := range response.Calls {
-			if !allowedFunctions[call.Name] {
-				return nil, fmt.Errorf("function call %q fuera del allowlist", call.Name)
-			}
 			if call.Name == ToolSubmitProposal {
 				terminalIndex = index
 			}
@@ -156,8 +180,17 @@ func runTurn(ctx context.Context, provider ModelProvider, config RunnerConfig, r
 				result.Proposal = proposal
 				return result, nil
 			}
-			if invalidTerminalCount >= config.InvalidTerminalRetries {
-				return nil, fmt.Errorf("%w: %v", ErrInvalidTerminal, terminalErr)
+			if step == config.MaxSteps || invalidTerminalCount >= config.InvalidTerminalRetries {
+				msg := strings.TrimSpace(terminal.Response)
+				if msg == "" {
+					msg = "He avanzado en la preparación de la propuesta, pero se requieren ajustes adicionales en las ramas y conexiones. ¿Deseas que continúe en el siguiente mensaje?"
+				}
+				result.Terminal = SubmitProposalInput{
+					Mode:     TerminalQuestion,
+					Response: msg,
+					Warnings: []string{"No se pudo aplicar la propuesta automáticamente: " + terminalErr.Error()},
+				}
+				return result, nil
 			}
 			invalidTerminalCount++
 			modelRequest.Initial = nil
@@ -166,18 +199,51 @@ func runTurn(ctx context.Context, provider ModelProvider, config RunnerConfig, r
 			continue
 		}
 		if modelRequest.RequireTerminal {
-			return nil, ErrStepBudgetExceeded
+			text := strings.TrimSpace(response.Text)
+			if text == "" {
+				text = "He avanzado en la preparación de los nodos del flujo y alcancé el límite de pasos de este turno. ¿Deseas que continúe conectando y validando el flujo en el siguiente mensaje?"
+			}
+			result.Terminal = SubmitProposalInput{
+				Mode:     TerminalQuestion,
+				Response: text,
+				Warnings: []string{"Se alcanzó el límite de pasos presupuestados en este turno."},
+			}
+			return result, nil
 		}
 
 		toolResults := make([]FunctionResult, 0, len(response.Calls))
 		for _, call := range response.Calls {
+			if !allowedFunctions[call.Name] {
+				toolResults = append(toolResults, errorFunctionResult(call.ID, call.Name, "unknown_tool",
+					fmt.Sprintf("La herramienta %q no existe en el catálogo de autoría. Usa únicamente herramientas declaradas (como apply_flow_operations) o submit_proposal (con mode=question, explanation o proposal).", call.Name), nil))
+				continue
+			}
 			signature, err := functionCallSignature(call)
 			if err != nil {
 				return nil, err
 			}
 			repeated[signature]++
 			if repeated[signature] > config.MaxIdenticalCalls {
-				return nil, fmt.Errorf("%w: %s", ErrRepeatedToolCall, call.Name)
+				if repeated[signature] == config.MaxIdenticalCalls+1 {
+					functionResult := errorFunctionResult(call.ID, call.Name, "repeated_call",
+						"Has repetido esta misma llamada con argumentos idénticos. Corrige los parámetros o envía la propuesta con submit_proposal.", nil)
+					toolResults = append(toolResults, functionResult)
+					continue
+				}
+				if text := strings.TrimSpace(response.Text); text != "" {
+					result.Terminal = SubmitProposalInput{
+						Mode:     TerminalExplanation,
+						Response: text,
+						Warnings: []string{"El asistente repitió la misma consulta sin avanzar."},
+					}
+					return result, nil
+				}
+				result.Terminal = SubmitProposalInput{
+					Mode:     TerminalExplanation,
+					Response: "No pude completar la modificación porque entré en un bucle repitiendo la misma operación. Por favor, intenta pedir el cambio especificando los nodos o acciones paso a paso.",
+					Warnings: []string{"Operación repetida: " + call.Name},
+				}
+				return result, nil
 			}
 			emitActivity(ctx, ActivityEvent{Step: step, Name: call.Name, Status: "started"})
 			output, executeErr := workspace.execute(call)
@@ -206,7 +272,15 @@ func runTurn(ctx context.Context, provider ModelProvider, config RunnerConfig, r
 		modelRequest.Continuation = response.Continuation
 		modelRequest.ToolResults = toolResults
 	}
-	return nil, ErrStepBudgetExceeded
+	return &TurnResult{
+		Terminal: SubmitProposalInput{
+			Mode:     TerminalQuestion,
+			Response: "He alcanzado el límite de pasos de este turno mientras diseñaba el flujo. ¿Deseas que continúe en el siguiente mensaje?",
+			Warnings: []string{"Se alcanzó el límite de pasos presupuestados en este turno."},
+		},
+		Trace: result.Trace,
+		Usage: result.Usage,
+	}, nil
 }
 
 func (workspace *turnWorkspace) execute(call FunctionCall) (any, error) {
@@ -291,7 +365,7 @@ func (workspace *turnWorkspace) execute(call FunctionCall) (any, error) {
 	case ToolValidateCandidate:
 		return map[string]any{
 			"candidateChecksum": workspace.candidateChecksum,
-			"report": authoring.ValidateForAuthoring(workspace.candidate, workspace.resources.Snapshot),
+			"report":            authoring.ValidateForAuthoring(workspace.candidate, workspace.resources.Snapshot),
 		}, nil
 	case ToolApplyFlowOperations:
 		return workspace.applyOperations(call.Arguments)
@@ -344,9 +418,6 @@ func (workspace *turnWorkspace) applyOperations(raw json.RawMessage) (any, error
 		return nil, &functionExecutionError{Code: "invalid_operations", Message: err.Error()}
 	}
 	report := authoring.ValidateForAuthoring(result.Candidate, workspace.resources.Snapshot)
-	if report.HasErrors() {
-		return nil, &functionExecutionError{Code: "candidate_invalid", Message: "el candidato rompe bindings o estructura", Details: report}
-	}
 	workspace.candidate = append(json.RawMessage(nil), result.Candidate...)
 	workspace.candidateChecksum = result.CandidateChecksum
 	workspace.operations = append(workspace.operations, input.Operations...)
