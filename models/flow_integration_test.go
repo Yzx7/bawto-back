@@ -3,6 +3,8 @@ package models
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"testing"
 
@@ -46,11 +48,11 @@ func publica(t *testing.T, ctx context.Context, p *pgxpool.Pool, botID, flowID s
 	if err := engine.Validate(&parsed); err != nil {
 		t.Fatalf("engine.Validate rechazó el grafo de prueba: %v", err)
 	}
-	def, sum, err := engine.CanonicalChecksum(raw)
+	_, sum, err := engine.CanonicalChecksum(raw)
 	if err != nil {
 		t.Fatalf("canonical: %v", err)
 	}
-	res, err := PublishFlow(ctx, p, botID, flowID, def, sum, "tester")
+	res, err := PublishFlow(ctx, p, botID, flowID, sum, "tester", true)
 	if err != nil {
 		t.Fatalf("PublishFlow: %v", err)
 	}
@@ -151,8 +153,17 @@ func TestFlowRestaurarYRepublicar(t *testing.T) {
 	v1 := publica(t, ctx, pool, bot.ID, flow.ID, v1raw)
 
 	v2raw := grafoValido("f_r", "Recordatorio", "versión dos")
-	if _, err := UpdateFlowDraft(ctx, pool, bot.ID, flow.ID, v2raw, "tester"); err != nil {
+	initial, err := DraftSnapshotFromFlow(flow)
+	if err != nil {
+		t.Fatalf("snapshot inicial: %v", err)
+	}
+	updated, err := UpdateFlowDraft(ctx, pool, bot.ID, flow.ID, v2raw, initial.Checksum, "tester")
+	if err != nil {
 		t.Fatalf("UpdateFlowDraft: %v", err)
+	}
+	current, err := GetFlow(ctx, pool, bot.ID, flow.ID)
+	if err != nil || current == nil || !current.UnpublishedChanges {
+		t.Fatalf("la respuesta ocultó los cambios aún no publicados: flow=%+v err=%v", current, err)
 	}
 	v2 := publica(t, ctx, pool, bot.ID, flow.ID, v2raw)
 	if !v2.Created || v2.Version.Version != 2 {
@@ -160,15 +171,15 @@ func TestFlowRestaurarYRepublicar(t *testing.T) {
 	}
 
 	// Restaurar deja la definición vieja en el borrador, sin publicar.
-	restored, err := RestoreFlowVersion(ctx, pool, bot.ID, flow.ID, v1.Version.ID, "tester")
+	restored, err := RestoreFlowVersion(ctx, pool, bot.ID, flow.ID, v1.Version.ID, updated.Checksum, "tester")
 	if err != nil || restored == nil {
 		t.Fatalf("RestoreFlowVersion: err=%v flow=%v", err, restored)
 	}
-	if *restored.PublishedVersionID != v2.Version.ID {
+	afterRestore, err := GetFlow(ctx, pool, bot.ID, flow.ID)
+	if err != nil || afterRestore == nil || afterRestore.PublishedVersionID == nil || *afterRestore.PublishedVersionID != v2.Version.ID {
 		t.Fatal("restaurar no debe cambiar la versión publicada")
 	}
-	_, restoredSum, _ := engine.CanonicalChecksum(restored.Draft)
-	if restoredSum != v1.Version.Checksum {
+	if restored.Checksum != v1.Version.Checksum {
 		t.Fatal("el borrador restaurado no coincide con la versión 1")
 	}
 
@@ -233,7 +244,8 @@ func TestFlowArchivarLiberaLaKey(t *testing.T) {
 		t.Fatal("se esperaba un flujo nuevo")
 	}
 	// El archivado ya no admite ediciones.
-	if f, err := UpdateFlowDraft(ctx, pool, bot.ID, first.ID, raw, "tester"); err != nil || f != nil {
+	_, expected, _ := engine.CanonicalChecksum(raw)
+	if f, err := UpdateFlowDraft(ctx, pool, bot.ID, first.ID, raw, expected, "tester"); !errors.Is(err, ErrFlowArchived) || f != nil {
 		t.Fatalf("un flujo archivado no debe poder editarse: err=%v flow=%v", err, f)
 	}
 }
@@ -266,13 +278,14 @@ func TestFlowAislamientoEntreOrganizaciones(t *testing.T) {
 	if vs, err := ListFlowVersions(ctx, pool, botB.ID, flowA.ID); err != nil || len(vs) != 0 {
 		t.Fatalf("ListFlowVersions cruzado: err=%v len=%d", err, len(vs))
 	}
-	if f, err := UpdateFlowDraft(ctx, pool, botB.ID, flowA.ID, raw, "intruso"); err != nil || f != nil {
+	_, expected, _ := engine.CanonicalChecksum(raw)
+	if f, err := UpdateFlowDraft(ctx, pool, botB.ID, flowA.ID, raw, expected, "intruso"); err != nil || f != nil {
 		t.Fatalf("UpdateFlowDraft cruzado modificó algo: %v (err=%v)", f, err)
 	}
 	if f, err := ArchiveFlow(ctx, pool, botB.ID, flowA.ID, "intruso"); err != nil || f != nil {
 		t.Fatalf("ArchiveFlow cruzado archivó algo: %v (err=%v)", f, err)
 	}
-	if res, err := PublishFlow(ctx, pool, botB.ID, flowA.ID, raw, "x", "intruso"); err != nil || res != nil {
+	if res, err := PublishFlow(ctx, pool, botB.ID, flowA.ID, expected, "intruso", true); err != nil || res != nil {
 		t.Fatalf("PublishFlow cruzado publicó algo: %v (err=%v)", res, err)
 	}
 	if list, err := PublishedMessageFlows(ctx, pool, botB.ID); err != nil || len(list) != 0 {
@@ -316,5 +329,169 @@ func TestFlowPausarYReactivar(t *testing.T) {
 	}
 	if list, err := PublishedMessageFlows(ctx, pool, bot.ID); err != nil || len(list) != 1 {
 		t.Fatalf("tras reactivar debe volver a resolverse: err=%v list=%+v", err, list)
+	}
+}
+
+func TestFlowDraftCASNoOpConflictoYCarrera(t *testing.T) {
+	pool, ctx := flowTestPool(t)
+	bot := botDePrueba(t, ctx, pool, "flcas_")
+
+	base := grafoValido("f_cas", "CAS", "base")
+	flow, err := CreateFlow(ctx, pool, bot.ID, NewFlow{
+		Key: "cas", Name: "CAS", TriggerType: "message", Draft: base, UserID: "creator",
+	})
+	if err != nil {
+		t.Fatalf("CreateFlow: %v", err)
+	}
+	baseSnapshot, err := DraftSnapshotFromFlow(flow)
+	if err != nil {
+		t.Fatalf("DraftSnapshotFromFlow: %v", err)
+	}
+
+	firstDraft := grafoValido("f_cas", "CAS", "primero")
+	first, err := UpdateFlowDraft(ctx, pool, bot.ID, flow.ID, firstDraft, baseSnapshot.Checksum, "writer-1")
+	if err != nil {
+		t.Fatalf("primer CAS: %v", err)
+	}
+
+	// Un candidato distinto con la revisión vieja pierde y recibe el snapshot
+	// actual completo.
+	secondDraft := grafoValido("f_cas", "CAS", "segundo")
+	if _, err := UpdateFlowDraft(ctx, pool, bot.ID, flow.ID, secondDraft, baseSnapshot.Checksum, "writer-2"); err == nil {
+		t.Fatal("el CAS obsoleto escribió sin conflicto")
+	} else {
+		var conflict *DraftConflictError
+		if !errors.As(err, &conflict) {
+			t.Fatalf("se esperaba DraftConflictError, got %T: %v", err, err)
+		}
+		if conflict.Code != "draft_conflict" || conflict.CurrentChecksum != first.Checksum || conflict.ExpectedChecksum != baseSnapshot.Checksum {
+			t.Fatalf("conflicto incompleto: %+v", conflict)
+		}
+	}
+
+	// Reintentar el documento que ya ganó es no-op aunque el response original
+	// se haya perdido y el expected haya quedado atrás.
+	noOp, err := UpdateFlowDraft(ctx, pool, bot.ID, flow.ID, firstDraft, baseSnapshot.Checksum, "retry")
+	if err != nil {
+		t.Fatalf("no-op idempotente: %v", err)
+	}
+	if noOp.Checksum != first.Checksum || noOp.UpdatedBy == nil || *noOp.UpdatedBy != "writer-1" || !noOp.UpdatedAt.Equal(first.UpdatedAt) {
+		t.Fatalf("el no-op alteró auditoría o checksum: first=%+v retry=%+v", first, noOp)
+	}
+
+	// Dos candidatos distintos sobre una nueva revisión: exactamente uno gana.
+	base2 := grafoValido("f_cas", "CAS", "base dos")
+	base2Snapshot, err := UpdateFlowDraft(ctx, pool, bot.ID, flow.ID, base2, first.Checksum, "writer-base2")
+	if err != nil {
+		t.Fatalf("preparar carrera: %v", err)
+	}
+	type outcome struct {
+		snapshot *DraftSnapshot
+		err      error
+	}
+	outcomes := make(chan outcome, 2)
+	for index, body := range []json.RawMessage{
+		grafoValido("f_cas", "CAS", "candidato A"),
+		grafoValido("f_cas", "CAS", "candidato B"),
+	} {
+		index, body := index, body
+		go func() {
+			snapshot, err := UpdateFlowDraft(ctx, pool, bot.ID, flow.ID, body, base2Snapshot.Checksum,
+				fmt.Sprintf("racer-%d", index))
+			outcomes <- outcome{snapshot: snapshot, err: err}
+		}()
+	}
+	wins, conflicts := 0, 0
+	for range 2 {
+		result := <-outcomes
+		if result.err == nil && result.snapshot != nil {
+			wins++
+			continue
+		}
+		var conflict *DraftConflictError
+		if errors.As(result.err, &conflict) {
+			conflicts++
+			continue
+		}
+		t.Fatalf("resultado inesperado en carrera: snapshot=%+v err=%v", result.snapshot, result.err)
+	}
+	if wins != 1 || conflicts != 1 {
+		t.Fatalf("CAS no serializó la carrera: wins=%d conflicts=%d", wins, conflicts)
+	}
+}
+
+func TestPublishFlowBloqueaYPublicaExactamenteLaRevisionEsperada(t *testing.T) {
+	pool, ctx := flowTestPool(t)
+	bot := botDePrueba(t, ctx, pool, "flpubcas_")
+
+	base := grafoValido("f_publish_cas", "Publish CAS", "base")
+	flow, err := CreateFlow(ctx, pool, bot.ID, NewFlow{
+		Key: "publish-cas", Name: "Publish CAS", TriggerType: "message", Draft: base, UserID: "creator",
+	})
+	if err != nil {
+		t.Fatalf("CreateFlow: %v", err)
+	}
+	baseSnapshot, _ := DraftSnapshotFromFlow(flow)
+
+	// La autorización dependiente de audiencia se comprueba sobre la fila que
+	// PublishFlow bloquea, no solo en el controller.
+	if _, err := PublishFlow(ctx, pool, bot.ID, flow.ID, baseSnapshot.Checksum, "member", false); !errors.Is(err, ErrFlowPublishOpenAudience) {
+		t.Fatalf("member publicó un flujo abierto: %v", err)
+	}
+
+	// Retenemos el lock, arrancamos PublishFlow y cambiamos el draft antes de
+	// liberarlo. El publicador debe releer la fila bloqueada y devolver 409 de
+	// dominio, no versionar los bytes que un caller leyó antes.
+	blocker, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin blocker: %v", err)
+	}
+	defer blocker.Rollback(ctx)
+	var lockedID string
+	if err := blocker.QueryRow(ctx,
+		`SELECT id::text FROM flows WHERE id=$1::uuid AND bot_id=$2::uuid FOR UPDATE`,
+		flow.ID, bot.ID).Scan(&lockedID); err != nil {
+		t.Fatalf("lock flow: %v", err)
+	}
+	type publishOutcome struct {
+		result *PublishResult
+		err    error
+	}
+	published := make(chan publishOutcome, 1)
+	go func() {
+		result, err := PublishFlow(ctx, pool, bot.ID, flow.ID, baseSnapshot.Checksum, "admin", true)
+		published <- publishOutcome{result: result, err: err}
+	}()
+
+	newDraft := grafoValido("f_publish_cas", "Publish CAS", "nuevo")
+	if _, err := blocker.Exec(ctx,
+		`UPDATE flows SET draft=$2::jsonb, updated_by='concurrent-writer' WHERE id=$1::uuid`,
+		flow.ID, newDraft); err != nil {
+		t.Fatalf("concurrent update: %v", err)
+	}
+	if err := blocker.Commit(ctx); err != nil {
+		t.Fatalf("commit concurrent update: %v", err)
+	}
+	outcome := <-published
+	var conflict *DraftConflictError
+	if outcome.result != nil || !errors.As(outcome.err, &conflict) {
+		t.Fatalf("publish obsoleto no conflictuó: result=%+v err=%v", outcome.result, outcome.err)
+	}
+	versions, err := ListFlowVersions(ctx, pool, bot.ID, flow.ID)
+	if err != nil || len(versions) != 0 {
+		t.Fatalf("el publish conflictivo creó una versión: err=%v versions=%+v", err, versions)
+	}
+
+	current, err := GetFlow(ctx, pool, bot.ID, flow.ID)
+	if err != nil || current == nil {
+		t.Fatalf("GetFlow: flow=%+v err=%v", current, err)
+	}
+	currentSnapshot, _ := DraftSnapshotFromFlow(current)
+	result, err := PublishFlow(ctx, pool, bot.ID, flow.ID, currentSnapshot.Checksum, "admin", true)
+	if err != nil || result == nil || !result.Created {
+		t.Fatalf("publicar revisión vigente: result=%+v err=%v", result, err)
+	}
+	if result.Version.Checksum != currentSnapshot.Checksum {
+		t.Fatalf("se publicó otro snapshot: version=%s draft=%s", result.Version.Checksum, currentSnapshot.Checksum)
 	}
 }

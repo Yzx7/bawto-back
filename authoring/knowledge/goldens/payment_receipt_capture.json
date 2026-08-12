@@ -1,0 +1,49 @@
+{
+  "id": "golden-payment-receipt",
+  "name": "Golden payment receipt capture",
+  "trigger": {"type": "message", "match": "any", "accepts": ["image", "text"], "routeBy": "content_type"},
+  "nodes": [
+    {
+      "id": "visual", "kind": "agent", "pos": {"x": 320, "y": -120},
+      "instruction": "Analiza solo la imagen actual. No inventes datos ausentes y elige la rama de calidad.",
+      "outputs": ["valid", "needs_review", "unreadable", "not_receipt"],
+      "accepts": ["image"], "silent": true, "contextMode": "none", "saveAs": "receipt",
+      "outputFields": [
+        {"key": "operationCode", "type": "string"},
+        {"key": "amount", "type": "number"},
+        {"key": "provider", "type": "string"},
+        {"key": "confidence", "type": "number"}
+      ]
+    },
+    {"id": "ask_image", "kind": "send", "pos": {"x": 0, "y": 160}, "body": "Envíame una foto legible del comprobante."},
+    {"id": "wait_image", "kind": "wait", "pos": {"x": 320, "y": 160}, "expect": "image"},
+    {
+      "id": "store", "kind": "tool", "pos": {"x": 680, "y": -160},
+      "toolRef": "data_mutate", "saveAs": "payment_record",
+      "args": {
+        "object": "payments", "operation": "create", "linkCurrentContact": "true",
+        "idempotencyKey": "payment:{input.id}",
+        "field.operationCode": "{receipt.operationCode}", "field.status": "{receipt.branch}"
+      }
+    },
+    {"id": "retry", "kind": "send", "pos": {"x": 680, "y": 160}, "body": "La imagen no se lee bien. Intenta otra vez o pide ayuda."},
+    {"id": "thanks", "kind": "send", "pos": {"x": 1040, "y": -200}, "body": "Recibí el comprobante y quedó pendiente de revisión."},
+    {"id": "handoff", "kind": "action", "pos": {"x": 1040, "y": 80}, "action": "handoff", "params": {"reason": "payment_review"}},
+    {"id": "end", "kind": "action", "pos": {"x": 1360, "y": -80}, "action": "end"}
+  ],
+  "edges": [
+    {"id": "e-image", "source": "trigger", "target": "visual", "sourceHandle": "image"},
+    {"id": "e-text", "source": "trigger", "target": "ask_image", "sourceHandle": "text"},
+    {"id": "e-ask-wait", "source": "ask_image", "target": "wait_image"},
+    {"id": "e-wait-visual", "source": "wait_image", "target": "visual", "role": "loopback"},
+    {"id": "e-valid", "source": "visual", "target": "store", "sourceHandle": "valid"},
+    {"id": "e-review", "source": "visual", "target": "store", "sourceHandle": "needs_review"},
+    {"id": "e-unreadable", "source": "visual", "target": "retry", "sourceHandle": "unreadable"},
+    {"id": "e-not-receipt", "source": "visual", "target": "handoff", "sourceHandle": "not_receipt"},
+    {"id": "e-retry", "source": "retry", "target": "wait_image"},
+    {"id": "e-store-ok", "source": "store", "target": "thanks", "sourceHandle": "ok"},
+    {"id": "e-store-error", "source": "store", "target": "handoff", "sourceHandle": "error"},
+    {"id": "e-thanks-end", "source": "thanks", "target": "end"},
+    {"id": "e-handoff-end", "source": "handoff", "target": "end"}
+  ]
+}

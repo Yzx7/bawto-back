@@ -50,6 +50,7 @@ const (
 // otras no, que daría cifras incoherentes dentro del mismo panel.
 const aiUsageScope = `e.organization_id=$1::uuid
 	   AND ($2='' OR e.bot_id=$2::uuid)
+	   AND e.purpose='flow_runtime'
 	   AND e.occurred_at >= $3 AND e.occurred_at < $4`
 
 // aiUsageFilter añade el modelo. La comparación entre modelos (ByModel) usa el

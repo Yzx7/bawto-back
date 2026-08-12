@@ -1,0 +1,79 @@
+{
+  "id": "golden-catalog-order",
+  "name": "Golden catalog order with manual payment",
+  "trigger": {"type": "message", "match": "any"},
+  "nodes": [
+    {
+      "id": "catalog", "kind": "tool", "pos": {"x": 0, "y": 0},
+      "toolRef": "catalog_search", "saveAs": "catalog_result",
+      "args": {"connection": "shop", "query": "{input.text}", "limit": "5"}
+    },
+    {
+      "id": "collect", "kind": "agent", "pos": {"x": 320, "y": -100},
+      "instruction": "Recopila producto, cantidad y correo usando solo el catálogo. No crees pedidos ni pagos.",
+      "outputs": ["complete", "clarify", "cancel"], "contextMode": "recent", "replyOn": ["clarify"],
+      "saveAs": "order_input",
+      "outputFields": [
+        {"key": "productId", "type": "string"},
+        {"key": "quantity", "type": "number"},
+        {"key": "email", "type": "string"}
+      ]
+    },
+    {
+      "id": "create_order", "kind": "tool", "pos": {"x": 680, "y": -160},
+      "toolRef": "order_create", "saveAs": "order",
+      "args": {
+        "connection": "shop", "customerEmail": "{order_input.email}",
+        "idempotencyKey": "order:{input.id}",
+        "item.1.productId": "{order_input.productId}", "item.1.quantity": "{order_input.quantity}"
+      }
+    },
+    {
+      "id": "payment_intent", "kind": "tool", "pos": {"x": 1000, "y": -160},
+      "toolRef": "payment_intent_create", "saveAs": "payment",
+      "args": {"connection": "shop", "orderId": "{order.orderId}", "provider": "manual"}
+    },
+    {"id": "payment_message", "kind": "send", "pos": {"x": 1320, "y": -160}, "body": "{payment.message}"},
+    {"id": "wait_receipt", "kind": "wait", "pos": {"x": 1640, "y": -160}, "expect": "image"},
+    {
+      "id": "visual", "kind": "agent", "pos": {"x": 1960, "y": -160},
+      "instruction": "Extrae solo el número de operación visible y decide si la captura se puede declarar.",
+      "outputs": ["valid", "invalid"], "accepts": ["image"], "silent": true,
+      "saveAs": "receipt", "outputFields": [{"key": "operationCode", "type": "string"}]
+    },
+    {
+      "id": "submit_payment", "kind": "tool", "pos": {"x": 2280, "y": -220},
+      "toolRef": "payment_submit", "saveAs": "payment_submission",
+      "args": {"connection": "shop", "paymentId": "{payment.paymentId}", "reference": "{receipt.operationCode}"}
+    },
+    {"id": "pending", "kind": "send", "pos": {"x": 2600, "y": -220}, "body": "Tu pago quedó pendiente de validación."},
+    {"id": "catalog_error", "kind": "send", "pos": {"x": 320, "y": 220}, "body": "La tienda no responde ahora. Intentémoslo de nuevo."},
+    {"id": "wait_catalog", "kind": "wait", "pos": {"x": 680, "y": 220}},
+    {"id": "wait_clarify", "kind": "wait", "pos": {"x": 680, "y": 40}},
+    {"id": "handoff", "kind": "action", "pos": {"x": 2280, "y": 100}, "action": "handoff", "params": {"reason": "order_or_payment_error"}},
+    {"id": "end", "kind": "action", "pos": {"x": 2920, "y": -80}, "action": "end"}
+  ],
+  "edges": [
+    {"id": "e-trigger", "source": "trigger", "target": "catalog"},
+    {"id": "e-catalog-ok", "source": "catalog", "target": "collect", "sourceHandle": "ok"},
+    {"id": "e-catalog-error", "source": "catalog", "target": "catalog_error", "sourceHandle": "error"},
+    {"id": "e-catalog-error-wait", "source": "catalog_error", "target": "wait_catalog"},
+    {"id": "e-wait-catalog", "source": "wait_catalog", "target": "catalog", "role": "loopback"},
+    {"id": "e-complete", "source": "collect", "target": "create_order", "sourceHandle": "complete"},
+    {"id": "e-clarify", "source": "collect", "target": "wait_clarify", "sourceHandle": "clarify"},
+    {"id": "e-wait-clarify", "source": "wait_clarify", "target": "collect", "role": "loopback"},
+    {"id": "e-cancel", "source": "collect", "target": "end", "sourceHandle": "cancel"},
+    {"id": "e-order-ok", "source": "create_order", "target": "payment_intent", "sourceHandle": "ok"},
+    {"id": "e-order-error", "source": "create_order", "target": "handoff", "sourceHandle": "error"},
+    {"id": "e-intent-ok", "source": "payment_intent", "target": "payment_message", "sourceHandle": "ok"},
+    {"id": "e-intent-error", "source": "payment_intent", "target": "handoff", "sourceHandle": "error"},
+    {"id": "e-message-wait", "source": "payment_message", "target": "wait_receipt"},
+    {"id": "e-wait-visual", "source": "wait_receipt", "target": "visual"},
+    {"id": "e-visual-valid", "source": "visual", "target": "submit_payment", "sourceHandle": "valid"},
+    {"id": "e-visual-invalid", "source": "visual", "target": "wait_receipt", "sourceHandle": "invalid", "role": "loopback"},
+    {"id": "e-submit-ok", "source": "submit_payment", "target": "pending", "sourceHandle": "ok"},
+    {"id": "e-submit-error", "source": "submit_payment", "target": "handoff", "sourceHandle": "error"},
+    {"id": "e-pending-end", "source": "pending", "target": "end"},
+    {"id": "e-handoff-end", "source": "handoff", "target": "end"}
+  ]
+}

@@ -116,11 +116,11 @@ func (e *escenario) publicaFlujo(key string, priority int, audience string) *mod
 			e.t.Fatalf("SetFlowAudience %s: %v", key, err)
 		}
 	}
-	definition, checksum, err := engine.CanonicalChecksum(graph)
+	_, checksum, err := engine.CanonicalChecksum(graph)
 	if err != nil {
 		e.t.Fatalf("CanonicalChecksum: %v", err)
 	}
-	if _, err := models.PublishFlow(e.ctx, e.pool, e.bot.ID, flow.ID, definition, checksum, "tester"); err != nil {
+	if _, err := models.PublishFlow(e.ctx, e.pool, e.bot.ID, flow.ID, checksum, "tester", true); err != nil {
 		e.t.Fatalf("PublishFlow %s: %v", key, err)
 	}
 	return flow

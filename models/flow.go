@@ -34,7 +34,7 @@ type Flow struct {
 	// Audience restringe a quién atiende el flujo. NULL/vacío = atiende a todos.
 	// Es la configuración de un `data_query`, no un lenguaje de filtros propio.
 	Audience           json.RawMessage `db:"audience" json:"audience,omitempty"`
-	Draft              json.RawMessage `db:"draft" json:"draft"`
+	Draft              json.RawMessage `db:"draft" json:"-"`
 	PublishedVersionID *string         `db:"published_version_id" json:"publishedVersionId,omitempty"`
 	CreatedBy          *string         `db:"created_by" json:"createdBy,omitempty"`
 	UpdatedBy          *string         `db:"updated_by" json:"updatedBy,omitempty"`
@@ -52,6 +52,77 @@ type Flow struct {
 	// que un flujo publicado con cambios pendientes se veía exactamente igual que
 	// uno al día. Se puede editar, guardar y creer que el bot ya lo usa.
 	UnpublishedChanges bool `db:"-" json:"unpublishedChanges"`
+	// CopilotCapability se hidrata en el borde HTTP. No proviene de PostgreSQL y
+	// se omite en listados que no calculan capacidad/cuota para cada flujo.
+	CopilotCapability *FlowCopilotCapability `db:"-" json:"copilotCapability,omitempty"`
+}
+
+// DraftSnapshot es el contrato versionado del borrador. Checksum es la revisión
+// autoritativa para CAS; UpdatedAt/UpdatedBy son información de auditoría y no se
+// usan como token de concurrencia.
+type DraftSnapshot struct {
+	Draft     json.RawMessage `json:"draft"`
+	Checksum  string          `json:"checksum"`
+	UpdatedAt time.Time       `json:"updatedAt"`
+	UpdatedBy *string         `json:"updatedBy,omitempty"`
+}
+
+// DraftConflictError conserva el snapshot que ganó la carrera. Los controllers
+// lo proyectan dentro de GenRes.data para que el editor no tenga que interpretar
+// textos de error.
+type DraftConflictError struct {
+	Code             string          `json:"code"`
+	ExpectedChecksum string          `json:"expectedChecksum"`
+	CurrentChecksum  string          `json:"currentChecksum"`
+	CurrentDraft     json.RawMessage `json:"currentDraft"`
+	CurrentUpdatedAt time.Time       `json:"currentUpdatedAt"`
+	CurrentUpdatedBy *string         `json:"currentUpdatedBy,omitempty"`
+}
+
+func (e *DraftConflictError) Error() string { return "el borrador cambió en otra sesión" }
+
+// FlowValidationError distingue un grafo no publicable de un fallo de
+// infraestructura. El borrador puede guardarse incompleto; solo PublishFlow lo
+// produce.
+type FlowValidationError struct{ Problem string }
+
+func (e *FlowValidationError) Error() string { return e.Problem }
+
+// NewDraftSnapshot normaliza el documento genérico, sin pasarlo por engine.Flow,
+// para conservar pos y extensiones futuras del editor.
+func NewDraftSnapshot(draft json.RawMessage, updatedAt time.Time, updatedBy *string) (*DraftSnapshot, error) {
+	canonical, checksum, err := engine.CanonicalChecksum(draft)
+	if err != nil {
+		return nil, err
+	}
+	return &DraftSnapshot{
+		Draft: canonical, Checksum: checksum, UpdatedAt: updatedAt, UpdatedBy: updatedBy,
+	}, nil
+}
+
+// DraftSnapshotFromFlow proyecta los bytes y metadatos actuales de un Flow.
+func DraftSnapshotFromFlow(flow *Flow) (*DraftSnapshot, error) {
+	if flow == nil {
+		return nil, nil
+	}
+	return NewDraftSnapshot(flow.Draft, flow.UpdatedAt, flow.UpdatedBy)
+}
+
+// MarshalJSON evita mantener dos contratos de lectura para el mismo borrador:
+// cualquier Flow expuesto por HTTP lleva draftSnapshot y nunca el draft desnudo.
+func (f Flow) MarshalJSON() ([]byte, error) {
+	snapshot, err := DraftSnapshotFromFlow(&f)
+	if err != nil {
+		return nil, err
+	}
+	type flowAlias Flow
+	return json.Marshal(struct {
+		flowAlias
+		DraftSnapshot *DraftSnapshot `json:"draftSnapshot"`
+	}{
+		flowAlias:     flowAlias(f),
+		DraftSnapshot: snapshot,
+	})
 }
 
 // FlowVersion es una definición publicada e inmutable.
@@ -73,6 +144,9 @@ var (
 	ErrFlowFallbackTaken = errors.New("el bot ya tiene un flujo message marcado como fallback")
 	// ErrFlowArchived: un flujo archivado no se edita ni se publica.
 	ErrFlowArchived = errors.New("el flujo está archivado")
+	// ErrFlowPublishOpenAudience cierra el TOCTOU entre la comprobación de rol
+	// del controller y la audiencia de la fila bloqueada al publicar.
+	ErrFlowPublishOpenAudience = errors.New("publicar un flujo sin audiencia requiere un administrador")
 	// ErrFlowInvalidKey: la clave no cumple el formato.
 	ErrFlowInvalidKey = errors.New("clave de flujo inválida (usa minúsculas, dígitos, - y _)")
 )
@@ -260,24 +334,120 @@ func CreateFlow(ctx context.Context, p *pgxpool.Pool, botID string, in NewFlow) 
 	return &f, nil
 }
 
-// UpdateFlowDraft guarda el borrador. No toca la versión publicada: editar no
-// cambia lo que se está ejecutando (§3.4).
-func UpdateFlowDraft(ctx context.Context, p *pgxpool.Pool, botID, flowID string, draft json.RawMessage, userID string) (*Flow, error) {
-	rows, err := p.Query(ctx,
-		`UPDATE flows SET draft = $3, updated_by = COALESCE(NULLIF($4,''), updated_by)
-		 WHERE id = $1::uuid AND bot_id = $2::uuid AND archived_at IS NULL
-		 RETURNING `+flowCols, flowID, botID, draft, userID)
+// UpdateFlowDraft guarda el borrador mediante compare-and-swap. No toca la
+// versión publicada: editar no cambia lo que se está ejecutando (§3.4).
+//
+// El no-op por contenido se comprueba antes que expectedChecksum para que
+// reintentar exactamente una escritura cuyo response se perdió sea idempotente.
+func UpdateFlowDraft(
+	ctx context.Context,
+	p *pgxpool.Pool,
+	botID, flowID string,
+	draft json.RawMessage,
+	expectedChecksum, userID string,
+) (*DraftSnapshot, error) {
+	canonical, _, err := engine.CanonicalChecksum(draft)
 	if err != nil {
 		return nil, err
 	}
-	f, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[Flow])
+	tx, err := p.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	flow, err := lockFlow(ctx, tx, botID, flowID)
+	if err != nil || flow == nil {
+		return nil, err
+	}
+	before, err := DraftSnapshotFromFlow(flow)
+	if err != nil {
+		return nil, err
+	}
+	snapshot, err := updateFlowDraftTx(ctx, tx, flow, canonical, expectedChecksum, userID)
+	if err != nil {
+		return nil, err
+	}
+	if snapshot.Checksum != before.Checksum {
+		if err := reconcileFlowCopilotProposalsAfterDraftUpdateTx(ctx, tx, flow.ID,
+			snapshot.Draft, snapshot.Checksum, ""); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return snapshot, nil
+}
+
+func lockFlow(ctx context.Context, tx pgx.Tx, botID, flowID string) (*Flow, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT `+flowCols+` FROM flows WHERE id = $1::uuid AND bot_id = $2::uuid FOR UPDATE`,
+		flowID, botID)
+	if err != nil {
+		return nil, err
+	}
+	flow, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[Flow])
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return &f, nil
+	return &flow, nil
+}
+
+// updateFlowDraftTx exige que flow provenga de lockFlow dentro de tx. Se deja
+// separado para que restauración y, después, propuestas/undo compartan la misma
+// primitiva sin abrir transacciones anidadas.
+func updateFlowDraftTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	flow *Flow,
+	draft json.RawMessage,
+	expectedChecksum, userID string,
+) (*DraftSnapshot, error) {
+	if flow.ArchivedAt != nil {
+		return nil, ErrFlowArchived
+	}
+	current, err := DraftSnapshotFromFlow(flow)
+	if err != nil {
+		return nil, err
+	}
+	canonical, candidateChecksum, err := engine.CanonicalChecksum(draft)
+	if err != nil {
+		return nil, err
+	}
+	if candidateChecksum == current.Checksum {
+		return current, nil
+	}
+	if expectedChecksum != current.Checksum {
+		return nil, newDraftConflict(expectedChecksum, current)
+	}
+
+	rows, err := tx.Query(ctx,
+		`UPDATE flows SET draft = $2, updated_by = COALESCE(NULLIF($3,''), updated_by)
+		 WHERE id = $1::uuid AND archived_at IS NULL
+		 RETURNING `+flowCols, flow.ID, canonical, userID)
+	if err != nil {
+		return nil, err
+	}
+	updated, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[Flow])
+	if err != nil {
+		return nil, err
+	}
+	return DraftSnapshotFromFlow(&updated)
+}
+
+func newDraftConflict(expectedChecksum string, current *DraftSnapshot) *DraftConflictError {
+	return &DraftConflictError{
+		Code:             "draft_conflict",
+		ExpectedChecksum: expectedChecksum,
+		CurrentChecksum:  current.Checksum,
+		CurrentDraft:     current.Draft,
+		CurrentUpdatedAt: current.UpdatedAt,
+		CurrentUpdatedBy: current.UpdatedBy,
+	}
 }
 
 // UpdateFlowMeta renombra o cambia prioridad/fallback sin tocar el grafo.
@@ -466,35 +636,47 @@ type PublishResult struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-// PublishFlow crea (o reutiliza) la versión publicada del borrador.
+// PublishFlow crea (o reutiliza) la versión publicada del borrador que está
+// realmente bloqueado en PostgreSQL. El caller solo aporta la revisión que la
+// persona revisó; nunca aporta definition/checksum como fuente publicable.
 //
-// `definition` debe venir ya validada por engine.Validate y normalizada por
-// engine.Canonical; el checksum se calcula sobre esa forma normalizada.
-//
-// Toda la operación va en una transacción con el flujo bloqueado: dos publish
-// simultáneos no pueden crear dos veces la versión N.
-func PublishFlow(ctx context.Context, p *pgxpool.Pool, botID, flowID string, definition []byte, checksum, userID string) (*PublishResult, error) {
+// Canonicalización, validación del motor, bindings de plantillas, creación de la
+// versión y actualización de published_version_id ocurren dentro de esta única
+// transacción. Dos publish simultáneos no pueden crear dos veces la versión N ni
+// validar un snapshot y terminar publicando otro.
+func PublishFlow(
+	ctx context.Context,
+	p *pgxpool.Pool,
+	botID, flowID, expectedDraftChecksum, userID string,
+	canPublishOpen bool,
+) (*PublishResult, error) {
 	tx, err := p.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
-	rows, err := tx.Query(ctx,
-		`SELECT `+flowCols+` FROM flows WHERE id = $1::uuid AND bot_id = $2::uuid FOR UPDATE`,
-		flowID, botID)
-	if err != nil {
-		return nil, err
-	}
-	flow, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[Flow])
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
+	flow, err := lockFlow(ctx, tx, botID, flowID)
+	if err != nil || flow == nil {
 		return nil, err
 	}
 	if flow.ArchivedAt != nil {
 		return nil, ErrFlowArchived
+	}
+	currentDraft, err := DraftSnapshotFromFlow(flow)
+	if err != nil {
+		return nil, err
+	}
+	if expectedDraftChecksum != currentDraft.Checksum {
+		return nil, newDraftConflict(expectedDraftChecksum, currentDraft)
+	}
+	if len(flow.Audience) == 0 && !canPublishOpen {
+		return nil, ErrFlowPublishOpenAudience
+	}
+
+	definition, checksum, templateWarnings, err := validateLockedFlowForPublish(ctx, tx, botID, flow)
+	if err != nil {
+		return nil, err
 	}
 
 	// No-op por checksum: republicar el mismo grafo no crea una versión nueva.
@@ -525,7 +707,9 @@ func PublishFlow(ctx context.Context, p *pgxpool.Pool, botID, flowID string, def
 			if err := tx.Commit(ctx); err != nil {
 				return nil, err
 			}
-			return &PublishResult{Flow: &updated, Version: &current, Created: false}, nil
+			return &PublishResult{
+				Flow: &updated, Version: &current, Created: false, Warnings: templateWarnings,
+			}, nil
 		}
 	}
 
@@ -563,7 +747,37 @@ func PublishFlow(ctx context.Context, p *pgxpool.Pool, botID, flowID string, def
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	return &PublishResult{Flow: &updated, Version: &version, Created: true}, nil
+	return &PublishResult{
+		Flow: &updated, Version: &version, Created: true, Warnings: templateWarnings,
+	}, nil
+}
+
+func validateLockedFlowForPublish(
+	ctx context.Context,
+	tx pgx.Tx,
+	botID string,
+	flow *Flow,
+) ([]byte, string, []string, error) {
+	definition, checksum, err := engine.CanonicalChecksum(flow.Draft)
+	if err != nil {
+		return nil, "", nil, &FlowValidationError{Problem: err.Error()}
+	}
+	var parsed engine.Flow
+	if err := json.Unmarshal(definition, &parsed); err != nil {
+		return nil, "", nil, &FlowValidationError{Problem: "flujo inválido (no es JSON del editor)"}
+	}
+	if parsed.Trigger.Type != flow.TriggerType {
+		return nil, "", nil, &FlowValidationError{Problem: "el trigger del grafo (" + parsed.Trigger.Type +
+			") no coincide con el del flujo (" + flow.TriggerType + ")"}
+	}
+	if err := engine.Validate(&parsed); err != nil {
+		return nil, "", nil, &FlowValidationError{Problem: err.Error()}
+	}
+	templateValidation, err := validateFlowTemplatesWithQuery(ctx, tx, botID, definition)
+	if err != nil {
+		return nil, "", nil, &FlowValidationError{Problem: err.Error()}
+	}
+	return definition, checksum, templateValidation.Warnings, nil
 }
 
 // ListFlowVersions devuelve el historial, de la más reciente a la más vieja.
@@ -601,12 +815,49 @@ func GetFlowVersion(ctx context.Context, p *pgxpool.Pool, botID, flowID, version
 // RestoreFlowVersion copia una versión al borrador. **No** publica: republicar
 // queda como acto explícito, y por eso flow_versions no lleva UNIQUE(flow_id,
 // checksum) — restaurar y publicar crea una versión nueva con el mismo checksum.
-func RestoreFlowVersion(ctx context.Context, p *pgxpool.Pool, botID, flowID, versionID, userID string) (*Flow, error) {
-	version, err := GetFlowVersion(ctx, p, botID, flowID, versionID)
-	if err != nil || version == nil {
+func RestoreFlowVersion(
+	ctx context.Context,
+	p *pgxpool.Pool,
+	botID, flowID, versionID, expectedDraftChecksum, userID string,
+) (*DraftSnapshot, error) {
+	tx, err := p.Begin(ctx)
+	if err != nil {
 		return nil, err
 	}
-	return UpdateFlowDraft(ctx, p, botID, flowID, version.Definition, userID)
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	flow, err := lockFlow(ctx, tx, botID, flowID)
+	if err != nil || flow == nil {
+		return nil, err
+	}
+	if flow.ArchivedAt != nil {
+		return nil, ErrFlowArchived
+	}
+	rows, err := tx.Query(ctx,
+		`SELECT `+flowVersionCols+` FROM flow_versions WHERE id = $1::uuid AND flow_id = $2::uuid`,
+		versionID, flow.ID)
+	if err != nil {
+		return nil, err
+	}
+	version, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[FlowVersion])
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	snapshot, err := updateFlowDraftTx(ctx, tx, flow, version.Definition, expectedDraftChecksum, userID)
+	if err != nil {
+		return nil, err
+	}
+	if err := reconcileFlowCopilotProposalsAfterDraftUpdateTx(ctx, tx, flow.ID,
+		snapshot.Draft, snapshot.Checksum, ""); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return snapshot, nil
 }
 
 // PublishedFlowRef es un flujo publicado junto a su grafo vigente. Lo consume el

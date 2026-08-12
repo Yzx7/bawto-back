@@ -110,6 +110,10 @@ type catalogFixture struct {
 }
 
 func setupCatalogFixture(t *testing.T, handler http.HandlerFunc) catalogFixture {
+	return setupCatalogFixtureWithCredential(t, handler, "sk_test_clave")
+}
+
+func setupCatalogFixtureWithCredential(t *testing.T, handler http.HandlerFunc, plainCredential string) catalogFixture {
 	t.Helper()
 	url := os.Getenv("DATABASE_URL")
 	if url == "" {
@@ -156,7 +160,7 @@ func setupCatalogFixture(t *testing.T, handler http.HandlerFunc) catalogFixture 
 	// La URL apunta al servidor de prueba y no pasa por connectors.ValidateTarget.
 	// Es deliberado: esa lista protege lo que un administrador puede **guardar**
 	// desde el panel, no lo que construye una prueba del ejecutor.
-	credential, err := cipher.Encrypt("pk_test_clave")
+	credential, err := cipher.Encrypt(plainCredential)
 	if err != nil {
 		t.Fatalf("cifrar: %v", err)
 	}
@@ -170,6 +174,20 @@ func setupCatalogFixture(t *testing.T, handler http.HandlerFunc) catalogFixture 
 		con:      con,
 		bot:      &models.BotChannel{ID: randHex("bot_"), OrgID: org.ID},
 		requests: &requests,
+	}
+}
+
+func TestCatalogConnectionRechazaClavePublicableGuardada(t *testing.T) {
+	fixture := setupCatalogFixtureWithCredential(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("una credencial publicable no debe alcanzar la red")
+	}, "pk_test_legada")
+
+	_, _, err := fixture.con.catalogConnection(context.Background(), fixture.bot, "meudim")
+	if err == nil || !strings.Contains(err.Error(), "clave secreta") {
+		t.Fatalf("se esperaba rechazo explícito de pk_, llegó: %v", err)
+	}
+	if *fixture.requests != 0 {
+		t.Fatalf("la conexión inválida alcanzó la red: %d peticiones", *fixture.requests)
 	}
 }
 

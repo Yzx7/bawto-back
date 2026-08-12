@@ -237,6 +237,7 @@ func TestToolArgumentsAreInterpolated(t *testing.T) {
 		Nodes: []Node{
 			{ID: "tool", Kind: "tool", ToolRef: "data_mutate", Args: map[string]string{
 				"field.message": "{input.text}", "idempotencyKey": "message:{input.id}",
+				"field.optional": "{receipt.missing}",
 			}},
 			{ID: "ok", Kind: "action", Action: "end"},
 			{ID: "error", Kind: "action", Action: "end"},
@@ -255,6 +256,9 @@ func TestToolArgumentsAreInterpolated(t *testing.T) {
 		}})
 	if err != nil || got["field.message"] != "hola" || got["idempotencyKey"] != "message:wamid-1" {
 		t.Fatalf("args=%v err=%v", got, err)
+	}
+	if _, exists := got["field.optional"]; exists {
+		t.Fatalf("un campo opcional ausente llegó como marcador literal: %v", got)
 	}
 }
 

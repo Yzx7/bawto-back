@@ -177,11 +177,11 @@ func TestWhatsAppFlowEngineIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateFlow: %v", err)
 	}
-	canonical, checksum, err := engine.CanonicalChecksum(flowJSON)
+	_, checksum, err := engine.CanonicalChecksum(flowJSON)
 	if err != nil {
 		t.Fatalf("CanonicalChecksum: %v", err)
 	}
-	if _, err := models.PublishFlow(ctx, pool, bot.ID, flow.ID, canonical, checksum, uid); err != nil {
+	if _, err := models.PublishFlow(ctx, pool, bot.ID, flow.ID, checksum, uid, true); err != nil {
 		t.Fatalf("PublishFlow: %v", err)
 	}
 
@@ -260,11 +260,11 @@ func TestWebhookVariosFlujosMessageEligeYReanuda(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateFlow %s: %v", flowKey, err)
 		}
-		canonical, checksum, err := engine.CanonicalChecksum(json.RawMessage(graph))
+		_, checksum, err := engine.CanonicalChecksum(json.RawMessage(graph))
 		if err != nil {
 			t.Fatalf("CanonicalChecksum %s: %v", flowKey, err)
 		}
-		if _, err := models.PublishFlow(ctx, pool, bot.ID, flow.ID, canonical, checksum, uid); err != nil {
+		if _, err := models.PublishFlow(ctx, pool, bot.ID, flow.ID, checksum, uid, true); err != nil {
 			t.Fatalf("PublishFlow %s: %v", flowKey, err)
 		}
 	}

@@ -211,6 +211,101 @@ func TestValidateRejectsLoopbackWithoutWait(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsAutomaticCycleWithoutLoopbackRole(t *testing.T) {
+	flow := &Flow{
+		ID:      "automatic-cycle",
+		Name:    "Ciclo automático",
+		Trigger: Trigger{Type: "message", Match: "any"},
+		Nodes: []Node{
+			{ID: "first", Kind: "action", Action: "set"},
+			{ID: "second", Kind: "action", Action: "set"},
+		},
+		Edges: []Edge{
+			{ID: "start", Source: "trigger", Target: "first"},
+			{ID: "first-second", Source: "first", Target: "second"},
+			{ID: "second-first", Source: "second", Target: "first"},
+		},
+	}
+
+	err := Validate(flow)
+	if err == nil || !strings.Contains(err.Error(), "ciclo sin un nodo wait") {
+		t.Fatalf("un ciclo no marcado también debe rechazarse: %v", err)
+	}
+}
+
+func TestValidateRejectsAutomaticSelfCycle(t *testing.T) {
+	flow := &Flow{
+		ID:      "self-cycle",
+		Name:    "Autociclo",
+		Trigger: Trigger{Type: "message", Match: "any"},
+		Nodes:   []Node{{ID: "again", Kind: "action", Action: "set"}},
+		Edges: []Edge{
+			{ID: "start", Source: "trigger", Target: "again"},
+			{ID: "again-again", Source: "again", Target: "again"},
+		},
+	}
+
+	err := Validate(flow)
+	if err == nil || !strings.Contains(err.Error(), "ciclo sin un nodo wait") {
+		t.Fatalf("un autociclo automático también debe rechazarse: %v", err)
+	}
+}
+
+func TestValidateAcceptsUnmarkedCycleThatMustPassThroughWait(t *testing.T) {
+	flow := validAgentFlow()
+	flow.Edges[3].Role = ""
+
+	if err := Validate(flow); err != nil {
+		t.Fatalf("el role es presentación; el wait hace seguro al ciclo real: %v", err)
+	}
+}
+
+func TestValidateRejectsAutomaticSubcycleEvenIfSCCContainsWait(t *testing.T) {
+	flow := &Flow{
+		ID:      "mixed-cycle",
+		Name:    "Ciclo con bypass",
+		Trigger: Trigger{Type: "message", Match: "any"},
+		Nodes: []Node{
+			{ID: "router", Kind: "agent", Instruction: "Decide", Outputs: []string{"automatic", "pause"}, Silent: true},
+			{ID: "automatic", Kind: "action", Action: "set"},
+			{ID: "pause", Kind: "wait"},
+		},
+		Edges: []Edge{
+			{ID: "start", Source: "trigger", Target: "router"},
+			{ID: "to-automatic", Source: "router", SourceHandle: "automatic", Target: "automatic"},
+			{ID: "automatic-router", Source: "automatic", Target: "router"},
+			{ID: "to-pause", Source: "router", SourceHandle: "pause", Target: "pause"},
+			{ID: "pause-router", Source: "pause", Target: "router"},
+		},
+	}
+
+	err := Validate(flow)
+	if err == nil || !strings.Contains(err.Error(), "ciclo sin un nodo wait") {
+		t.Fatalf("un SCC con wait no debe ocultar un subciclo automático: %v", err)
+	}
+}
+
+func TestValidateRejectsLoopbackRoleThatDoesNotCloseCycle(t *testing.T) {
+	flow := &Flow{
+		ID:      "false-loopback",
+		Name:    "Retorno falso",
+		Trigger: Trigger{Type: "message", Match: "any"},
+		Nodes: []Node{
+			{ID: "message", Kind: "send", Body: "Listo"},
+			{ID: "done", Kind: "action", Action: "end"},
+		},
+		Edges: []Edge{
+			{ID: "start", Source: "trigger", Target: "message"},
+			{ID: "not-a-cycle", Source: "message", Target: "done", Role: "loopback"},
+		},
+	}
+
+	err := Validate(flow)
+	if err == nil || !strings.Contains(err.Error(), "no cierra un ciclo") {
+		t.Fatalf("el role loopback sigue exigiendo un ciclo real: %v", err)
+	}
+}
+
 // Las herramientas del agente no tienen ramas que validar —su resultado vuelve
 // al modelo, no a una arista—, pero sí alcance: el motor solo ejecuta las de su
 // registro, y la configuración que acota ese alcance es obligatoria. Fallar aquí
@@ -639,6 +734,9 @@ func TestValidatePagosDelPedido(t *testing.T) {
 	// La referencia sale del agente visual: receipt.operationCode.
 	if err := Validate(base("payment_submit", map[string]string{
 		"connection": "meudim", "paymentId": "{cobro.paymentId}", "reference": "{receipt.operationCode}",
+		"declaredAmount": "{receipt.amount}", "declaredAt": "{receipt.occurredAt}",
+		"channel": "{receipt.provider}", "payerName": "{receipt.payerName}",
+		"recipient": "{receipt.recipient}",
 	})); err != nil {
 		t.Fatalf("payment_submit válido rechazado: %v", err)
 	}

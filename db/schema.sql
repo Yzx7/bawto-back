@@ -476,6 +476,104 @@ ALTER TABLE flows DROP CONSTRAINT IF EXISTS flows_published_version_fk;
 ALTER TABLE flows ADD CONSTRAINT flows_published_version_fk
     FOREIGN KEY (published_version_id) REFERENCES flow_versions(id) ON DELETE SET NULL;
 
+-- COPILOT DE AUTORÍA -------------------------------------------
+-- La conversación prepara una copia candidata. Solo una propuesta confirmada
+-- por un editor puede escribir `flows.draft`; nunca toca la versión publicada.
+CREATE TABLE IF NOT EXISTS flow_copilot_sessions (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    bot_id          UUID        NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+    flow_id         UUID        NOT NULL REFERENCES flows(id) ON DELETE CASCADE,
+    created_by      TEXT        NOT NULL,
+    title           TEXT        NOT NULL DEFAULT '',
+    status          TEXT        NOT NULL DEFAULT 'active',
+    summary         TEXT        NOT NULL DEFAULT '',
+    next_sequence   BIGINT      NOT NULL DEFAULT 1,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    closed_at       TIMESTAMPTZ,
+    CHECK (status IN ('active', 'closed')),
+    CHECK (next_sequence > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_flow_copilot_sessions_owner
+    ON flow_copilot_sessions(flow_id, created_by, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS flow_copilot_turns (
+    id                         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id                 UUID        NOT NULL REFERENCES flow_copilot_sessions(id) ON DELETE CASCADE,
+    organization_id            UUID        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    created_by                 TEXT        NOT NULL,
+    sequence                   BIGINT      NOT NULL,
+    user_message               TEXT        NOT NULL,
+    assistant_message          TEXT,
+    status                     TEXT        NOT NULL DEFAULT 'running',
+    mode                       TEXT,
+    editor_revision            TEXT        NOT NULL,
+    persisted_draft_checksum   TEXT        NOT NULL,
+    working_draft_checksum     TEXT        NOT NULL,
+    tool_trace                 JSONB       NOT NULL DEFAULT '[]',
+    playbook_versions          JSONB       NOT NULL DEFAULT '[]',
+    capability_hash            TEXT,
+    resource_hash              TEXT,
+    knowledge_bundle_hash      TEXT,
+    error_code                 TEXT,
+    created_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at               TIMESTAMPTZ,
+    UNIQUE (session_id, sequence),
+    CHECK (sequence > 0),
+    CHECK (length(user_message) BETWEEN 1 AND 8000),
+    CHECK (status IN ('running', 'completed', 'failed', 'cancelled')),
+    CHECK (mode IS NULL OR mode IN ('question', 'explanation', 'proposal')),
+    CHECK (jsonb_typeof(tool_trace) = 'array'),
+    CHECK (jsonb_typeof(playbook_versions) = 'array')
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_flow_copilot_turns_running_user
+    ON flow_copilot_turns(organization_id, created_by) WHERE status = 'running';
+CREATE INDEX IF NOT EXISTS idx_flow_copilot_turns_session
+    ON flow_copilot_turns(session_id, sequence);
+
+CREATE TABLE IF NOT EXISTS flow_copilot_proposals (
+    id                         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    turn_id                    UUID        NOT NULL UNIQUE REFERENCES flow_copilot_turns(id) ON DELETE CASCADE,
+    session_id                 UUID        NOT NULL REFERENCES flow_copilot_sessions(id) ON DELETE CASCADE,
+    persisted_base             JSONB       NOT NULL,
+    persisted_base_checksum    TEXT        NOT NULL,
+    working_base               JSONB       NOT NULL,
+    working_base_checksum      TEXT        NOT NULL,
+    editor_revision            TEXT        NOT NULL,
+    candidate                  JSONB       NOT NULL,
+    candidate_checksum         TEXT        NOT NULL,
+    operations                 JSONB       NOT NULL DEFAULT '[]',
+    diff                       JSONB       NOT NULL DEFAULT '{}',
+    assumptions                JSONB       NOT NULL DEFAULT '[]',
+    requirements               JSONB       NOT NULL DEFAULT '[]',
+    diagnostics                JSONB       NOT NULL DEFAULT '[]',
+    playbook_versions          JSONB       NOT NULL DEFAULT '[]',
+    knowledge_bundle_hash      TEXT,
+    status                     TEXT        NOT NULL DEFAULT 'pending',
+    applied_by                 TEXT,
+    applied_at                 TIMESTAMPTZ,
+    dismissed_by               TEXT,
+    dismissed_at               TIMESTAMPTZ,
+    undone_by                  TEXT,
+    undone_at                  TIMESTAMPTZ,
+    created_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (status IN ('pending', 'applied', 'dismissed', 'stale', 'undone')),
+    CHECK (jsonb_typeof(persisted_base) = 'object'),
+    CHECK (jsonb_typeof(working_base) = 'object'),
+    CHECK (jsonb_typeof(candidate) = 'object'),
+    CHECK (jsonb_typeof(operations) = 'array'),
+    CHECK (jsonb_typeof(diff) = 'object'),
+    CHECK (jsonb_typeof(assumptions) = 'array'),
+    CHECK (jsonb_typeof(requirements) = 'array'),
+    CHECK (jsonb_typeof(diagnostics) = 'array'),
+    CHECK (jsonb_typeof(playbook_versions) = 'array')
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_flow_copilot_proposals_pending_session
+    ON flow_copilot_proposals(session_id) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_flow_copilot_proposals_created
+    ON flow_copilot_proposals(created_at DESC);
+
 -- EJECUCIONES DE FLUJO -----------------------------------------
 -- Un run representa una ejecución concreta para un registro y su destinatario.
 -- run_key impide que reinicios o dos workers manden el mismo recordatorio.
@@ -633,6 +731,7 @@ CREATE TABLE IF NOT EXISTS ai_usage_events (
     provider                    TEXT          NOT NULL,
     model                       TEXT          NOT NULL,
     provider_request_id         TEXT,
+    purpose                     TEXT          NOT NULL DEFAULT 'flow_runtime',
     input_tokens                BIGINT        NOT NULL DEFAULT 0,
     output_tokens               BIGINT        NOT NULL DEFAULT 0,
     cache_read_input_tokens     BIGINT        NOT NULL DEFAULT 0,
@@ -656,13 +755,15 @@ CREATE TABLE IF NOT EXISTS ai_usage_events (
     CHECK (cache_read_input_tokens >= 0 AND cache_creation_input_tokens >= 0),
     CHECK (input_usd_per_million >= 0 AND output_usd_per_million >= 0),
     CHECK (cache_read_usd_per_million >= 0 AND cache_write_usd_per_million >= 0),
-    CHECK (outcome IN ('ok','invalid_output'))
+    CHECK (outcome IN ('ok','invalid_output')),
+    CHECK (purpose IN ('flow_runtime','flow_authoring'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_usage_provider_request
     ON ai_usage_events(provider, provider_request_id)
     WHERE provider_request_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_ai_usage_org_time ON ai_usage_events(organization_id, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_usage_bot_time ON ai_usage_events(bot_id, occurred_at DESC) WHERE bot_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_ai_usage_org_purpose_time ON ai_usage_events(organization_id, purpose, occurred_at DESC);
 
 CREATE TABLE IF NOT EXISTS message_correlations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -738,7 +839,7 @@ $$ LANGUAGE plpgsql;
 DO $$
 DECLARE t TEXT;
 BEGIN
-    FOREACH t IN ARRAY ARRAY['organizations','memberships','bots','chats','contacts','billing_records','contact_fields','audiences','data_objects','data_fields','data_records','data_views','flows','channel_health','contact_preferences','external_connections']
+    FOREACH t IN ARRAY ARRAY['organizations','memberships','bots','chats','contacts','billing_records','contact_fields','audiences','data_objects','data_fields','data_records','data_views','flows','flow_copilot_sessions','channel_health','contact_preferences','external_connections']
     LOOP
         EXECUTE format('DROP TRIGGER IF EXISTS trg_%1$s_updated_at ON %1$s;', t);
         EXECUTE format(

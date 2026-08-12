@@ -113,9 +113,17 @@ func main() {
 		if definition.Trigger.Type != flow.TriggerType {
 			fail("trigger %q no coincide con %q", definition.Trigger.Type, flow.TriggerType)
 		}
-		flow, err = models.UpdateFlowDraft(ctx, pool, *botID, *flowID, raw, *actor)
+		current, snapshotErr := models.DraftSnapshotFromFlow(flow)
+		if snapshotErr != nil {
+			fail("checksum del borrador actual: %v", snapshotErr)
+		}
+		_, err = models.UpdateFlowDraft(ctx, pool, *botID, *flowID, raw, current.Checksum, *actor)
 		if err != nil {
 			fail("actualizar borrador: %v", err)
+		}
+		flow, err = models.GetFlow(ctx, pool, *botID, *flowID)
+		if err != nil {
+			fail("releer borrador: %v", err)
 		}
 		if flow == nil {
 			fail("el flujo dejó de estar disponible antes de escribir")

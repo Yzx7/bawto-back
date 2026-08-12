@@ -53,6 +53,18 @@ type Config struct {
 	MinimaxM3BaseURL string // MINIMAX_M3_BASE_URL (default https://api.minimax.io/anthropic)
 	MinimaxM3Model   string // MINIMAX_M3_MODEL (default MiniMax-M3)
 
+	// Copilot de autoría de flujos. Es una instancia deliberadamente separada de
+	// los agentes que atienden WhatsApp: puede usar otro proveedor/modelo y se
+	// deshabilita por sí sola si no está configurada.
+	CopilotEnabled           bool          // COPILOT_ENABLED
+	CopilotAIProvider        string        // COPILOT_AI_PROVIDER
+	CopilotAIBaseURL         string        // COPILOT_AI_BASE_URL
+	CopilotAIAPIKey          string        // COPILOT_AI_API_KEY
+	CopilotAIModel           string        // COPILOT_AI_MODEL
+	CopilotAIReasoningEffort string        // COPILOT_AI_REASONING_EFFORT
+	CopilotAIMaxSteps        int           // COPILOT_AI_MAX_STEPS
+	CopilotAITimeout         time.Duration // COPILOT_AI_TIMEOUT_SECONDS
+
 	// CORS: orígenes permitidos, separados por coma.
 	CorsOrigins string // CORS_ORIGINS
 
@@ -99,6 +111,10 @@ func Load() (*Config, error) {
 	v.SetDefault("AI_PROVIDER", "deepseek")
 	v.SetDefault("MINIMAX_M3_BASE_URL", "https://api.minimax.io/anthropic")
 	v.SetDefault("MINIMAX_M3_MODEL", "MiniMax-M3")
+	v.SetDefault("COPILOT_ENABLED", false)
+	v.SetDefault("COPILOT_AI_REASONING_EFFORT", "high")
+	v.SetDefault("COPILOT_AI_MAX_STEPS", 8)
+	v.SetDefault("COPILOT_AI_TIMEOUT_SECONDS", 90)
 	// Las cuatro tarifas **no** llevan default a propósito. Antes lo tenían, con
 	// los precios de MiniMax-M3, y eso convertía un cambio de modelo sin cambio
 	// de precios en meses de consumo registrado con la tarifa de otro — sin un
@@ -136,6 +152,14 @@ func Load() (*Config, error) {
 		MinimaxM3APIKey:           v.GetString("MINIMAX_M3_API_KEY"),
 		MinimaxM3BaseURL:          v.GetString("MINIMAX_M3_BASE_URL"),
 		MinimaxM3Model:            v.GetString("MINIMAX_M3_MODEL"),
+		CopilotEnabled:            v.GetBool("COPILOT_ENABLED"),
+		CopilotAIProvider:         strings.TrimSpace(v.GetString("COPILOT_AI_PROVIDER")),
+		CopilotAIBaseURL:          strings.TrimSpace(v.GetString("COPILOT_AI_BASE_URL")),
+		CopilotAIAPIKey:           strings.TrimSpace(v.GetString("COPILOT_AI_API_KEY")),
+		CopilotAIModel:            strings.TrimSpace(v.GetString("COPILOT_AI_MODEL")),
+		CopilotAIReasoningEffort:  strings.TrimSpace(v.GetString("COPILOT_AI_REASONING_EFFORT")),
+		CopilotAIMaxSteps:         v.GetInt("COPILOT_AI_MAX_STEPS"),
+		CopilotAITimeout:          time.Duration(v.GetInt("COPILOT_AI_TIMEOUT_SECONDS")) * time.Second,
 		CorsOrigins:               v.GetString("CORS_ORIGINS"),
 
 		SchedulerEnabled:          v.GetBool("SCHEDULER_ENABLED"),
@@ -191,4 +215,35 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// CopilotReadiness explica si el agente de autoría puede aceptar turnos. Una
+// configuración incompleta nunca impide arrancar el backend: solo mantiene el
+// Copilot apagado y deja intactas la edición y publicación manuales.
+func (cfg *Config) CopilotReadiness() (bool, string) {
+	if cfg == nil || !cfg.CopilotEnabled {
+		return false, "feature_disabled"
+	}
+	if cfg.CopilotAIAPIKey == "" {
+		return false, "missing_api_key"
+	}
+	if cfg.CopilotAIProvider == "" {
+		return false, "missing_provider"
+	}
+	if cfg.CopilotAIModel == "" {
+		return false, "missing_model"
+	}
+	if cfg.CopilotAIBaseURL == "" {
+		return false, "missing_base_url"
+	}
+	if cfg.CopilotAIReasoningEffort == "" {
+		return false, "missing_reasoning_effort"
+	}
+	if cfg.CopilotAIMaxSteps < 2 {
+		return false, "invalid_max_steps"
+	}
+	if cfg.CopilotAITimeout <= 0 {
+		return false, "invalid_timeout"
+	}
+	return true, ""
 }

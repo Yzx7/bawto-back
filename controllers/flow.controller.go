@@ -124,6 +124,8 @@ func (con *Controller) GetBotFlowByID(c *fiber.Ctx) error {
 	if err != nil {
 		return con.failErr(c, err)
 	}
+	capability := con.flowCopilotCapability()
+	flow.CopilotCapability = &capability
 	return con.ok(c, "ok", flow)
 }
 
@@ -133,7 +135,11 @@ func (con *Controller) GetBotFlowDraft(c *fiber.Ctx) error {
 	if err != nil {
 		return con.failErr(c, err)
 	}
-	return con.ok(c, "ok", flow.Draft)
+	snapshot, err := models.DraftSnapshotFromFlow(flow)
+	if err != nil {
+		return con.failFlow(c, "DraftSnapshotFromFlow", flow.BotID, err, "no se pudo leer el borrador")
+	}
+	return con.ok(c, "ok", snapshot)
 }
 
 // PUT /bots/:botId/flows/:flowId/draft — guarda el borrador (owner/admin/member).
@@ -146,15 +152,12 @@ func (con *Controller) UpdateBotFlowDraft(c *fiber.Ctx) error {
 	if flow.ArchivedAt != nil {
 		return con.fail(c, fiber.StatusConflict, models.ErrFlowArchived.Error())
 	}
-	body := c.Body()
-	if !json.Valid(body) {
-		return con.fail(c, fiber.StatusBadRequest, "flujo inválido (no es JSON)")
+	draft, expectedChecksum, problem := parseDraftUpdateBody(c.Body())
+	if problem != "" {
+		return con.fail(c, fiber.StatusBadRequest, problem)
 	}
-	var doc map[string]json.RawMessage
-	if json.Unmarshal(body, &doc) != nil {
-		return con.fail(c, fiber.StatusBadRequest, "el borrador debe ser un objeto JSON")
-	}
-	updated, err := models.UpdateFlowDraft(c.Context(), con.Env.Postgres, bot.ID, flow.ID, json.RawMessage(body), con.currentUserID(c))
+	updated, err := models.UpdateFlowDraft(c.Context(), con.Env.Postgres, bot.ID, flow.ID,
+		draft, expectedChecksum, con.currentUserID(c))
 	if err != nil {
 		return con.failFlow(c, "UpdateFlowDraft", bot.ID, err, "no se pudo guardar el borrador")
 	}
@@ -373,44 +376,40 @@ func (con *Controller) PublishBotFlow(c *fiber.Ctx) error {
 	if err != nil {
 		return con.failErr(c, err)
 	}
-	if len(flow.Audience) == 0 {
-		if _, err := con.requireOrgRole(c, bot.OrgID, "owner", "admin"); err != nil {
-			return con.fail(c, fiber.StatusForbidden,
-				"publicar un flujo sin audiencia atiende a todos los contactos del bot y requiere un administrador. "+
-					"Puedes publicarlo restringido a una audiencia, o pedir a un administrador que lo publique abierto.")
-		}
-	}
 	if flow.ArchivedAt != nil {
 		return con.fail(c, fiber.StatusConflict, models.ErrFlowArchived.Error())
 	}
-	if problem := validateFlowDefinition(flow.Draft, flow.TriggerType); problem != "" {
+	expectedDraftChecksum, problem := parseExpectedDraftChecksumBody(c.Body())
+	if problem != "" {
 		return con.fail(c, fiber.StatusBadRequest, problem)
 	}
-	var templateWarnings []string
+	membership, err := con.requireOrgRole(c, bot.OrgID)
+	if err != nil {
+		return con.failErr(c, err)
+	}
+	canPublishOpen := membership.Role == "owner" || membership.Role == "admin"
+	if len(flow.Audience) == 0 && !canPublishOpen {
+		return con.fail(c, fiber.StatusForbidden,
+			"publicar un flujo sin audiencia atiende a todos los contactos del bot y requiere un administrador. "+
+				"Puedes publicarlo restringido a una audiencia, o pedir a un administrador que lo publique abierto.")
+	}
 	if flow.TriggerType == "schedule" {
 		// Meta es la fuente de verdad: publicar fuerza una fotografía actual,
-		// en vez de confiar en una caché que podría haber quedado obsoleta.
+		// en vez de confiar en una caché que podría haber quedado obsoleta. La
+		// validación de esa fotografía se repite después sobre el draft bloqueado,
+		// dentro de PublishFlow.
 		if _, err := con.syncBotTemplates(c.Context(), bot); err != nil {
 			return con.fail(c, fiber.StatusBadGateway, "no se pudo confirmar las plantillas con Meta: "+err.Error())
 		}
-		templateValidation, err := models.ValidateFlowTemplates(c.Context(), con.Env.Postgres, bot.ID, flow.Draft)
-		if err != nil {
-			return con.fail(c, fiber.StatusBadRequest, err.Error())
-		}
-		templateWarnings = templateValidation.Warnings
 	}
-	definition, checksum, err := engine.CanonicalChecksum(flow.Draft)
-	if err != nil {
-		return con.fail(c, fiber.StatusBadRequest, err.Error())
-	}
-	res, err := models.PublishFlow(c.Context(), con.Env.Postgres, bot.ID, flow.ID, definition, checksum, con.currentUserID(c))
+	res, err := models.PublishFlow(c.Context(), con.Env.Postgres, bot.ID, flow.ID,
+		expectedDraftChecksum, con.currentUserID(c), canPublishOpen)
 	if err != nil {
 		return con.failFlow(c, "PublishFlow", bot.ID, err, "no se pudo publicar el flujo")
 	}
 	if res == nil {
 		return con.fail(c, fiber.StatusNotFound, "flujo no encontrado")
 	}
-	res.Warnings = templateWarnings
 	msg := "flujo publicado"
 	if !res.Created {
 		msg = "sin cambios: el grafo ya estaba publicado en esta versión"
@@ -490,8 +489,12 @@ func (con *Controller) RestoreBotFlowVersion(c *fiber.Ctx) error {
 	if flow.ArchivedAt != nil {
 		return con.fail(c, fiber.StatusConflict, models.ErrFlowArchived.Error())
 	}
+	expectedDraftChecksum, problem := parseExpectedDraftChecksumBody(c.Body())
+	if problem != "" {
+		return con.fail(c, fiber.StatusBadRequest, problem)
+	}
 	updated, err := models.RestoreFlowVersion(c.Context(), con.Env.Postgres, bot.ID, flow.ID,
-		c.Params("versionId"), con.currentUserID(c))
+		c.Params("versionId"), expectedDraftChecksum, con.currentUserID(c))
 	if err != nil {
 		return con.failFlow(c, "RestoreFlowVersion", bot.ID, err, "no se pudo restaurar la versión")
 	}
@@ -520,13 +523,72 @@ func validateFlowDefinition(raw json.RawMessage, triggerType string) string {
 	return ""
 }
 
+func parseDraftUpdateBody(body []byte) (json.RawMessage, string, string) {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil || envelope == nil {
+		return nil, "", "input inválido: se esperaba {draft, expectedChecksum}"
+	}
+	if len(envelope) != 2 || envelope["draft"] == nil || envelope["expectedChecksum"] == nil {
+		return nil, "", "input inválido: se esperaba únicamente {draft, expectedChecksum}"
+	}
+	var expectedChecksum string
+	if err := json.Unmarshal(envelope["expectedChecksum"], &expectedChecksum); err != nil || strings.TrimSpace(expectedChecksum) == "" {
+		return nil, "", "expectedChecksum es obligatorio"
+	}
+	draft := envelope["draft"]
+	if problem := validateDraftShape(draft); problem != "" {
+		return nil, "", problem
+	}
+	return draft, strings.TrimSpace(expectedChecksum), ""
+}
+
+// validateDraftShape admite un flujo incompleto, pero no otra raíz JSON. Evita
+// que un cliente viejo o un despliegue en orden incorrecto guarde el envelope
+// CAS como si fuera el propio grafo.
+func validateDraftShape(raw json.RawMessage) string {
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &doc); err != nil || doc == nil {
+		return "draft debe ser un objeto JSON con shape de Flow"
+	}
+	var id, name string
+	var trigger map[string]json.RawMessage
+	var nodes, edges []json.RawMessage
+	if json.Unmarshal(doc["id"], &id) != nil || json.Unmarshal(doc["name"], &name) != nil ||
+		json.Unmarshal(doc["trigger"], &trigger) != nil || trigger == nil ||
+		json.Unmarshal(doc["nodes"], &nodes) != nil || nodes == nil ||
+		json.Unmarshal(doc["edges"], &edges) != nil || edges == nil {
+		return "draft debe contener id, name, trigger, nodes y edges con tipos de Flow"
+	}
+	return ""
+}
+
+func parseExpectedDraftChecksumBody(body []byte) (string, string) {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil || envelope == nil || len(envelope) != 1 || envelope["expectedDraftChecksum"] == nil {
+		return "", "input inválido: se esperaba {expectedDraftChecksum}"
+	}
+	var checksum string
+	if err := json.Unmarshal(envelope["expectedDraftChecksum"], &checksum); err != nil || strings.TrimSpace(checksum) == "" {
+		return "", "expectedDraftChecksum es obligatorio"
+	}
+	return strings.TrimSpace(checksum), ""
+}
+
 // failFlow traduce los errores de dominio de models/flow.go a códigos HTTP.
 func (con *Controller) failFlow(c *fiber.Ctx, op, botID string, err error, fallback string) error {
+	var conflict *models.DraftConflictError
+	var validation *models.FlowValidationError
 	switch {
+	case errors.As(err, &conflict):
+		return c.Status(fiber.StatusConflict).JSON(types.ErrData(conflict.Error(), conflict))
+	case errors.As(err, &validation):
+		return con.fail(c, fiber.StatusBadRequest, validation.Error())
 	case errors.Is(err, models.ErrFlowKeyTaken), errors.Is(err, models.ErrFlowFallbackTaken):
 		return con.fail(c, fiber.StatusConflict, err.Error())
 	case errors.Is(err, models.ErrFlowArchived):
 		return con.fail(c, fiber.StatusConflict, err.Error())
+	case errors.Is(err, models.ErrFlowPublishOpenAudience):
+		return con.fail(c, fiber.StatusForbidden, err.Error())
 	case errors.Is(err, models.ErrFlowInvalidKey):
 		return con.fail(c, fiber.StatusBadRequest, err.Error())
 	}

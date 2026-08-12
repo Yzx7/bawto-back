@@ -98,6 +98,17 @@ func RegisterHTTP(app *fiber.App, e *env.Env) {
 	bots.Get("/:botId/flows/:flowId/versions", con.ListBotFlowVersions)
 	bots.Post("/:botId/flows/:flowId/versions/:versionId/restore", con.RestoreBotFlowVersion)
 	bots.Post("/:botId/flows/:flowId/duplicate", con.DuplicateBotFlow)
+	// Copilot de autoría. El modelo solo puede producir propuestas; apply/undo
+	// siguen siendo acciones humanas autenticadas y nunca publican.
+	bots.Post("/:botId/flows/:flowId/copilot/sessions", con.CreateBotFlowCopilotSession)
+	bots.Get("/:botId/flows/:flowId/copilot/sessions", con.ListBotFlowCopilotSessions)
+	bots.Get("/:botId/flows/:flowId/copilot/sessions/:sessionId", con.GetBotFlowCopilotSession)
+	bots.Post("/:botId/flows/:flowId/copilot/sessions/:sessionId/turns", con.CreateBotFlowCopilotTurn)
+	bots.Post("/:botId/flows/:flowId/copilot/turns/:turnId/cancel", con.CancelBotFlowCopilotTurn)
+	bots.Post("/:botId/flows/:flowId/copilot/proposals/:proposalId/apply", con.ApplyBotFlowCopilotProposal)
+	bots.Post("/:botId/flows/:flowId/copilot/proposals/:proposalId/dismiss", con.DismissBotFlowCopilotProposal)
+	bots.Post("/:botId/flows/:flowId/copilot/proposals/:proposalId/undo", con.UndoBotFlowCopilotProposal)
+	bots.Post("/:botId/flows/:flowId/copilot/sessions/:sessionId/close", con.CloseBotFlowCopilotSession)
 	// Interfaz operativa (§10.2 y §10.3). El preview no escribe nada; el
 	// historial y sus acciones se acotan siempre por bot.
 	bots.Post("/:botId/flows/:flowId/schedule/preview", con.PreviewBotFlowSchedule)

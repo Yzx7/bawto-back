@@ -259,11 +259,27 @@ type TemplateValidation struct {
 	Warnings []string `json:"warnings"`
 }
 
+type flowTemplateQueryer interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
 // ValidateFlowTemplates valida únicamente capacidades dependientes del WABA.
 // engine.Validate sigue siendo la fuente de verdad del grafo.
 func ValidateFlowTemplates(
 	ctx context.Context,
 	pool *pgxpool.Pool,
+	botID string,
+	raw json.RawMessage,
+) (*TemplateValidation, error) {
+	return validateFlowTemplatesWithQuery(ctx, pool, botID, raw)
+}
+
+// validateFlowTemplatesWithQuery acepta tanto el pool como una pgx.Tx. Publicar
+// lo usa con la transacción que ya bloqueó flows, de modo que nunca valide las
+// plantillas de un draft distinto al que terminará versionando.
+func validateFlowTemplatesWithQuery(
+	ctx context.Context,
+	q flowTemplateQueryer,
 	botID string,
 	raw json.RawMessage,
 ) (*TemplateValidation, error) {
@@ -275,11 +291,18 @@ func ValidateFlowTemplates(
 	if flow.Trigger.Type != "schedule" {
 		return result, nil
 	}
-	bot, err := GetBot(ctx, pool, botID)
+	botRows, err := q.Query(ctx, `SELECT `+botCols+` FROM bots WHERE id = $1::uuid`, botID)
 	if err != nil {
 		return nil, err
 	}
-	if bot == nil || bot.WabaID == nil || strings.TrimSpace(*bot.WabaID) == "" {
+	bot, err := pgx.CollectExactlyOneRow(botRows, pgx.RowToStructByName[Bot])
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, errors.New("bot no encontrado")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if bot.WabaID == nil || strings.TrimSpace(*bot.WabaID) == "" {
 		return nil, errors.New("el bot no tiene un WABA asociado")
 	}
 	for _, node := range flow.Nodes {
@@ -289,13 +312,20 @@ func ValidateFlowTemplates(
 		if strings.TrimSpace(node.TemplateLanguage) == "" {
 			return nil, fmt.Errorf("nodo %s: la plantilla requiere idioma", node.ID)
 		}
-		template, err := GetChannelTemplateForBot(ctx, pool, botID, node.TemplateName, node.TemplateLanguage)
+		templateRows, err := q.Query(ctx, `SELECT `+channelTemplateCols+` FROM channel_templates t
+			JOIN bots b ON b.waba_id=t.waba_id
+			WHERE b.id=$1::uuid AND t.name=$2 AND t.language=$3`,
+			botID, node.TemplateName, node.TemplateLanguage)
 		if err != nil {
 			return nil, err
 		}
-		if template == nil {
+		template, err := pgx.CollectExactlyOneRow(templateRows, pgx.RowToStructByName[ChannelTemplate])
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("nodo %s: la plantilla %s/%s no existe en el WABA; sincroniza el catálogo",
 				node.ID, node.TemplateName, node.TemplateLanguage)
+		}
+		if err != nil {
+			return nil, err
 		}
 		if !strings.EqualFold(template.Status, "APPROVED") {
 			return nil, fmt.Errorf("nodo %s: la plantilla %s/%s está %s, no APPROVED",

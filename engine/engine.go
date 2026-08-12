@@ -406,6 +406,15 @@ func interpolateArgs(args map[string]string, vars map[string]string) map[string]
 	}
 	result := make(map[string]string, len(args))
 	for key, value := range args {
+		trimmed := strings.TrimSpace(value)
+		if match := varRe.FindStringSubmatch(trimmed); len(match) == 2 && match[0] == trimmed {
+			if _, exists := vars[match[1]]; !exists {
+				// Un outputField desconocido se omite por contrato. Si el argumento
+				// opcional conservara el marcador literal, terminaría enviando
+				// "{receipt.amount}" a la API en vez de no enviar el campo.
+				continue
+			}
+		}
 		result[key] = interpolate(value, vars)
 	}
 	return result

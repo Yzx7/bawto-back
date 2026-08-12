@@ -1,0 +1,1352 @@
+{
+  "id": "flow_waa_tienda",
+  "name": "WAA · Tienda Meudim",
+  "edges": [
+    {
+      "id": "e_trigger_router",
+      "source": "trigger",
+      "target": "n_entry_router"
+    },
+    {
+      "id": "e_router_image",
+      "source": "n_entry_router",
+      "target": "n_classify_payment",
+      "sourceHandle": "image"
+    },
+    {
+      "id": "e_router_default",
+      "source": "n_entry_router",
+      "target": "n_input_unsupported",
+      "sourceHandle": "default"
+    },
+    {
+      "id": "e_espera_agente",
+      "role": "loopback",
+      "source": "n_espera",
+      "target": "n_entry_router"
+    },
+    {
+      "id": "e_payment_wait_router",
+      "source": "n_payment_wait",
+      "target": "n_payment_input_router"
+    },
+    {
+      "id": "e_payment_router_image",
+      "source": "n_payment_input_router",
+      "target": "n_classify_payment",
+      "sourceHandle": "image"
+    },
+    {
+      "id": "e_payment_router_default",
+      "source": "n_payment_input_router",
+      "target": "n_payment_need_image",
+      "sourceHandle": "default"
+    },
+    {
+      "id": "e_payment_valid_save",
+      "source": "n_classify_payment",
+      "target": "n_save_payment",
+      "sourceHandle": "valid"
+    },
+    {
+      "id": "e_payment_reviewable_save",
+      "source": "n_classify_payment",
+      "target": "n_save_payment",
+      "sourceHandle": "needs_review"
+    },
+    {
+      "id": "e_payment_unreadable_retry",
+      "source": "n_classify_payment",
+      "target": "n_payment_retry",
+      "sourceHandle": "unreadable"
+    },
+    {
+      "id": "e_payment_not_receipt",
+      "source": "n_classify_payment",
+      "target": "n_payment_not_receipt",
+      "sourceHandle": "not_receipt"
+    },
+    {
+      "id": "e_payment_saved",
+      "source": "n_save_payment",
+      "target": "n_payment_needs_review",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_payment_save_error",
+      "source": "n_save_payment",
+      "target": "n_payment_error",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_payment_review",
+      "source": "n_payment_needs_review",
+      "target": "n_activate_subscription",
+      "sourceHandle": "true"
+    },
+    {
+      "id": "e_payment_confirmed",
+      "source": "n_payment_needs_review",
+      "target": "n_payment_review",
+      "sourceHandle": "false"
+    },
+    {
+      "id": "e_payment_ok_end",
+      "source": "n_payment_ok",
+      "target": "n_fin"
+    },
+    {
+      "id": "e_payment_review_handoff",
+      "source": "n_payment_review",
+      "target": "n_fin"
+    },
+    {
+      "id": "e_payment_error_handoff",
+      "source": "n_payment_error",
+      "target": "n_derivar"
+    },
+    {
+      "id": "e_unsupported_wait",
+      "source": "n_input_unsupported",
+      "target": "n_espera"
+    },
+    {
+      "id": "e_derivar_fin",
+      "source": "n_derivar",
+      "target": "n_fin"
+    },
+    {
+      "id": "xy-edge__n_payment_need_imageout-n_espera",
+      "source": "n_payment_need_image",
+      "target": "n_espera",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "xy-edge__n_payment_not_receiptout-n_espera",
+      "source": "n_payment_not_receipt",
+      "target": "n_espera",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "xy-edge__n_payment_retryout-n_espera",
+      "source": "n_payment_retry",
+      "target": "n_espera",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_profile_ok",
+      "source": "n_read_profile",
+      "target": "n_profile_router",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_profile_err",
+      "source": "n_read_profile",
+      "target": "n_sin_context",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_profile_seg",
+      "source": "n_profile_router",
+      "target": "n_read_segment",
+      "sourceHandle": "segmentado"
+    },
+    {
+      "id": "e_profile_def",
+      "source": "n_profile_router",
+      "target": "n_sin_context",
+      "sourceHandle": "default"
+    },
+    {
+      "id": "e_segment_ok",
+      "source": "n_read_segment",
+      "target": "n_segment_router",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_segment_err",
+      "source": "n_read_segment",
+      "target": "n_sin_context",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_segment_ctx",
+      "source": "n_segment_router",
+      "target": "n_set_context",
+      "sourceHandle": "contexto"
+    },
+    {
+      "id": "e_segment_asesor",
+      "source": "n_segment_router",
+      "target": "n_derivar",
+      "sourceHandle": "asesor"
+    },
+    {
+      "id": "e_segment_def",
+      "source": "n_segment_router",
+      "target": "n_sin_context",
+      "sourceHandle": "default"
+    },
+    {
+      "id": "e_ctx_agente",
+      "source": "n_set_context",
+      "target": "n_agente"
+    },
+    {
+      "id": "e_noctx_agente",
+      "source": "n_sin_context",
+      "target": "n_agente"
+    },
+    {
+      "id": "xy-edge__n_entry_routerconversation-router_768deb23",
+      "source": "n_entry_router",
+      "target": "router_768deb23",
+      "sourceHandle": "conversation"
+    },
+    {
+      "id": "xy-edge__router_768deb23caso_1-n_segment_router",
+      "source": "router_768deb23",
+      "target": "n_segment_router",
+      "sourceHandle": "caso_1"
+    },
+    {
+      "id": "xy-edge__router_768deb23default-n_read_profile",
+      "source": "router_768deb23",
+      "target": "n_read_profile",
+      "sourceHandle": "default"
+    },
+    {
+      "id": "e_subscription_activated",
+      "source": "n_activate_subscription",
+      "target": "n_payment_ok",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_subscription_error",
+      "source": "n_activate_subscription",
+      "target": "n_payment_error",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_orchestrator_bawto",
+      "source": "n_agente",
+      "target": "n_read_plans",
+      "sourceHandle": "bawto"
+    },
+    {
+      "id": "e_orchestrator_services",
+      "source": "n_agente",
+      "target": "n_read_services",
+      "sourceHandle": "servicios"
+    },
+    {
+      "id": "e_orchestrator_payment",
+      "source": "n_agente",
+      "target": "n_payment_specialist",
+      "sourceHandle": "pago"
+    },
+    {
+      "id": "e_orchestrator_clarify",
+      "source": "n_agente",
+      "target": "n_espera",
+      "sourceHandle": "aclarar"
+    },
+    {
+      "id": "e_orchestrator_advisor",
+      "source": "n_agente",
+      "target": "n_derivar",
+      "sourceHandle": "asesor"
+    },
+    {
+      "id": "e_read_plans_ok",
+      "source": "n_read_plans",
+      "target": "n_bawto_specialist",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_read_plans_error",
+      "source": "n_read_plans",
+      "target": "n_derivar",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_bawto_charge",
+      "source": "n_bawto_specialist",
+      "target": "n_render_payment_methods",
+      "sourceHandle": "cobrar"
+    },
+    {
+      "id": "e_bawto_advisor",
+      "source": "n_bawto_specialist",
+      "target": "n_derivar",
+      "sourceHandle": "asesor"
+    },
+    {
+      "id": "e_bawto_talk",
+      "source": "n_bawto_specialist",
+      "target": "n_espera",
+      "sourceHandle": "conversar"
+    },
+    {
+      "id": "e_read_services_ok",
+      "source": "n_read_services",
+      "target": "n_services_specialist",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_read_services_error",
+      "source": "n_read_services",
+      "target": "n_derivar",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_services_charge",
+      "source": "n_services_specialist",
+      "target": "n_render_payment_methods",
+      "sourceHandle": "cobrar"
+    },
+    {
+      "id": "e_services_advisor",
+      "source": "n_services_specialist",
+      "target": "n_derivar",
+      "sourceHandle": "asesor"
+    },
+    {
+      "id": "e_services_talk",
+      "source": "n_services_specialist",
+      "target": "n_espera",
+      "sourceHandle": "conversar"
+    },
+    {
+      "id": "e_payment_charge",
+      "source": "n_payment_specialist",
+      "target": "n_render_payment_methods",
+      "sourceHandle": "cobrar"
+    },
+    {
+      "id": "e_payment_advisor",
+      "source": "n_payment_specialist",
+      "target": "n_derivar",
+      "sourceHandle": "asesor"
+    },
+    {
+      "id": "e_payment_talk",
+      "source": "n_payment_specialist",
+      "target": "n_espera",
+      "sourceHandle": "conversar"
+    },
+    {
+      "id": "e_payment_method_read",
+      "source": "n_render_payment_methods",
+      "target": "n_payment_method_router",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_payment_method_read_error",
+      "source": "n_render_payment_methods",
+      "target": "n_payment_method_unavailable",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_payment_method_configured",
+      "source": "n_payment_method_router",
+      "target": "n_send_payment_instructions",
+      "sourceHandle": "configured"
+    },
+    {
+      "id": "e_payment_method_missing",
+      "source": "n_payment_method_router",
+      "target": "n_payment_method_unavailable",
+      "sourceHandle": "default"
+    },
+    {
+      "id": "e_payment_instructions_sent",
+      "source": "n_send_payment_instructions",
+      "target": "n_payment_wait"
+    },
+    {
+      "id": "e_payment_method_handoff",
+      "source": "n_payment_method_unavailable",
+      "target": "n_payment_method_handoff"
+    },
+    {
+      "id": "e_payment_handoff_end",
+      "source": "n_payment_method_handoff",
+      "target": "n_fin"
+    },
+    {
+      "id": "e_prod_1",
+      "source": "n_agente",
+      "target": "n_products_specialist",
+      "sourceHandle": "productos"
+    },
+    {
+      "id": "e_prod_2",
+      "source": "n_products_specialist",
+      "target": "n_order_ready_router",
+      "sourceHandle": "comprar"
+    },
+    {
+      "id": "e_prod_3",
+      "source": "n_products_specialist",
+      "target": "n_espera",
+      "sourceHandle": "conversar"
+    },
+    {
+      "id": "e_prod_4",
+      "source": "n_products_specialist",
+      "target": "n_derivar",
+      "sourceHandle": "asesor"
+    },
+    {
+      "id": "e_prod_5",
+      "source": "n_order_ready_router",
+      "target": "n_create_order",
+      "sourceHandle": "listo"
+    },
+    {
+      "id": "e_prod_6",
+      "source": "n_order_ready_router",
+      "target": "n_espera",
+      "sourceHandle": "default"
+    },
+    {
+      "id": "e_prod_7",
+      "source": "n_create_order",
+      "target": "n_payment_intent",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_prod_8",
+      "source": "n_create_order",
+      "target": "n_order_failed",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_prod_9",
+      "source": "n_order_failed",
+      "target": "n_espera",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_prod_10",
+      "source": "n_payment_intent",
+      "target": "n_send_order_payment",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_prod_11",
+      "source": "n_payment_intent",
+      "target": "n_derivar",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_prod_12",
+      "source": "n_send_order_payment",
+      "target": "n_store_receipt_wait",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_prod_13",
+      "source": "n_store_receipt_wait",
+      "target": "n_store_receipt",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_prod_14",
+      "source": "n_store_receipt",
+      "target": "n_store_payment_submit",
+      "sourceHandle": "valid"
+    },
+    {
+      "id": "e_prod_15",
+      "source": "n_store_receipt",
+      "target": "n_store_payment_submit",
+      "sourceHandle": "needs_review"
+    },
+    {
+      "id": "e_prod_16",
+      "source": "n_store_receipt",
+      "target": "n_store_payment_retry",
+      "sourceHandle": "unreadable"
+    },
+    {
+      "id": "e_prod_17",
+      "source": "n_store_receipt",
+      "target": "n_store_payment_retry",
+      "sourceHandle": "not_receipt"
+    },
+    {
+      "id": "e_prod_18",
+      "source": "n_store_payment_submit",
+      "target": "n_store_amount_ok",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_prod_19",
+      "source": "n_store_payment_submit",
+      "target": "n_derivar",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_prod_20",
+      "source": "n_store_payment_done",
+      "target": "n_fin",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_prod_21",
+      "role": "loopback",
+      "source": "n_store_payment_retry",
+      "target": "n_store_receipt_wait",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_prod_22",
+      "source": "n_store_amount_ok",
+      "target": "n_store_payment_done",
+      "sourceHandle": "true"
+    },
+    {
+      "id": "e_prod_23",
+      "source": "n_store_amount_ok",
+      "target": "n_store_amount_mismatch",
+      "sourceHandle": "false"
+    },
+    {
+      "id": "e_prod_24",
+      "source": "n_store_amount_mismatch",
+      "target": "n_derivar",
+      "sourceHandle": "out"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "n_entry_router",
+      "pos": {
+        "x": 1269.349270117372,
+        "y": -159.8300434358918
+      },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "conversation",
+          "label": "Texto o interacción",
+          "expression": "input.contentType in (text, interactive)"
+        },
+        {
+          "id": "image",
+          "label": "Imagen",
+          "expression": "input.contentType == image"
+        }
+      ]
+    },
+    {
+      "id": "n_agente",
+      "pos": {
+        "x": -1395.7348827549179,
+        "y": -595.1747564542377
+      },
+      "kind": "agent",
+      "silent": false,
+      "outputs": [
+        "bawto",
+        "servicios",
+        "pago",
+        "aclarar",
+        "asesor",
+        "productos"
+      ],
+      "replyOn": [
+        "aclarar"
+      ],
+      "agentRole": "orchestrator",
+      "contextMode": "recent",
+      "instruction": "Eres el orquestador conversacional de Sistemuino. Tu trabajo es comprender qué necesita la persona antes de entregarla al especialista correcto. No ejecutas herramientas, no das precios, no inventas servicios y no intentas resolver todavía el tema especializado.\n\nLee el mensaje actual y todo el historial reciente. Elige exactamente una rama:\n\n- bawto: automatización de WhatsApp, chatbot, agentes, flujos, planes, precios, capacidades, código de activación o compra de una suscripción Bawto.\n- servicios: páginas web, ecommerce, infraestructura, IoT, tarjetas digitales u otro servicio tecnológico de Energy Company.\n- productos: quiere comprar, cotizar o saber el precio, el stock o las características de un artículo físico de la tienda Sistemuino —sensores, módulos, placas, pantallas, componentes electrónicos—. Usa esta rama también para «¿tienen X?» y «¿cuánto cuesta X?». Si lo que pide es un desarrollo o un servicio a medida, usa servicios.\n- pago: afirma que ya pagó, enviará un comprobante, desea registrar un pago o reporta un problema con un cobro. Si todavía está eligiendo un plan Bawto, usa bawto.\n- asesor: pide explícitamente una persona, está frustrado o plantea una solución a medida que no puede ubicarse con seguridad en los temas anteriores.\n- aclarar: aún falta contexto para elegir con seguridad.\n\nCuando elijas aclarar, responde al cliente con una sola pregunta breve, natural y concreta que reduzca la ambigüedad. Apóyate en lo que ya dijo, no repitas preguntas contestadas y no muestres un menú genérico si ya existe una pista. Puedes elegir aclarar en varios turnos hasta comprender el objetivo, pero cada pregunta debe aportar información nueva y tratando de dirigir la conversación hacia alguna de las ramas.\n\nCuando el tema ya esté definido, elige su rama inmediatamente. Tu texto no se enviará en esas ramas porque el especialista responderá en el mismo turno. Ante duda real, pregunta; no adivines."
+    },
+    {
+      "id": "n_payment_wait",
+      "pos": {
+        "x": 650,
+        "y": -1420
+      },
+      "kind": "wait",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_payment_input_router",
+      "pos": {
+        "x": 436.03589779239417,
+        "y": -1299.2340322205755
+      },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "image",
+          "label": "Imagen",
+          "expression": "input.contentType == image"
+        }
+      ]
+    },
+    {
+      "id": "n_payment_need_image",
+      "pos": {
+        "x": 470.2659955938708,
+        "y": -930.8495390817016
+      },
+      "body": "Para registrar el cobro necesito una foto o captura completa del comprobante. Envíala nítida y sin recortes; deben verse fecha, importe y operación.",
+      "kind": "send"
+    },
+    {
+      "id": "n_classify_payment",
+      "pos": {
+        "x": 1574.9022988854545,
+        "y": -2.5817800828952926
+      },
+      "kind": "agent",
+      "saveAs": "receipt",
+      "silent": true,
+      "accepts": [
+        "text",
+        "interactive",
+        "image"
+      ],
+      "outputs": [
+        "valid",
+        "needs_review",
+        "unreadable",
+        "not_receipt"
+      ],
+      "agentRole": "specialist",
+      "contextMode": "none",
+      "instruction": "Analiza únicamente la imagen actual como posible comprobante de pago peruano enviado a Sistemuino. No uses el historial para completar datos que no aparezcan en la captura.\n\nElige valid solo si la imagen muestra una operación exitosa y se distinguen con claridad el importe, la fecha/hora y el número o código de operación. Elige needs_review si parece un comprobante exitoso pero falta algún dato, hay ambigüedad o la confianza no es suficiente. Elige unreadable si la captura no puede leerse. Elige not_receipt si la imagen no es un comprobante de pago.\n\nExtrae únicamente datos visibles y no inventes. provider debe ser exactamente uno de estos valores canónicos en minúsculas: yape, plin, bcp, interbank u other. El proveedor es el canal del comprobante, no la red del destinatario: si aparece el logo de Plin y dice Pago exitoso, usa plin aunque la app sea de Interbank; usa bcp para una transferencia emitida por BCP e interbank para una transferencia bancaria de Interbank que no sea Plin. amount es el importe transferido sin comisión; currency usa ISO 4217; occurredAt usa RFC3339 con la zona de Perú (-05:00); operationCode conserva ceros iniciales; recipient es el destinatario visible; confidence va de 0 a 1.",
+      "outputFields": [
+        {
+          "key": "provider",
+          "type": "string",
+          "description": "Canal canónico del comprobante; exactamente yape, plin, bcp, interbank u other."
+        },
+        {
+          "key": "amount",
+          "type": "number",
+          "description": "Importe transferido, sin comisión."
+        },
+        {
+          "key": "currency",
+          "type": "string",
+          "description": "Moneda en código ISO 4217, por ejemplo PEN."
+        },
+        {
+          "key": "occurredAt",
+          "type": "datetime",
+          "description": "Fecha y hora visibles de la operación, en RFC3339 y zona de Perú (-05:00)."
+        },
+        {
+          "key": "operationCode",
+          "type": "string",
+          "description": "Número o código de operación, conservando ceros iniciales."
+        },
+        {
+          "key": "recipient",
+          "type": "string",
+          "description": "Nombre del destinatario visible en el comprobante."
+        },
+        {
+          "key": "confidence",
+          "type": "number",
+          "description": "Confianza global de la extracción entre 0 y 1."
+        }
+      ]
+    },
+    {
+      "id": "n_save_payment",
+      "pos": {
+        "x": 1976.454164867365,
+        "y": -177.6322699422616
+      },
+      "args": {
+        "object": "cobros",
+        "operation": "create",
+        "field.fecha": "{receipt.occurredAt}",
+        "field.monto": "{receipt.amount}",
+        "field.estado": "aceptado",
+        "field.moneda": "{receipt.currency}",
+        "idempotencyKey": "payment:{input.id}",
+        "field.confianza": "{receipt.confidence}",
+        "field.operacion": "{receipt.operationCode}",
+        "field.proveedor": "{receipt.provider}",
+        "field.destinatario": "{receipt.recipient}",
+        "linkCurrentContact": "false"
+      },
+      "kind": "tool",
+      "saveAs": "payment_record",
+      "toolRef": "data_mutate"
+    },
+    {
+      "id": "n_payment_needs_review",
+      "pos": {
+        "x": 2370.7645674977903,
+        "y": -266.84572884585305
+      },
+      "kind": "condition",
+      "expression": "!empty(sale.organizationCode) && !empty(sale.planKey) && !empty(sale.billingCycle)"
+    },
+    {
+      "id": "n_payment_ok",
+      "pos": {
+        "x": 2923.2819933285946,
+        "y": 174.21791545424966
+      },
+      "body": "Pago recepcionado y acceso activado. Tu organización ya tiene el plan {sale.planKey}; la vigencia puede verse en Organización dentro del panel.",
+      "kind": "send"
+    },
+    {
+      "id": "n_payment_review",
+      "pos": {
+        "x": 2918.1656792424014,
+        "y": -181.37618529626
+      },
+      "body": "Pago recepcionado y registrado. Como este comprobante no venía de una compra iniciada aquí, conservé la evidencia sin cambiar el plan de ninguna organización.",
+      "kind": "send"
+    },
+    {
+      "id": "n_payment_retry",
+      "pos": {
+        "x": -589.8498094772706,
+        "y": 630.953267618072
+      },
+      "body": "No pude leer el comprobante con suficiente claridad. Envía otra foto o captura completa, nítida y sin recortes; deben verse fecha, importe y operación.",
+      "kind": "send"
+    },
+    {
+      "id": "n_payment_not_receipt",
+      "pos": {
+        "x": -589.8106299307735,
+        "y": 427.50847856896183
+      },
+      "body": "La imagen no parece ser un comprobante de pago. Envía una captura de Yape, Plin o del depósito donde se vean fecha, importe y operación.",
+      "kind": "send"
+    },
+    {
+      "id": "n_payment_error",
+      "pos": {
+        "x": 2926.491935733253,
+        "y": -1.1880194381005111
+      },
+      "body": "Conservé la imagen, pero no pude procesarla de forma segura. Lo derivaré con el equipo para que revise el comprobante.",
+      "kind": "send"
+    },
+    {
+      "id": "n_espera",
+      "pos": {
+        "x": 900.6663442081197,
+        "y": -179.19045315399586
+      },
+      "kind": "wait",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_input_unsupported",
+      "pos": {
+        "x": -586.9160262546275,
+        "y": 247.8327834242201
+      },
+      "body": "Recibí el archivo, pero todavía no puedo procesar ese formato en este flujo. Escríbeme el detalle en texto o envía una imagen.",
+      "kind": "send"
+    },
+    {
+      "id": "n_derivar",
+      "pos": {
+        "x": 3465.3522153153576,
+        "y": -150.8080404688178
+      },
+      "kind": "action",
+      "action": "handoff"
+    },
+    {
+      "id": "n_fin",
+      "pos": {
+        "x": 3802.287742578449,
+        "y": 82.6575933399933
+      },
+      "kind": "action",
+      "action": "end"
+    },
+    {
+      "id": "n_read_profile",
+      "pos": {
+        "x": -3112.7654476608805,
+        "y": 40.40121951171065
+      },
+      "args": {
+        "limit": "1",
+        "fields": "segmento_key,contexto_personal,activo,prioridad",
+        "object": "perfiles_contacto",
+        "orderBy": "prioridad",
+        "orderDir": "desc",
+        "where.1.op": "eq",
+        "where.1.field": "activo",
+        "where.1.value": "true",
+        "linkCurrentContact": "true"
+      },
+      "kind": "tool",
+      "saveAs": "perfil",
+      "toolRef": "data_query"
+    },
+    {
+      "id": "n_profile_router",
+      "pos": {
+        "x": -2767.264465864554,
+        "y": -203.6362220068929
+      },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "segmentado",
+          "label": "Tiene perfil con segmento",
+          "expression": "perfil.found == true && !empty(perfil.first.data.segmento_key)"
+        }
+      ]
+    },
+    {
+      "id": "n_read_segment",
+      "pos": {
+        "x": -2544.913096551797,
+        "y": -296.7148431583513
+      },
+      "args": {
+        "limit": "1",
+        "fields": "clave,nombre,contexto,tono,restricciones,ruta,activo",
+        "object": "segmentos",
+        "where.1.op": "eq",
+        "where.2.op": "eq",
+        "where.1.field": "clave",
+        "where.1.value": "{perfil.first.data.segmento_key}",
+        "where.2.field": "activo",
+        "where.2.value": "true"
+      },
+      "kind": "tool",
+      "saveAs": "segmento",
+      "toolRef": "data_query"
+    },
+    {
+      "id": "n_segment_router",
+      "pos": {
+        "x": -2154.1995187028233,
+        "y": -399.255193471139
+      },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "contexto",
+          "label": "Contexto especializado",
+          "expression": "segmento.found == true && segmento.first.data.activo == true && segmento.first.data.ruta == contexto_especializado"
+        },
+        {
+          "id": "asesor",
+          "label": "Derivar a una persona",
+          "expression": "segmento.found == true && segmento.first.data.activo == true && segmento.first.data.ruta == asesor"
+        }
+      ]
+    },
+    {
+      "id": "n_set_context",
+      "pos": {
+        "x": -1801.207555268545,
+        "y": -364.2066092317374
+      },
+      "kind": "action",
+      "action": "set",
+      "params": {
+        "contexto_organizacion": "\n\nCONTEXTO INTERNO AUTORIZADO POR LA ORGANIZACION\nSegmento: {segmento.first.data.nombre}\nContexto base: {segmento.first.data.contexto}\nTono adicional: {segmento.first.data.tono}\nRestricciones adicionales: {segmento.first.data.restricciones}\nContexto particular: {perfil.first.data.contexto_personal}\nFIN DEL CONTEXTO INTERNO"
+      }
+    },
+    {
+      "id": "n_sin_context",
+      "pos": {
+        "x": -1802.1620465430512,
+        "y": -150.91738830334373
+      },
+      "kind": "action",
+      "action": "set",
+      "params": {
+        "contexto_organizacion": ""
+      }
+    },
+    {
+      "id": "router_768deb23",
+      "pos": {
+        "x": -2459.7773293058676,
+        "y": 365.7951528894176
+      },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "caso_1",
+          "label": "CTX obtained",
+          "expression": "segmento.found == true && segmento.first.data.activo == true"
+        }
+      ]
+    },
+    {
+      "id": "n_activate_subscription",
+      "pos": {
+        "x": 2518.181779463163,
+        "y": 193.2234969106908
+      },
+      "args": {
+        "phone": "{contact_phone}",
+        "planKey": "{sale.planKey}",
+        "billingCycle": "{sale.billingCycle}",
+        "activationCode": "{sale.organizationCode}",
+        "idempotencyKey": "subscription:{payment_record.recordId}",
+        "paymentRecordId": "{payment_record.recordId}"
+      },
+      "kind": "tool",
+      "saveAs": "subscription",
+      "toolRef": "subscription_activate"
+    },
+    {
+      "id": "n_read_plans",
+      "pos": {
+        "x": -1100.5189693650973,
+        "y": -1354.8988049643758
+      },
+      "args": {
+        "limit": "8",
+        "object": "planes_bawto"
+      },
+      "kind": "tool",
+      "saveAs": "plan_catalog",
+      "toolRef": "data_query"
+    },
+    {
+      "id": "n_bawto_specialist",
+      "pos": {
+        "x": -676.6544674032787,
+        "y": -1514.482980120759
+      },
+      "kind": "agent",
+      "saveAs": "sale",
+      "silent": false,
+      "outputs": [
+        "cobrar",
+        "asesor",
+        "conversar"
+      ],
+      "agentRole": "specialist",
+      "contextMode": "recent",
+      "instruction": "Eres el especialista comercial de Bawto. El orquestador ya definió este tema. No llames herramientas: el catálogo vigente está en este JSON y es tu única fuente para nombres, precios, ciclos, capacidad y beneficios:\n{plan_catalog}\n\nPuedes vender Inicio, Base, Crece y Pro. Explica mensual y trimestral: precio_trimestral_mensual es equivalente mensual y monto_trimestral es el cobro total de tres meses. No prometas llamadas exactas; usa la aproximación del catálogo.\n\nAntes de cobrar confirma plan, ciclo monthly o quarterly y código de activación alfanumérico de 10 caracteres, visible en Panel → Organización → Plan y acceso. Elige cobrar solo si los tres están confirmados y el cliente continuará con el pago, ya pagó o enviará el comprobante. Devuelve organizationCode, planKey y billingCycle normalizados; menciona el importe exacto del catálogo y pide captura completa con fecha, importe y operación. La captura se presume válida y activa acceso, sujeta a verificación posterior.\n\nElige conversar mientras falte contexto o un dato. Elige asesor si pide una persona, una solución fuera de planes o un medio de pago ausente del catálogo.\n\nEl cliente se llama {contact_name}. Si llega vacío o entre llaves, no uses nombre. Responde en español neutro del Perú, profesional, directo y sobrio; máximo cinco líneas, una pregunta por turno y sin emojis salvo que el cliente los use primero. No pidas contraseñas, PIN, CVV, códigos de seguridad, tokens ni claves privadas. {contexto_organizacion}",
+      "outputFields": [
+        {
+          "key": "organizationCode",
+          "type": "string",
+          "description": "Código de activación de 10 caracteres; vacío hasta que el cliente lo confirme."
+        },
+        {
+          "key": "planKey",
+          "type": "string",
+          "description": "Exactamente inicio, base, crece o pro; vacío hasta confirmar el plan."
+        },
+        {
+          "key": "billingCycle",
+          "type": "string",
+          "description": "Exactamente monthly o quarterly; vacío hasta confirmar el ciclo."
+        }
+      ]
+    },
+    {
+      "id": "n_read_services",
+      "pos": {
+        "x": -823.4681953315633,
+        "y": -535.6164850546293
+      },
+      "args": {
+        "limit": "8",
+        "object": "servicios"
+      },
+      "kind": "tool",
+      "saveAs": "service_catalog",
+      "toolRef": "data_query"
+    },
+    {
+      "id": "n_services_specialist",
+      "pos": {
+        "x": -324.06611585564264,
+        "y": -673.9067660072772
+      },
+      "kind": "agent",
+      "saveAs": "sale",
+      "silent": false,
+      "outputs": [
+        "cobrar",
+        "asesor",
+        "conversar"
+      ],
+      "agentRole": "specialist",
+      "contextMode": "recent",
+      "instruction": "Eres el especialista comercial de servicios tecnológicos de Sistemuino. El orquestador ya definió este tema. No llames herramientas y recomienda únicamente registros presentes en este catálogo:\n{service_catalog}\n\nAclara alcance con una sola pregunta y no inventes precios, plazos, capacidades ni servicios. Elige conversar para orientar o completar contexto. Elige asesor cuando el cliente pida una cotización, una persona o una solución a medida. Elige cobrar solo si afirma que ya hizo un pago general a Sistemuino; deja organizationCode, planKey y billingCycle vacíos y indica que enviarás las instrucciones exactas de pago a continuación; no inventes ni redactes números o cuentas.\n\nEl cliente se llama {contact_name}. Si llega vacío o entre llaves, no uses nombre. Responde en español neutro del Perú, profesional, directo y sobrio; máximo cinco líneas, una pregunta por turno y sin emojis salvo que el cliente los use primero. No pidas contraseñas, PIN, CVV, códigos de seguridad, tokens ni claves privadas. {contexto_organizacion}",
+      "outputFields": [
+        {
+          "key": "organizationCode",
+          "type": "string",
+          "description": "Código de activación de 10 caracteres; vacío hasta que el cliente lo confirme."
+        },
+        {
+          "key": "planKey",
+          "type": "string",
+          "description": "Exactamente inicio, base, crece o pro; vacío hasta confirmar el plan."
+        },
+        {
+          "key": "billingCycle",
+          "type": "string",
+          "description": "Exactamente monthly o quarterly; vacío hasta confirmar el ciclo."
+        }
+      ]
+    },
+    {
+      "id": "n_payment_specialist",
+      "pos": {
+        "x": -868.3869902791112,
+        "y": -1023.4120404057628
+      },
+      "kind": "agent",
+      "saveAs": "sale",
+      "silent": false,
+      "outputs": [
+        "cobrar",
+        "conversar",
+        "asesor"
+      ],
+      "agentRole": "specialist",
+      "contextMode": "recent",
+      "instruction": "Eres el especialista de recepción de pagos de Sistemuino. El orquestador ya confirmó que el tema es un pago. No llames herramientas.\n\nSi el historial confirma una compra Bawto, conserva exactamente plan, ciclo y código de activación ya acordados y devuelve organizationCode, planKey y billingCycle normalizados. Si no existe esa compra confirmada, trátalo como pago general y deja esos tres datos vacíos. Elige cobrar cuando el cliente ya pagó o enviará el comprobante y indica que enviarás las instrucciones exactas de pago a continuación; no inventes ni redactes números o cuentas. Elige conversar si todavía no queda claro que exista un pago. Elige asesor si disputa un cobro o solicita devolución.\n\nEl cliente se llama {contact_name}. Si llega vacío o entre llaves, no uses nombre. Responde en español neutro del Perú, profesional, directo y sobrio; máximo cinco líneas, una pregunta por turno y sin emojis salvo que el cliente los use primero. No pidas contraseñas, PIN, CVV, códigos de seguridad, tokens ni claves privadas. {contexto_organizacion}",
+      "outputFields": [
+        {
+          "key": "organizationCode",
+          "type": "string",
+          "description": "Código de activación de 10 caracteres; vacío hasta que el cliente lo confirme."
+        },
+        {
+          "key": "planKey",
+          "type": "string",
+          "description": "Exactamente inicio, base, crece o pro; vacío hasta confirmar el plan."
+        },
+        {
+          "key": "billingCycle",
+          "type": "string",
+          "description": "Exactamente monthly o quarterly; vacío hasta confirmar el ciclo."
+        }
+      ]
+    },
+    {
+      "id": "n_render_payment_methods",
+      "pos": {
+        "x": -275,
+        "y": -1058
+      },
+      "args": {},
+      "kind": "tool",
+      "saveAs": "payment_options",
+      "toolRef": "payment_methods_render"
+    },
+    {
+      "id": "n_payment_method_router",
+      "pos": {
+        "x": 63.440070386302125,
+        "y": -1302.2242531447325
+      },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "configured",
+          "label": "Métodos activos",
+          "expression": "payment_options.found == true && !empty(payment_options.message)"
+        }
+      ]
+    },
+    {
+      "id": "n_send_payment_instructions",
+      "pos": {
+        "x": 230.68566866979228,
+        "y": -1487.2701117590093
+      },
+      "body": "{payment_options.message}",
+      "kind": "send"
+    },
+    {
+      "id": "n_payment_method_unavailable",
+      "pos": {
+        "x": 132.18041527419535,
+        "y": -890.6175248994837
+      },
+      "body": "Ahora mismo no tengo métodos de pago activos que pueda darte con seguridad. Te derivaré con el equipo para continuar sin exponerte a datos incorrectos.",
+      "kind": "send"
+    },
+    {
+      "id": "n_payment_method_handoff",
+      "pos": {
+        "x": 650,
+        "y": -1100
+      },
+      "kind": "action",
+      "action": "handoff"
+    },
+    {
+      "id": "n_products_specialist",
+      "pos": {
+        "x": -820,
+        "y": 980
+      },
+      "kind": "agent",
+      "tools": [
+        {
+          "ref": "catalog_search",
+          "config": {
+            "maxLimit": "5",
+            "connection": "meudim"
+          }
+        },
+        {
+          "ref": "catalog_product",
+          "config": {
+            "connection": "meudim"
+          }
+        }
+      ],
+      "saveAs": "compra",
+      "silent": false,
+      "outputs": [
+        "conversar",
+        "asesor",
+        "comprar"
+      ],
+      "agentRole": "specialist",
+      "contextMode": "recent",
+      "instruction": "Eres el especialista de productos de la tienda Sistemuino: sensores, módulos, placas, pantallas y componentes electrónicos. El orquestador ya definió este tema.\n\nConsulta el catálogo con tus herramientas antes de responder. **Nunca afirmes un producto, un precio ni una disponibilidad que no venga de una consulta de este turno**: no tienes catálogo memorizado y los precios cambian. Si una herramienta te dice que no pudo consultar, dilo tal cual y ofrece derivar con una persona; no concluyas que el producto no existe.\n\nRecomienda como mucho tres opciones. Nombra siempre el precio con su moneda y si hay stock. Si la búsqueda no devuelve nada, dilo con claridad y vuelve a intentarlo con otras palabras del producto, no con la frase completa del cliente.\n\nElige conversar para recomendar, comparar o pedir el dato que falte.\nElige asesor cuando pidan una persona, una cotización especial, envío a provincia o algo que el catálogo no resuelve.\nElige comprar SOLO cuando tengas los tres datos confirmados por el cliente: el id del producto tal como lo devolvió la búsqueda, cuántas unidades quiere y su correo electrónico. Pide lo que falte en la rama conversar, de a un dato por vez. El correo es obligatorio para registrar el pedido en la tienda; pídelo sin rodeos y explica para qué es.\n\nNo inventes plazos de entrega, descuentos ni formas de pago. Las instrucciones de pago se envían automáticamente después de registrar el pedido, así que no las redactes tú ni prometas una cuenta concreta.\n\nResponde en español neutro del Perú, profesional, directo y sobrio; máximo cinco líneas, una pregunta por turno y sin emojis salvo que el cliente los use primero. No pidas contraseñas, PIN, CVV, códigos de seguridad, tokens ni claves privadas. {contexto_organizacion}",
+      "outputFields": [
+        {
+          "key": "productId",
+          "type": "string",
+          "description": "Id numérico del producto, exactamente como lo devolvió la búsqueda. Vacío hasta que el cliente confirme cuál quiere."
+        },
+        {
+          "key": "cantidad",
+          "type": "number",
+          "description": "Unidades confirmadas por el cliente. Vacío hasta que lo diga."
+        },
+        {
+          "key": "correo",
+          "type": "string",
+          "description": "Correo electrónico del comprador, tal como lo escribió. Vacío hasta que lo dé."
+        }
+      ]
+    },
+    {
+      "id": "n_order_ready_router",
+      "pos": {
+        "x": -469.6198270833442,
+        "y": 1761.5059607284422
+      },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "listo",
+          "label": "Producto, cantidad y correo",
+          "expression": "compra.productId && compra.cantidad && compra.correo"
+        }
+      ]
+    },
+    {
+      "id": "n_create_order",
+      "pos": {
+        "x": -212.7264691447548,
+        "y": 1554.9579688995238
+      },
+      "args": {
+        "notes": "Pedido tomado por WhatsApp con Bawto.",
+        "connection": "meudim",
+        "customerName": "{contact_name}",
+        "customerEmail": "{compra.correo}",
+        "customerPhone": "{contact_phone}",
+        "idempotencyKey": "message:{input.id}",
+        "item.1.quantity": "{compra.cantidad}",
+        "item.1.productId": "{compra.productId}"
+      },
+      "kind": "tool",
+      "saveAs": "pedido",
+      "toolRef": "order_create"
+    },
+    {
+      "id": "n_order_failed",
+      "pos": {
+        "x": 425.9238860466579,
+        "y": 1753.3412447234678
+      },
+      "body": "No pude registrar el pedido: {pedido.error}\n\nDime si quieres ajustar la cantidad o ver otra opción.",
+      "kind": "send"
+    },
+    {
+      "id": "n_payment_intent",
+      "pos": {
+        "x": 439.8998403442722,
+        "y": 1449.6718163067667
+      },
+      "args": {
+        "orderId": "{pedido.orderId}",
+        "connection": "meudim"
+      },
+      "kind": "tool",
+      "saveAs": "cobro_tienda",
+      "toolRef": "payment_intent_create"
+    },
+    {
+      "id": "n_send_order_payment",
+      "pos": {
+        "x": 1027.948854247289,
+        "y": 1427.4693651456178
+      },
+      "body": "Listo. Tu pedido {pedido.orderNumber} quedó registrado: {pedido.summary}.\n\n{cobro_tienda.message}",
+      "kind": "send"
+    },
+    {
+      "id": "n_store_receipt_wait",
+      "pos": {
+        "x": 1359.2363698988174,
+        "y": 1534.9168284160207
+      },
+      "kind": "wait",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_store_receipt",
+      "pos": {
+        "x": 1707.9115608576028,
+        "y": 1297.4365316874425
+      },
+      "kind": "agent",
+      "saveAs": "receipt_tienda",
+      "silent": true,
+      "accepts": [
+        "text",
+        "interactive",
+        "image"
+      ],
+      "outputs": [
+        "valid",
+        "needs_review",
+        "unreadable",
+        "not_receipt"
+      ],
+      "agentRole": "specialist",
+      "contextMode": "none",
+      "instruction": "Analiza únicamente la imagen actual como posible comprobante de un pago hecho a la tienda Sistemuino por el pedido {pedido.orderNumber}, de {cobro_tienda.currency} {cobro_tienda.amount}. No uses el historial para completar datos que no aparezcan en la captura.\n\nElige valid solo si la imagen muestra una operación exitosa y se distinguen con claridad el importe, la fecha/hora y el número o código de operación. Elige needs_review si parece un comprobante exitoso pero falta algún dato, hay ambigüedad o la confianza no es suficiente. Elige unreadable si la captura no puede leerse. Elige not_receipt si no hay imagen o la imagen no es un comprobante de pago.\n\nExtrae únicamente datos visibles y no inventes. provider debe ser exactamente uno de estos valores canónicos en minúsculas: yape, plin, bcp, interbank, transfer u other. amount es el importe transferido sin comisión; currency usa ISO 4217; occurredAt usa RFC3339 con la zona visible o, si no aparece, la zona de Perú (-05:00); operationCode conserva ceros iniciales; payerName es el nombre visible del pagador o titular de origen; recipient es el destinatario visible; confidence va de 0 a 1.",
+      "outputFields": [
+        {
+          "key": "provider",
+          "type": "string",
+          "description": "Canal canónico: yape, plin, bcp, interbank, transfer u other."
+        },
+        {
+          "key": "amount",
+          "type": "number",
+          "description": "Importe transferido visible, sin comisión."
+        },
+        {
+          "key": "currency",
+          "type": "string",
+          "description": "Moneda visible en código ISO 4217, por ejemplo PEN."
+        },
+        {
+          "key": "occurredAt",
+          "type": "datetime",
+          "description": "Fecha y hora visibles de la operación en RFC3339."
+        },
+        {
+          "key": "operationCode",
+          "type": "string",
+          "description": "Número o código de operación visible, conservando ceros iniciales."
+        },
+        {
+          "key": "payerName",
+          "type": "string",
+          "description": "Nombre visible del pagador o titular de la cuenta de origen."
+        },
+        {
+          "key": "recipient",
+          "type": "string",
+          "description": "Nombre del destinatario visible en el comprobante."
+        },
+        {
+          "key": "confidence",
+          "type": "number",
+          "description": "Confianza global de la extracción entre 0 y 1."
+        }
+      ]
+    },
+    {
+      "id": "n_store_payment_submit",
+      "pos": {
+        "x": 2545.009826133222,
+        "y": 1992.2630842387202
+      },
+      "args": {
+        "paymentId": "{cobro_tienda.paymentId}",
+        "reference": "{receipt_tienda.operationCode}",
+        "connection": "meudim",
+        "declaredAmount": "{receipt_tienda.amount}",
+        "declaredAt": "{receipt_tienda.occurredAt}",
+        "channel": "{receipt_tienda.provider}",
+        "payerName": "{receipt_tienda.payerName}",
+        "recipient": "{receipt_tienda.recipient}"
+      },
+      "kind": "tool",
+      "saveAs": "declaracion",
+      "toolRef": "payment_submit"
+    },
+    {
+      "id": "n_store_payment_done",
+      "pos": {
+        "x": 2948.577782090948,
+        "y": 2003.3465732551042
+      },
+      "body": "Recibí tu comprobante por {receipt_tienda.amount} y registré la operación {receipt_tienda.operationCode} en el pedido {pedido.orderNumber}. Queda pendiente de verificación; te confirmamos apenas se valide.",
+      "kind": "send"
+    },
+    {
+      "id": "n_store_payment_retry",
+      "pos": {
+        "x": 2124.808710032741,
+        "y": 1908.242856584862
+      },
+      "body": "No pude leer el número de operación en esa imagen. Envíame una captura completa y nítida del comprobante, donde se vean el importe, la fecha y el número de operación.",
+      "kind": "send"
+    },
+    {
+      "id": "n_store_amount_ok",
+      "pos": {
+        "x": 2000,
+        "y": 640
+      },
+      "kind": "condition",
+      "expression": "empty(declaracion.amountMatches) || declaracion.amountMatches == true"
+    },
+    {
+      "id": "n_store_amount_mismatch",
+      "pos": {
+        "x": 2400,
+        "y": 1160
+      },
+      "body": "Registré el comprobante por {receipt_tienda.amount}, pero Meudim marcó que no coincide con el total de {cobro_tienda.currency} {cobro_tienda.amount} del pedido {pedido.orderNumber}. Te paso con una persona para revisarlo.",
+      "kind": "send"
+    }
+  ],
+  "trigger": {
+    "pos": {
+      "x": 0,
+      "y": 0
+    },
+    "type": "message",
+    "match": "any"
+  }
+}

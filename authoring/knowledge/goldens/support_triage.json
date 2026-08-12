@@ -1,0 +1,33 @@
+{
+  "id": "golden-support-triage",
+  "name": "Golden support triage",
+  "trigger": {"type": "message", "match": "any"},
+  "nodes": [
+    {
+      "id": "orchestrator", "kind": "agent", "pos": {"x": 0, "y": 0},
+      "instruction": "Clasifica el tema. Pregunta solo si falta una decisión imprescindible y deriva lo que no corresponda.",
+      "outputs": ["support", "clarify", "handoff"],
+      "agentRole": "orchestrator", "contextMode": "recent", "replyOn": ["clarify"]
+    },
+    {
+      "id": "specialist", "kind": "agent", "pos": {"x": 320, "y": -120},
+      "instruction": "Resuelve únicamente soporte con el mensaje y las fuentes autorizadas. Si no sabes, deriva.",
+      "outputs": ["resolved", "clarify", "handoff"],
+      "agentRole": "specialist", "contextMode": "recent"
+    },
+    {"id": "resume", "kind": "wait", "pos": {"x": 640, "y": 80}, "saveAs": "support_reply"},
+    {"id": "handoff", "kind": "action", "pos": {"x": 640, "y": -180}, "action": "handoff", "params": {"reason": "support"}},
+    {"id": "end", "kind": "action", "pos": {"x": 960, "y": -180}, "action": "end"}
+  ],
+  "edges": [
+    {"id": "e-trigger", "source": "trigger", "target": "orchestrator"},
+    {"id": "e-support", "source": "orchestrator", "target": "specialist", "sourceHandle": "support"},
+    {"id": "e-clarify", "source": "orchestrator", "target": "resume", "sourceHandle": "clarify"},
+    {"id": "e-orchestrator-handoff", "source": "orchestrator", "target": "handoff", "sourceHandle": "handoff"},
+    {"id": "e-resolved", "source": "specialist", "target": "resume", "sourceHandle": "resolved"},
+    {"id": "e-specialist-clarify", "source": "specialist", "target": "resume", "sourceHandle": "clarify"},
+    {"id": "e-specialist-handoff", "source": "specialist", "target": "handoff", "sourceHandle": "handoff"},
+    {"id": "e-resume", "source": "resume", "target": "orchestrator", "role": "loopback"},
+    {"id": "e-end", "source": "handoff", "target": "end"}
+  ]
+}

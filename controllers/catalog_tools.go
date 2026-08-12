@@ -156,6 +156,9 @@ func (con *Controller) catalogConnection(ctx context.Context, bot *models.BotCha
 	if err != nil {
 		return nil, nil, fmt.Errorf("no se pudo descifrar la credencial de %q", key)
 	}
+	if err := connectors.ValidateCredential(connection.Driver, credential); err != nil {
+		return nil, nil, fmt.Errorf("la credencial de %q no es válida: %w", key, err)
+	}
 	client, err := meudim.New(connection.BaseURL, credential, nil)
 	if err != nil {
 		return nil, nil, err

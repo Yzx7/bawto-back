@@ -1,0 +1,135 @@
+{
+  "schemaVersion": "1",
+  "id": "support_triage",
+  "version": "1.0.0",
+  "status": "stable",
+  "intentTags": ["soporte", "atencion", "derivacion"],
+  "risk": "medium",
+  "triggerTypes": ["message"],
+  "requiredQuestions": [
+    {
+      "id": "handoff_policy",
+      "prompt": "¿En qué casos debe derivarse la conversación a una persona?",
+      "required": true
+    }
+  ],
+  "conditionalQuestions": [
+    {
+      "id": "profile_source",
+      "prompt": "¿Qué tabla contiene el perfil o segmento del contacto?",
+      "when": "se desea personalizar el enrutamiento con datos internos"
+    }
+  ],
+  "requiredCapabilities": [
+    {
+      "nodeKinds": ["agent", "wait", "action", "send"],
+      "runtimeTools": []
+    }
+  ],
+  "requiredResources": [
+    {
+      "id": "profile_object",
+      "kind": "data_object",
+      "description": "Fuente opcional y real para perfil o segmento.",
+      "required": false
+    }
+  ],
+  "topologyPattern": {
+    "roles": [
+      {
+        "role": "orchestrator",
+        "kind": "agent",
+        "minimum": 1,
+        "description": "Clasifica, puede aclarar y entrega a un especialista; no tiene tools."
+      },
+      {
+        "role": "specialist",
+        "kind": "agent",
+        "minimum": 1,
+        "description": "Atiende un dominio acotado con fuentes declaradas."
+      },
+      {
+        "role": "resume_wait",
+        "kind": "wait",
+        "minimum": 1,
+        "description": "Pausa cada retorno conversacional."
+      },
+      {
+        "role": "handoff",
+        "kind": "action",
+        "minimum": 1,
+        "description": "Derivación humana explícita."
+      }
+    ],
+    "connections": [
+      {
+        "fromRole": "orchestrator",
+        "toRole": "specialist"
+      },
+      {
+        "fromRole": "specialist",
+        "toRole": "orchestrator",
+        "mustPassThrough": "resume_wait"
+      },
+      {
+        "fromRole": "orchestrator",
+        "toRole": "handoff",
+        "handle": "handoff"
+      }
+    ]
+  },
+  "bindings": [
+    {
+      "id": "specialist_topics",
+      "kind": "business_topics",
+      "required": true,
+      "description": "Temas y responsabilidad exacta de cada especialista."
+    },
+    {
+      "id": "handoff_reason",
+      "kind": "action_param",
+      "required": true,
+      "description": "Motivo estable que recibe la acción handoff."
+    }
+  ],
+  "agentPromptContracts": [
+    {
+      "role": "orchestrator",
+      "responsibility": "Clasificar el tema, aclarar solo cuando sea imprescindible y enrutar.",
+      "allowedSources": ["mensaje actual", "resumen explícito de perfil"],
+      "requiredBranches": ["clarify", "handoff"],
+      "unknownPolicy": "Aclarar o derivar; nunca inventar una categoría.",
+      "responsePolicy": "Responder solo en la rama clarify mediante replyOn."
+    },
+    {
+      "role": "specialist",
+      "responsibility": "Resolver únicamente el tema asignado.",
+      "allowedSources": ["mensaje actual", "fuentes autorizadas del especialista"],
+      "requiredBranches": ["resolved", "clarify", "handoff"],
+      "unknownPolicy": "Reconocer el límite y derivar.",
+      "responsePolicy": "No duplicar un mensaje determinista posterior."
+    }
+  ],
+  "patterns": [
+    {"id": "wait_resume", "version": "1.0.0"},
+    {"id": "orchestrator_specialists", "version": "1.0.0"},
+    {"id": "handoff_safe", "version": "1.0.0"}
+  ],
+  "requiredCheckIds": [
+    {"id": "engine_valid", "version": "1.0.0"},
+    {"id": "no_automatic_cycle", "version": "1.0.0"}
+  ],
+  "forbiddenCheckIds": [
+    {"id": "agent_write_tool", "version": "1.0.0"}
+  ],
+  "policyIds": [
+    {"id": "graph_writes_only", "version": "1.0.0"},
+    {"id": "resources_must_exist", "version": "1.0.0"}
+  ],
+  "invariants": [
+    "El orquestador no tiene tools.",
+    "Todo retorno al orquestador cruza un wait.",
+    "Existe una ruta explícita de handoff.",
+    "No se hardcodea una tabla de perfil inexistente."
+  ]
+}

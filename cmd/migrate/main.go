@@ -114,10 +114,15 @@ func runPublishFlowFile(ctx context.Context, pool *pgxpool.Pool, botID, flowKey,
 	if target.TriggerType != definition.Trigger.Type {
 		fail("trigger del archivo %q no coincide con el registrado %q", definition.Trigger.Type, target.TriggerType)
 	}
-	if _, err := models.UpdateFlowDraft(ctx, pool, botID, target.ID, canonical, author); err != nil {
+	current, err := models.DraftSnapshotFromFlow(target)
+	if err != nil {
+		fail("checksum del borrador actual: %v", err)
+	}
+	snapshot, err := models.UpdateFlowDraft(ctx, pool, botID, target.ID, canonical, current.Checksum, author)
+	if err != nil {
 		fail("actualizar borrador: %v", err)
 	}
-	result, err := models.PublishFlow(ctx, pool, botID, target.ID, canonical, checksum, author)
+	result, err := models.PublishFlow(ctx, pool, botID, target.ID, snapshot.Checksum, author, true)
 	if err != nil {
 		fail("publicar flujo: %v", err)
 	}

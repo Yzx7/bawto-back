@@ -1,0 +1,146 @@
+{
+  "schemaVersion": "1",
+  "id": "payment_receipt_capture",
+  "version": "1.0.0",
+  "status": "stable",
+  "intentTags": ["pago", "comprobante", "cobro"],
+  "risk": "high",
+  "triggerTypes": ["message"],
+  "requiredQuestions": [
+    {
+      "id": "payment_object",
+      "prompt": "¿En qué tabla existente se guardan los comprobantes?",
+      "required": true
+    },
+    {
+      "id": "link_contact",
+      "prompt": "¿El registro debe vincularse al contacto actual?",
+      "required": true
+    },
+    {
+      "id": "review_policy",
+      "prompt": "¿Qué debe ocurrir cuando el comprobante necesita revisión?",
+      "required": true
+    }
+  ],
+  "conditionalQuestions": [
+    {
+      "id": "missing_object",
+      "prompt": "Crea primero la tabla y sus campos en Data para continuar.",
+      "when": "no existe una tabla compatible"
+    }
+  ],
+  "requiredCapabilities": [
+    {
+      "nodeKinds": ["router", "agent", "tool", "send", "wait", "action"],
+      "runtimeTools": ["data_mutate"]
+    }
+  ],
+  "requiredResources": [
+    {
+      "id": "payment_object",
+      "kind": "data_object",
+      "description": "Tabla real con campos compatibles para el comprobante.",
+      "required": true
+    }
+  ],
+  "topologyPattern": {
+    "roles": [
+      {
+        "role": "format_router",
+        "kind": "router",
+        "minimum": 1,
+        "description": "Separa la imagen de formatos no compatibles."
+      },
+      {
+        "role": "visual_agent",
+        "kind": "agent",
+        "minimum": 1,
+        "description": "Extrae únicamente datos visibles y elige una rama de calidad."
+      },
+      {
+        "role": "store_receipt",
+        "kind": "tool",
+        "toolRef": "data_mutate",
+        "minimum": 1,
+        "description": "Guarda estados pendiente o revisión, nunca confirmado."
+      },
+      {
+        "role": "retry_wait",
+        "kind": "wait",
+        "minimum": 1,
+        "description": "Espera una nueva captura en ramas recuperables."
+      },
+      {
+        "role": "handoff",
+        "kind": "action",
+        "minimum": 1,
+        "description": "Derivación para revisión manual."
+      }
+    ],
+    "connections": [
+      {"fromRole": "format_router", "toRole": "visual_agent", "handle": "image"},
+      {"fromRole": "visual_agent", "toRole": "store_receipt", "handle": "valid"},
+      {"fromRole": "visual_agent", "toRole": "store_receipt", "handle": "needs_review"},
+      {"fromRole": "visual_agent", "toRole": "retry_wait", "handle": "unreadable"},
+      {"fromRole": "visual_agent", "toRole": "handoff", "handle": "not_receipt"}
+    ]
+  },
+  "bindings": [
+    {
+      "id": "payment_object",
+      "kind": "data_object",
+      "required": true,
+      "description": "Objeto de destino descubierto en la organización."
+    },
+    {
+      "id": "payment_fields",
+      "kind": "data_fields",
+      "required": true,
+      "description": "Mapeo explícito de provider, amount, currency, occurredAt, operationCode, recipient, confidence y estado."
+    },
+    {
+      "id": "link_current_contact",
+      "kind": "boolean_decision",
+      "required": true,
+      "description": "Decisión del autor que debe preservarse."
+    }
+  ],
+  "agentPromptContracts": [
+    {
+      "role": "visual_agent",
+      "responsibility": "Determinar si la imagen es un comprobante legible y extraer solo datos visibles.",
+      "allowedSources": ["imagen actual"],
+      "requiredBranches": ["valid", "needs_review", "unreadable", "not_receipt"],
+      "unknownPolicy": "Omitir todo campo no visible; no completar por contexto.",
+      "responsePolicy": "Ser silencioso; los mensajes oficiales viven en nodos send."
+    }
+  ],
+  "patterns": [
+    {"id": "wait_resume", "version": "1.0.0"},
+    {"id": "visual_extract", "version": "1.0.0"},
+    {"id": "data_write_idempotent", "version": "1.0.0"},
+    {"id": "tool_error_recovery", "version": "1.0.0"}
+  ],
+  "requiredCheckIds": [
+    {"id": "engine_valid", "version": "1.0.0"},
+    {"id": "no_automatic_cycle", "version": "1.0.0"},
+    {"id": "explicit_error_routes", "version": "1.0.0"},
+    {"id": "idempotent_write", "version": "1.0.0"}
+  ],
+  "forbiddenCheckIds": [
+    {"id": "agent_write_tool", "version": "1.0.0"},
+    {"id": "payment_marked_confirmed", "version": "1.0.0"}
+  ],
+  "policyIds": [
+    {"id": "graph_writes_only", "version": "1.0.0"},
+    {"id": "payment_not_confirmation", "version": "1.0.0"},
+    {"id": "resources_must_exist", "version": "1.0.0"}
+  ],
+  "invariants": [
+    "operationCode se conserva como texto.",
+    "Recibir una captura no confirma el pago.",
+    "Ilegible y no comprobante no terminan en silencio.",
+    "La escritura usa data_mutate en un nodo del grafo."
+  ]
+}

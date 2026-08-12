@@ -232,9 +232,16 @@ func main() {
 		fmt.Printf("flujo %s: se crearía en borrador\n", flowKey)
 		return
 	case *apply:
-		flow, err = models.UpdateFlowDraft(ctx, pool, *botID, flow.ID, definition, autor)
-		if err != nil {
+		current, snapshotErr := models.DraftSnapshotFromFlow(flow)
+		if snapshotErr != nil {
+			fail("checksum del borrador actual: %v", snapshotErr)
+		}
+		if _, err = models.UpdateFlowDraft(ctx, pool, *botID, flow.ID, definition, current.Checksum, autor); err != nil {
 			fail("guardar borrador: %v", err)
+		}
+		flow, err = models.GetFlow(ctx, pool, *botID, flow.ID)
+		if err != nil {
+			fail("releer borrador: %v", err)
 		}
 		fmt.Printf("flujo %s: borrador actualizado (%s)\n", flowKey, flow.ID)
 	default:

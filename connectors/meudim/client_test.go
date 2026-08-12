@@ -17,7 +17,7 @@ func nuevoCliente(t *testing.T, handler http.HandlerFunc) (*Client, *httptest.Se
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	client, err := New(server.URL, "pk_test_clave", server.Client())
+	client, err := New(server.URL, "sk_test_clave", server.Client())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestSearchProductsImponeStatusActive(t *testing.T) {
 	if meta.Total != 1 || meta.RateLimitRemaining != 118 {
 		t.Fatalf("metadatos inesperados: %+v", meta)
 	}
-	if gotAuth != "Bearer pk_test_clave" {
+	if gotAuth != "Bearer sk_test_clave" {
 		t.Fatalf("autorización inesperada: %q", gotAuth)
 	}
 	// Sin status=active un borrador a medio escribir del dueño acabaría
@@ -189,7 +189,7 @@ func TestPostSoloSeReintentaConIdempotencyKey(t *testing.T) {
 
 func TestSinRespuestaEsUnreachable(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	client, err := New(server.URL, "pk_test_clave", server.Client())
+	client, err := New(server.URL, "sk_test_clave", server.Client())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestNewExigeCredencialYURL(t *testing.T) {
 	if _, err := New("https://api.meud.im", "  ", nil); err == nil {
 		t.Fatal("se aceptó una credencial vacía")
 	}
-	if _, err := New("", "pk_test", nil); err == nil {
+	if _, err := New("", "sk_test", nil); err == nil {
 		t.Fatal("se aceptó una URL vacía")
 	}
 }

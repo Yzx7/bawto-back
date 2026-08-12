@@ -20,10 +20,14 @@ const (
 // precios se copian en la fila: un cambio futuro de modelo no reescribe costos
 // históricos.
 type AIUsageEventInput struct {
-	OrganizationID           string
-	BotID                    string
-	ChatID                   string
-	InboundMessageID         int64
+	OrganizationID   string
+	BotID            string
+	ChatID           string
+	InboundMessageID int64
+	// Purpose separa el gasto del bot del que genera el editor. Un caller viejo
+	// conserva el significado histórico `flow_runtime`; no puede inventar otras
+	// categorías porque la base también las restringe.
+	Purpose                  string
 	Provider                 string
 	Model                    string
 	ProviderRequestID        string
@@ -48,20 +52,26 @@ func RecordAIUsage(ctx context.Context, pool *pgxpool.Pool, in AIUsageEventInput
 	if in.Outcome == "" {
 		in.Outcome = "ok"
 	}
+	if in.Purpose == "" {
+		in.Purpose = "flow_runtime"
+	}
+	if in.Purpose != "flow_runtime" && in.Purpose != "flow_authoring" {
+		return fmt.Errorf("purpose de usage IA inválido: %s", in.Purpose)
+	}
 	if len(in.Metadata) == 0 {
 		in.Metadata = json.RawMessage(`{}`)
 	}
 	_, err := pool.Exec(ctx, `
 		INSERT INTO ai_usage_events
-		    (organization_id,bot_id,chat_id,inbound_message_id,provider,model,
+		    (organization_id,bot_id,chat_id,inbound_message_id,purpose,provider,model,
 		     provider_request_id,input_tokens,output_tokens,cache_read_input_tokens,
 		     cache_creation_input_tokens,input_usd_per_million,output_usd_per_million,
 		     cache_read_usd_per_million,cache_write_usd_per_million,outcome,metadata)
 		VALUES ($1::uuid,NULLIF($2,'')::uuid,NULLIF($3,'')::uuid,NULLIF($4,0),
-		        $5,$6,NULLIF($7,''),$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb)
+		        $5,$6,$7,NULLIF($8,''),$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb)
 		ON CONFLICT (provider,provider_request_id)
 		    WHERE provider_request_id IS NOT NULL DO NOTHING`,
-		in.OrganizationID, in.BotID, in.ChatID, in.InboundMessageID,
+		in.OrganizationID, in.BotID, in.ChatID, in.InboundMessageID, in.Purpose,
 		in.Provider, in.Model, in.ProviderRequestID, in.InputTokens, in.OutputTokens,
 		in.CacheReadInputTokens, in.CacheCreationInputTokens,
 		in.InputUSDPerMillion, in.OutputUSDPerMillion,
@@ -276,6 +286,7 @@ func loadAIUsage(ctx context.Context, pool *pgxpool.Pool, report *CostReport, or
 		  FROM ai_usage_events
 		 WHERE organization_id=$1::uuid
 		   AND ($2='' OR bot_id=$2::uuid)
+		   AND purpose='flow_runtime'
 		   AND occurred_at >= $3 AND occurred_at < $4
 		 GROUP BY provider,model
 		 ORDER BY provider,model`, orgID, botID, from, to)

@@ -36,12 +36,77 @@ func TestFeatureFlagsPorDefecto(t *testing.T) {
 		cfg.MinimaxM3BaseURL != "https://api.minimax.io/anthropic" {
 		t.Fatalf("modelo visual por defecto inesperado: %+v", cfg)
 	}
+	if cfg.CopilotEnabled || cfg.CopilotAIMaxSteps != 8 || cfg.CopilotAITimeout != 90*time.Second ||
+		cfg.CopilotAIReasoningEffort != "high" {
+		t.Fatalf("defaults del Copilot inesperados: %+v", cfg)
+	}
+	if ready, reason := cfg.CopilotReadiness(); ready || reason != "feature_disabled" {
+		t.Fatalf("el Copilot debe iniciar apagado: ready=%v reason=%q", ready, reason)
+	}
 	// Las tarifas ya **no** tienen default aquí: las pone el catálogo del modelo
 	// (ai.ResolvePricing) al construir el agente. Tenerlas aquí con los precios
 	// de M3 convertía un cambio de modelo sin cambio de precios en meses de
 	// consumo registrado con la tarifa de otro, sin un solo error.
 	if cfg.AIRatesExplicit {
 		t.Fatalf("sin variables de tarifa no debería haber override: %+v", cfg)
+	}
+}
+
+func TestCopilotConfiguradoDesdeElEntorno(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://u:p@localhost:5432/x?sslmode=disable")
+	t.Setenv("COPILOT_ENABLED", "true")
+	t.Setenv("COPILOT_AI_PROVIDER", "provider-test")
+	t.Setenv("COPILOT_AI_BASE_URL", "https://copilot.example/v1")
+	t.Setenv("COPILOT_AI_API_KEY", "sk-copilot")
+	t.Setenv("COPILOT_AI_MODEL", "reasoning-model")
+	t.Setenv("COPILOT_AI_REASONING_EFFORT", "medium")
+	t.Setenv("COPILOT_AI_MAX_STEPS", "6")
+	t.Setenv("COPILOT_AI_TIMEOUT_SECONDS", "45")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if ready, reason := cfg.CopilotReadiness(); !ready || reason != "" {
+		t.Fatalf("Copilot configurado debería estar listo: ready=%v reason=%q", ready, reason)
+	}
+	if cfg.CopilotAIMaxSteps != 6 || cfg.CopilotAITimeout != 45*time.Second ||
+		cfg.CopilotAIReasoningEffort != "medium" {
+		t.Fatalf("presupuesto del Copilot no sigue el entorno: %+v", cfg)
+	}
+}
+
+func TestCopilotSinCredencialNoImpideCargarConfig(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://u:p@localhost:5432/x?sslmode=disable")
+	t.Setenv("COPILOT_ENABLED", "true")
+	t.Setenv("COPILOT_AI_PROVIDER", "provider-test")
+	t.Setenv("COPILOT_AI_BASE_URL", "https://copilot.example/v1")
+	t.Setenv("COPILOT_AI_MODEL", "reasoning-model")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("la ausencia de credencial solo deshabilita el Copilot: %v", err)
+	}
+	if ready, reason := cfg.CopilotReadiness(); ready || reason != "missing_api_key" {
+		t.Fatalf("readiness inesperado: ready=%v reason=%q", ready, reason)
+	}
+}
+
+func TestPresupuestoCopilotInvalidoSoloDeshabilitaCopilot(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://u:p@localhost:5432/x?sslmode=disable")
+	t.Setenv("COPILOT_ENABLED", "true")
+	t.Setenv("COPILOT_AI_PROVIDER", "provider-test")
+	t.Setenv("COPILOT_AI_BASE_URL", "https://copilot.example/v1")
+	t.Setenv("COPILOT_AI_API_KEY", "sk-copilot")
+	t.Setenv("COPILOT_AI_MODEL", "reasoning-model")
+	t.Setenv("COPILOT_AI_MAX_STEPS", "1")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("una mala configuración del Copilot no debe tumbar el editor manual: %v", err)
+	}
+	if ready, reason := cfg.CopilotReadiness(); ready || reason != "invalid_max_steps" {
+		t.Fatalf("readiness inesperado: ready=%v reason=%q", ready, reason)
 	}
 }
 

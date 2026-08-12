@@ -1,0 +1,157 @@
+{
+  "schemaVersion": "1",
+  "id": "catalog_order_manual_payment",
+  "version": "1.0.0",
+  "status": "stable",
+  "intentTags": ["catalogo", "pedido", "venta", "pago_manual"],
+  "risk": "high",
+  "triggerTypes": ["message"],
+  "requiredQuestions": [
+    {
+      "id": "store_connection",
+      "prompt": "¿Qué conexión de tienda existente debe usar el flujo?",
+      "required": true
+    },
+    {
+      "id": "required_customer_data",
+      "prompt": "¿Cómo se obtendrán correo, cantidad y producto antes de crear el pedido?",
+      "required": true
+    }
+  ],
+  "conditionalQuestions": [
+    {
+      "id": "payment_unavailable",
+      "prompt": "¿Debe derivarse o esperar cuando la tienda no tenga pagos manuales configurados?",
+      "when": "la conexión no anuncia pago manual disponible"
+    }
+  ],
+  "requiredCapabilities": [
+    {
+      "nodeKinds": ["agent", "tool", "router", "send", "wait", "action"],
+      "runtimeTools": ["catalog_search", "catalog_product", "order_create", "payment_intent_create", "payment_submit"]
+    }
+  ],
+  "requiredResources": [
+    {
+      "id": "store_connection",
+      "kind": "connection",
+      "description": "Conexión saludable con catálogo, pedidos y pagos manuales.",
+      "required": true
+    }
+  ],
+  "topologyPattern": {
+    "roles": [
+      {
+        "role": "catalog_search",
+        "kind": "tool",
+        "toolRef": "catalog_search",
+        "minimum": 1,
+        "description": "Consulta precio y stock en vivo."
+      },
+      {
+        "role": "collect_order",
+        "kind": "agent",
+        "minimum": 1,
+        "description": "Recopila producto, cantidad y correo sin escribir."
+      },
+      {
+        "role": "create_order",
+        "kind": "tool",
+        "toolRef": "order_create",
+        "minimum": 1,
+        "description": "Crea el pedido con idempotencia."
+      },
+      {
+        "role": "payment_intent",
+        "kind": "tool",
+        "toolRef": "payment_intent_create",
+        "minimum": 1,
+        "description": "Compone instrucciones de pago desde el backend."
+      },
+      {
+        "role": "payment_submit",
+        "kind": "tool",
+        "toolRef": "payment_submit",
+        "minimum": 1,
+        "description": "Declara el pago sin confirmarlo."
+      },
+      {
+        "role": "resume_wait",
+        "kind": "wait",
+        "minimum": 1,
+        "description": "Pausa entre preguntas y recepción del comprobante."
+      },
+      {
+        "role": "handoff",
+        "kind": "action",
+        "minimum": 1,
+        "description": "Recuperación ante fallos no resolubles."
+      }
+    ],
+    "connections": [
+      {"fromRole": "catalog_search", "toRole": "collect_order", "handle": "ok"},
+      {"fromRole": "collect_order", "toRole": "create_order", "handle": "complete"},
+      {"fromRole": "create_order", "toRole": "payment_intent", "handle": "ok"},
+      {"fromRole": "payment_intent", "toRole": "resume_wait", "handle": "ok"},
+      {"fromRole": "resume_wait", "toRole": "payment_submit"},
+      {"fromRole": "payment_submit", "toRole": "handoff", "handle": "error"}
+    ]
+  },
+  "bindings": [
+    {
+      "id": "store_connection",
+      "kind": "connection",
+      "required": true,
+      "description": "Clave fija elegida por el autor; no acepta interpolación."
+    },
+    {
+      "id": "idempotency_key",
+      "kind": "expression",
+      "required": true,
+      "description": "Clave estable basada en el mensaje o evento que pidió crear el pedido."
+    },
+    {
+      "id": "customer_email",
+      "kind": "variable",
+      "required": true,
+      "description": "Correo comprobado antes de order_create."
+    }
+  ],
+  "agentPromptContracts": [
+    {
+      "role": "collect_order",
+      "responsibility": "Recopilar y comprobar producto, cantidad y correo; nunca crear ni cobrar.",
+      "allowedSources": ["mensaje actual", "resultado de catálogo"],
+      "requiredBranches": ["complete", "clarify", "cancel"],
+      "unknownPolicy": "Preguntar por el dato faltante o volver a consultar el catálogo.",
+      "responsePolicy": "Puede preguntar solo en clarify; calla antes de los nodos deterministas."
+    }
+  ],
+  "patterns": [
+    {"id": "wait_resume", "version": "1.0.0"},
+    {"id": "tool_error_recovery", "version": "1.0.0"},
+    {"id": "data_write_idempotent", "version": "1.0.0"}
+  ],
+  "requiredCheckIds": [
+    {"id": "engine_valid", "version": "1.0.0"},
+    {"id": "no_automatic_cycle", "version": "1.0.0"},
+    {"id": "explicit_error_routes", "version": "1.0.0"},
+    {"id": "idempotent_write", "version": "1.0.0"}
+  ],
+  "forbiddenCheckIds": [
+    {"id": "agent_write_tool", "version": "1.0.0"},
+    {"id": "payment_marked_confirmed", "version": "1.0.0"}
+  ],
+  "policyIds": [
+    {"id": "graph_writes_only", "version": "1.0.0"},
+    {"id": "payment_not_confirmation", "version": "1.0.0"},
+    {"id": "resources_must_exist", "version": "1.0.0"}
+  ],
+  "invariants": [
+    "Precio y stock se leen del catálogo en vivo.",
+    "found=false se distingue de error de conexión.",
+    "order_create declara idempotencyKey.",
+    "La tienda calcula los totales y el backend redacta las cuentas.",
+    "Declarar un pago no lo confirma."
+  ]
+}

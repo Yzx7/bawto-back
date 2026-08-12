@@ -374,8 +374,8 @@ func TestSistemuinoNoRelaeElSegmentoYaResuelto(t *testing.T) {
 // La rama comercial de la tienda, de punta a punta: el orquestador entrega el
 // tema, el especialista consulta el catálogo y confirma los tres datos, y el
 // grafo —no el modelo— crea el pedido y abre el cobro.
-func TestSistemuinoVendeUnProductoDelCatalogo(t *testing.T) {
-	flow := loadSistemuinoAgentFlow(t)
+func TestWAATiendaVendeUnProductoDelCatalogo(t *testing.T) {
+	flow := loadWAAStoreFlow(t)
 
 	var llamadas []string
 	var argsPedido map[string]string
@@ -445,21 +445,40 @@ func TestSistemuinoVendeUnProductoDelCatalogo(t *testing.T) {
 			if request.NodeID != "n_store_receipt" || !request.Silent {
 				t.Fatalf("agente visual de la tienda inesperado: %+v", request)
 			}
-			return AgentResult{Branch: "valid", Data: map[string]any{"operationCode": "00987"}}, nil
+			campos := map[string]bool{}
+			for _, field := range request.OutputFields {
+				campos[field.Key] = true
+			}
+			for _, key := range []string{"provider", "amount", "currency", "occurredAt", "operationCode", "payerName", "recipient", "confidence"} {
+				if !campos[key] {
+					t.Errorf("n_store_receipt no declara %s: %+v", key, request.OutputFields)
+				}
+			}
+			return AgentResult{Branch: "valid", Data: map[string]any{
+				"provider": "yape", "amount": 17.8, "currency": "PEN",
+				"occurredAt": "2026-08-11T04:15:00-05:00", "operationCode": "00987",
+				"payerName": "Ana Pérez", "recipient": "Sistemuino", "confidence": .99,
+			}}, nil
 		},
 		Tool: func(ref string, args, _ map[string]string) (string, error) {
 			if ref != "payment_submit" {
 				t.Fatalf("herramienta inesperada: %s", ref)
 			}
 			declaracion = args
-			return `{"paymentId":2,"orderId":11,"status":"submitted","reference":"00987"}`, nil
+			return `{"paymentId":2,"orderId":11,"status":"submitted","reference":"00987","declaredAmount":17.8,"amountMatches":true}`, nil
 		},
 	})
 	if err != nil || !pago.Done || len(pago.Sends) != 1 {
 		t.Fatalf("declaración: %+v err=%v", pago, err)
 	}
-	if declaracion["reference"] != "00987" || declaracion["paymentId"] != "2" {
-		t.Fatalf("la referencia del comprobante no llegó: %+v", declaracion)
+	for key, quiere := range map[string]string{
+		"reference": "00987", "paymentId": "2", "declaredAmount": "17.8",
+		"declaredAt": "2026-08-11T04:15:00-05:00", "channel": "yape",
+		"payerName": "Ana Pérez", "recipient": "Sistemuino",
+	} {
+		if declaracion[key] != quiere {
+			t.Errorf("%s = %q, esperado %q; args=%+v", key, declaracion[key], quiere, declaracion)
+		}
 	}
 }
 
@@ -521,11 +540,11 @@ func TestSistemuinoCuentaPorQueFallaElPedido(t *testing.T) {
 
 // Un comprobante que no cubre el pedido no se declara como su pago.
 //
-// El agente visual ya extraía el importe y nadie lo miraba: una captura de S/ 5
-// se declaraba contra un pedido de S/ 17.80 y el desajuste solo aparecía cuando
-// el dueño iba a confirmar, con el pago ya marcado como declarado.
-func TestSistemuinoNoDeclaraUnComprobanteQueNoCubreElPedido(t *testing.T) {
-	flow := loadSistemuinoAgentFlow(t)
+// El importe siempre se declara: Meudim es quien conoce el total congelado del
+// intent y devuelve amountMatches. Bawto solo enruta el resultado para que un
+// descuadre llegue a una persona sin perder los datos del comprobante.
+func TestWAATiendaDeclaraElImporteYUsaLaComparacionDeMeudim(t *testing.T) {
+	flow := loadWAAStoreFlow(t)
 
 	esperando, err := Advance(flow, nil, "quiero uno", Deps{
 		InputType: "text", WaID: "wamid-c1",
@@ -554,6 +573,7 @@ func TestSistemuinoNoDeclaraUnComprobanteQueNoCubreElPedido(t *testing.T) {
 		t.Fatalf("no quedó esperando el comprobante: %+v err=%v", esperando, err)
 	}
 
+	declarado := false
 	corto, err := Advance(flow, esperando.State, "", Deps{
 		InputType: "image", MediaID: "media-1",
 		AgentStructured: func(AgentRequest) (AgentResult, error) {
@@ -561,15 +581,21 @@ func TestSistemuinoNoDeclaraUnComprobanteQueNoCubreElPedido(t *testing.T) {
 				"operationCode": "00987", "amount": 5.0,
 			}}, nil
 		},
-		Tool: func(ref string, _, _ map[string]string) (string, error) {
-			t.Fatalf("no debe declarar un pago que no cubre el pedido (%s)", ref)
-			return "", nil
+		Tool: func(ref string, args, _ map[string]string) (string, error) {
+			if ref != "payment_submit" {
+				t.Fatalf("herramienta inesperada: %s", ref)
+			}
+			declarado = true
+			if args["declaredAmount"] != "5" {
+				t.Fatalf("Meudim no recibió el importe visible: %+v", args)
+			}
+			return `{"paymentId":2,"orderId":11,"status":"submitted","reference":"00987","declaredAmount":5,"amountMatches":false}`, nil
 		},
 	})
 	if err != nil {
 		t.Fatalf("Advance: %v", err)
 	}
-	if !corto.Handoff {
+	if !declarado || !corto.Handoff {
 		t.Fatalf("un importe que no cuadra debe llegar a una persona: %+v", corto)
 	}
 	if len(corto.Sends) == 0 || !strings.Contains(corto.Sends[len(corto.Sends)-1], "17.8") {

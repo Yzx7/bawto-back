@@ -228,15 +228,24 @@ func paymentMessage(intent *meudim.PaymentIntent) string {
 }
 
 type paymentSubmitResult struct {
-	PaymentID int64  `json:"paymentId"`
-	OrderID   int64  `json:"orderId"`
-	Status    string `json:"status"`
-	Reference string `json:"reference"`
+	PaymentID      int64    `json:"paymentId"`
+	OrderID        int64    `json:"orderId"`
+	Status         string   `json:"status"`
+	Reference      string   `json:"reference"`
+	Amount         float64  `json:"amount"`
+	Currency       string   `json:"currency"`
+	ReceiptURL     string   `json:"receiptUrl,omitempty"`
+	DeclaredAmount *float64 `json:"declaredAmount"`
+	DeclaredAt     string   `json:"declaredAt,omitempty"`
+	Channel        string   `json:"channel,omitempty"`
+	PayerName      string   `json:"payerName,omitempty"`
+	Recipient      string   `json:"recipient,omitempty"`
+	AmountMatches  *bool    `json:"amountMatches"`
 }
 
 // execPaymentSubmit registra el número de operación que declaró el comprador.
-// Confirmarlo sigue siendo del dueño de la tienda, con su clave secreta y fuera
-// del bot: el bot no puede dar por cobrado nada.
+// Confirmarlo sigue fuera del bot: disponer de una clave secreta no registra por
+// sí solo una herramienta capaz de dar por cobrado algo.
 func (con *Controller) execPaymentSubmit(ctx context.Context, bot *models.BotChannel,
 	args map[string]string) (string, error) {
 	client, connection, err := con.catalogConnection(ctx, bot, args["connection"])
@@ -251,7 +260,19 @@ func (con *Controller) execPaymentSubmit(ctx context.Context, bot *models.BotCha
 	if reference == "" {
 		return "", fmt.Errorf("falta el número de operación declarado")
 	}
-	payment, meta, err := client.SubmitPayment(ctx, paymentID, reference, strings.TrimSpace(args["receiptUrl"]))
+	var declaredAmount *float64
+	if value := strings.TrimSpace(args["declaredAmount"]); value != "" {
+		parsed, parseErr := strconv.ParseFloat(value, 64)
+		if parseErr != nil || parsed < 0 {
+			return "", fmt.Errorf("declaredAmount debe ser un importe mayor o igual a cero")
+		}
+		declaredAmount = &parsed
+	}
+	payment, meta, err := client.SubmitPayment(ctx, paymentID, meudim.SubmitPaymentInput{
+		Reference: reference, ReceiptURL: args["receiptUrl"], DeclaredAmount: declaredAmount,
+		DeclaredAt: args["declaredAt"], Channel: args["channel"],
+		PayerName: args["payerName"], Recipient: args["recipient"],
+	})
 	con.recordCatalogCall(ctx, connection, err)
 	if err != nil {
 		return "", err
@@ -260,6 +281,10 @@ func (con *Controller) execPaymentSubmit(ctx context.Context, bot *models.BotCha
 	raw, marshalErr := json.Marshal(paymentSubmitResult{
 		PaymentID: payment.ID, OrderID: payment.OrderID,
 		Status: payment.Status, Reference: payment.Reference,
+		Amount: payment.Amount, Currency: payment.Currency, ReceiptURL: payment.ReceiptURL,
+		DeclaredAmount: payment.DeclaredAmount, DeclaredAt: payment.DeclaredAt,
+		Channel: payment.Channel, PayerName: payment.PayerName, Recipient: payment.Recipient,
+		AmountMatches: payment.AmountMatches,
 	})
 	return string(raw), marshalErr
 }

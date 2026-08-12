@@ -132,7 +132,11 @@ func TestPhase5DuplicarFlujo(t *testing.T) {
 	// El borrador se ensucia después de publicar: la copia debe traer lo
 	// publicado, que es lo que el operador ve corriendo.
 	sucio := grafoValido("f_dup", "Atención", "borrador a medias")
-	if _, err := UpdateFlowDraft(ctx, pool, bot.ID, flow.ID, sucio, "tester"); err != nil {
+	snapshot, err := DraftSnapshotFromFlow(flow)
+	if err != nil {
+		t.Fatalf("DraftSnapshotFromFlow: %v", err)
+	}
+	if _, err := UpdateFlowDraft(ctx, pool, bot.ID, flow.ID, sucio, snapshot.Checksum, "tester"); err != nil {
 		t.Fatalf("UpdateFlowDraft: %v", err)
 	}
 

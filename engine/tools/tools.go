@@ -338,8 +338,9 @@ var registry = map[string]Spec{
 	"payment_submit": {
 		Name:  "payment_submit",
 		Label: "Declarar el pago",
-		Help: "Registra el número de operación que declaró el comprador. Reenviarlo corrige la declaración " +
-			"en vez de duplicarla. Confirmar el pago sigue siendo del dueño de la tienda.",
+		Help: "Registra el número de operación y los datos visibles del comprobante. Meudim compara el " +
+			"importe declarado con el cobro; reenviar corrige la declaración en vez de duplicarla. " +
+			"Confirmar el pago sigue siendo del dueño de la tienda.",
 		Accepts:  []PayloadType{PayloadStructuredData, PayloadDataRecord},
 		Produces: PayloadDataRecord,
 		Effect:   EffectWrite,

@@ -17,3 +17,9 @@ func OK(msg string, data any) GenRes {
 func Err(msg string) GenRes {
 	return GenRes{Ok: false, Msg: msg}
 }
+
+// ErrData conserva el envelope estándar también para errores estructurados
+// (por ejemplo un conflicto CAS con el snapshot que ganó la carrera).
+func ErrData(msg string, data any) GenRes {
+	return GenRes{Ok: false, Msg: msg, Data: data}
+}

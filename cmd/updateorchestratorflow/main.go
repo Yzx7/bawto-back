@@ -12,6 +12,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/Yzx7/sacs-chatbots/engine"
+	"github.com/Yzx7/sacs-chatbots/models"
 )
 
 func main() {
@@ -53,24 +54,13 @@ func main() {
 	pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
 	must(err)
 	defer pool.Close()
-	tx, err := pool.Begin(ctx)
+	snapshot, err := models.UpdateFlowDraft(ctx, pool, *botID, *flowID, updated, *expected,
+		"codex:minimax-orchestrator")
 	must(err)
-	defer tx.Rollback(ctx)
-	var currentRaw json.RawMessage
-	must(tx.QueryRow(ctx, `SELECT draft FROM flows WHERE id=$1::uuid AND bot_id=$2::uuid FOR UPDATE`, *flowID, *botID).Scan(&currentRaw))
-	_, currentChecksum, err := engine.CanonicalChecksum(currentRaw)
-	must(err)
-	if currentChecksum != *expected {
-		panic(fmt.Sprintf("checksum cambió: esperado %s, actual %s", *expected, currentChecksum))
+	if snapshot == nil {
+		panic("flujo no encontrado")
 	}
-	tag, err := tx.Exec(ctx, `UPDATE flows SET draft=$3::jsonb,updated_by='codex:minimax-orchestrator'
-		WHERE id=$1::uuid AND bot_id=$2::uuid`, *flowID, *botID, updated)
-	must(err)
-	if tag.RowsAffected() != 1 {
-		panic("no se actualizó el borrador")
-	}
-	must(tx.Commit(ctx))
-	fmt.Printf("draft actualizado checksum=%s\n", nextChecksum)
+	fmt.Printf("draft actualizado checksum=%s\n", snapshot.Checksum)
 }
 
 // Se trabaja como JSON genérico para conservar `pos` y futuras extensiones del

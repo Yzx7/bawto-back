@@ -197,10 +197,15 @@ func TestPaymentSubmitDeclaraLaOperacion(t *testing.T) {
 	var got captura
 	fixture := setupCatalogFixture(t, tiendaQueCaptura(t, &got, func(w http.ResponseWriter) {
 		w.Write([]byte(`{"ok":true,"data":{"id":11,"order_id":101,"status":"submitted",
-			"reference":"00123456","amount":39.8,"currency":"PEN"}}`))
+			"reference":"00123456","amount":39.8,"currency":"PEN",
+			"declared_amount":39.8,"declared_at":"2026-08-11T04:15:00-05:00",
+			"channel":"yape","payer_name":"Ana Pérez","recipient":"Sistemuino",
+			"amount_matches":true}}`))
 	}))
 	raw, err := fixture.con.execPaymentSubmit(context.Background(), fixture.bot, map[string]string{
 		"connection": "meudim", "paymentId": "11", "reference": "00123456",
+		"declaredAmount": "39.8", "declaredAt": "2026-08-11T04:15:00-05:00",
+		"channel": "yape", "payerName": "Ana Pérez", "recipient": "Sistemuino",
 	})
 	if err != nil {
 		t.Fatalf("execPaymentSubmit: %v", err)
@@ -213,11 +218,22 @@ func TestPaymentSubmitDeclaraLaOperacion(t *testing.T) {
 	if got.body["reference"] != "00123456" {
 		t.Fatalf("referencia enviada: %v", got.body["reference"])
 	}
+	for key, quiere := range map[string]any{
+		"declared_amount": float64(39.8), "declared_at": "2026-08-11T04:15:00-05:00",
+		"channel": "yape", "payer_name": "Ana Pérez", "recipient": "Sistemuino",
+	} {
+		if got.body[key] != quiere {
+			t.Errorf("%s enviado = %v, esperado %v", key, got.body[key], quiere)
+		}
+	}
 	var result paymentSubmitResult
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		t.Fatalf("resultado ilegible: %v", err)
 	}
-	if result.Status != "submitted" || result.Reference != "00123456" {
+	if result.Status != "submitted" || result.Reference != "00123456" ||
+		result.AmountMatches == nil || !*result.AmountMatches ||
+		result.DeclaredAmount == nil || *result.DeclaredAmount != 39.8 ||
+		result.Channel != "yape" || result.PayerName != "Ana Pérez" || result.Recipient != "Sistemuino" {
 		t.Fatalf("resultado inesperado: %+v", result)
 	}
 }

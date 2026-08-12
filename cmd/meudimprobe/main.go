@@ -5,13 +5,13 @@
 // pasar por una conversación real: un flujo que falla no distingue una clave
 // revocada de una tienda caída, y aquí sí se ve.
 //
-// Solo lee. No crea pedidos ni pagos: con una clave `pk_live_` eso movería stock
-// y dinero de una tienda de verdad.
+// Solo lee. No crea pedidos ni pagos: aunque usa una `sk_`, el probe no expone
+// operaciones capaces de mover stock o dinero de una tienda de verdad.
 //
 //	go run ./cmd/meudimprobe -org-id <uuid> -save -search "ESP32"
 //
-// La credencial se toma del entorno (MEUDIM_API_KEY o, si no está,
-// NEXT_PUBLIC_MEUD_PK) y **nunca se imprime**: solo su forma enmascarada.
+// La credencial se toma de MEUD_SK y **nunca se imprime**: solo su forma
+// enmascarada.
 package main
 
 import (
@@ -156,22 +156,33 @@ func main() {
 }
 
 func saveConnection(ctx context.Context, pool *pgxpool.Pool, cipher *helpers.Cipher, orgID, key, label, baseURL string) {
-	credential := strings.TrimSpace(os.Getenv("MEUDIM_API_KEY"))
-	source := "MEUDIM_API_KEY"
+	credential := strings.TrimSpace(os.Getenv("MEUD_SK"))
+	source := "MEUD_SK"
 	if credential == "" {
-		credential, source = strings.TrimSpace(os.Getenv("NEXT_PUBLIC_MEUD_PK")), "NEXT_PUBLIC_MEUD_PK"
+		fail("define MEUD_SK con la clave secreta de la tienda")
 	}
-	if credential == "" {
-		fail("define MEUDIM_API_KEY (o NEXT_PUBLIC_MEUD_PK) con la clave publicable de la tienda")
-	}
-	// El bot solo necesita leer catálogo y cerrar la compra, y eso lo cubre una
-	// clave publicable. Una `sk_` da acceso total a la tienda —confirmar pagos,
-	// borrar productos— y no tiene por qué estar al alcance de un flujo.
-	if !strings.HasPrefix(credential, "pk_") {
-		fail("la credencial de %s no es una clave publicable (pk_); el bot no debe usar una sk_", source)
+	// La conexión es exclusivamente servidor a servidor. El acceso del flujo se
+	// limita en el catálogo de herramientas, no rebajando la credencial a una
+	// clave destinada al navegador.
+	if err := connectors.ValidateCredential(connectors.DriverMeudim, credential); err != nil {
+		fail("credencial de %s: %v", source, err)
 	}
 	if err := connectors.ValidateTarget(connectors.DriverMeudim, baseURL); err != nil {
 		fail("destino no permitido: %v", err)
+	}
+	label = strings.TrimSpace(label)
+	if label == "" {
+		// Rotar una credencial no debe borrar el nombre que el usuario eligió en
+		// el panel. Solo un alta nueva cae al nombre técnico de la conexión.
+		existing, err := models.ExternalConnectionByKey(ctx, pool, orgID, key)
+		if err != nil {
+			fail("consultar la conexión antes de guardarla: %v", err)
+		}
+		if existing != nil {
+			label = existing.Label
+		} else {
+			label = key
+		}
 	}
 	encrypted, err := cipher.Encrypt(credential)
 	if err != nil {

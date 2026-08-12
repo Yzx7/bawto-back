@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Pedidos y pagos.
@@ -143,13 +145,20 @@ func (c *Client) CreateOrder(ctx context.Context, input CreateOrderInput) (*Orde
 
 // Payment es el intento de cobro de un pedido.
 type Payment struct {
-	ID        int64   `json:"id"`
-	OrderID   int64   `json:"order_id"`
-	Provider  string  `json:"provider"`
-	Status    string  `json:"status"`
-	Amount    float64 `json:"amount"`
-	Currency  string  `json:"currency"`
-	Reference string  `json:"reference"`
+	ID             int64    `json:"id"`
+	OrderID        int64    `json:"order_id"`
+	Provider       string   `json:"provider"`
+	Status         string   `json:"status"`
+	Amount         float64  `json:"amount"`
+	Currency       string   `json:"currency"`
+	Reference      string   `json:"reference"`
+	ReceiptURL     string   `json:"receipt_url"`
+	DeclaredAmount *float64 `json:"declared_amount"`
+	DeclaredAt     string   `json:"declared_at"`
+	Channel        string   `json:"channel"`
+	PayerName      string   `json:"payer_name"`
+	Recipient      string   `json:"recipient"`
+	AmountMatches  *bool    `json:"amount_matches"`
 }
 
 // PaymentAccount es una cuenta donde el comprador puede pagar.
@@ -205,29 +214,51 @@ func (c *Client) CreatePaymentIntent(ctx context.Context, orderID int64, provide
 	return &intent, meta, nil
 }
 
-// SubmitPayment declara la operación que hizo el comprador.
+type SubmitPaymentInput struct {
+	Reference      string   `json:"reference"`
+	ReceiptURL     string   `json:"receipt_url,omitempty"`
+	DeclaredAmount *float64 `json:"declared_amount,omitempty"`
+	DeclaredAt     string   `json:"declared_at,omitempty"`
+	Channel        string   `json:"channel,omitempty"`
+	PayerName      string   `json:"payer_name,omitempty"`
+	Recipient      string   `json:"recipient,omitempty"`
+}
+
+// SubmitPayment declara la operación y los datos visibles del comprobante.
 //
 // Reenviarlo corrige la declaración en vez de fallar, así que un segundo
 // comprobante del mismo cliente actualiza el número de operación en lugar de
 // crear un cobro nuevo.
-func (c *Client) SubmitPayment(ctx context.Context, paymentID int64, reference, receiptURL string) (*Payment, Response, error) {
+func (c *Client) SubmitPayment(ctx context.Context, paymentID int64, input SubmitPaymentInput) (*Payment, Response, error) {
 	if paymentID <= 0 {
 		return nil, Response{RateLimitRemaining: -1}, fmt.Errorf("meudim: id de pago inválido")
 	}
-	reference = strings.TrimSpace(reference)
-	if reference == "" {
+	input.Reference = strings.TrimSpace(input.Reference)
+	if input.Reference == "" {
 		return nil, Response{RateLimitRemaining: -1}, fmt.Errorf("meudim: la declaración requiere el número de operación")
 	}
-	body := map[string]string{"reference": reference}
-	if receiptURL = strings.TrimSpace(receiptURL); receiptURL != "" {
-		body["receipt_url"] = receiptURL
+	input.ReceiptURL = strings.TrimSpace(input.ReceiptURL)
+	input.DeclaredAt = strings.TrimSpace(input.DeclaredAt)
+	input.Channel = strings.ToLower(strings.TrimSpace(input.Channel))
+	input.PayerName = strings.TrimSpace(input.PayerName)
+	input.Recipient = strings.TrimSpace(input.Recipient)
+	if input.DeclaredAmount != nil && *input.DeclaredAmount < 0 {
+		return nil, Response{RateLimitRemaining: -1}, fmt.Errorf("meudim: el importe declarado no puede ser negativo")
+	}
+	if input.DeclaredAt != "" {
+		if _, err := time.Parse(time.RFC3339, input.DeclaredAt); err != nil {
+			return nil, Response{RateLimitRemaining: -1}, fmt.Errorf("meudim: la fecha declarada debe usar RFC3339: %w", err)
+		}
+	}
+	if input.Channel != "" && !slices.Contains([]string{"yape", "plin", "bcp", "interbank", "transfer", "other"}, input.Channel) {
+		return nil, Response{RateLimitRemaining: -1}, fmt.Errorf("meudim: canal de pago %q inválido", input.Channel)
 	}
 	var payment Payment
 	meta, err := c.do(ctx, request{
 		method:         http.MethodPut,
 		path:           "/v1/payments/" + strconv.FormatInt(paymentID, 10) + "/submit",
-		body:           body,
-		idempotencyKey: fmt.Sprintf("submit:%d:%s", paymentID, reference),
+		body:           input,
+		idempotencyKey: fmt.Sprintf("submit:%d:%s", paymentID, input.Reference),
 	}, &payment)
 	if err != nil {
 		return nil, meta, err

@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -168,12 +169,9 @@ func Validate(flow *Flow) error {
 			!pathExists(flow.Edges, edge.Target, edge.Source, edgeIndex) {
 			return fmt.Errorf("la arista %s está marcada como loopback pero no cierra un ciclo", edge.ID)
 		}
-		if edge.Role == "loopback" &&
-			(nodes[edge.Source] == nil || nodes[edge.Source].Kind != "wait") &&
-			(nodes[edge.Target] == nil || nodes[edge.Target].Kind != "wait") &&
-			pathExistsWithoutWait(flow.Edges, nodes, edge.Target, edge.Source, edgeIndex) {
-			return fmt.Errorf("la arista %s forma un ciclo sin un nodo wait", edge.ID)
-		}
+	}
+	if cycle := automaticCycleWithoutWait(flow.Nodes, flow.Edges, nodes); len(cycle) > 0 {
+		return fmt.Errorf("el flujo contiene un ciclo sin un nodo wait entre los nodos: %s", strings.Join(cycle, ", "))
 	}
 	return nil
 }
@@ -749,7 +747,11 @@ func validatePaymentSubmitArgs(args map[string]string) error {
 	if strings.TrimSpace(args["reference"]) == "" {
 		return fmt.Errorf("payment_submit requiere el número de operación declarado")
 	}
-	allowed := map[string]bool{"connection": true, "paymentId": true, "reference": true, "receiptUrl": true}
+	allowed := map[string]bool{
+		"connection": true, "paymentId": true, "reference": true, "receiptUrl": true,
+		"declaredAmount": true, "declaredAt": true, "channel": true,
+		"payerName": true, "recipient": true,
+	}
 	for key := range args {
 		if !allowed[key] {
 			return fmt.Errorf("payment_submit no admite el argumento %q", key)
@@ -987,27 +989,88 @@ func pathExists(edges []Edge, from, target string, excludedEdgeIndex int) bool {
 	return false
 }
 
-func pathExistsWithoutWait(edges []Edge, nodes map[string]*Node, from, target string, excludedEdgeIndex int) bool {
-	seen := map[string]bool{}
-	queue := []string{from}
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-		if current == target {
-			return true
-		}
-		if seen[current] {
+// automaticCycleWithoutWait elimina los nodos wait y busca componentes
+// fuertemente conexos en lo que queda. Un ciclo que sobrevive a ese corte puede
+// avanzar indefinidamente dentro de una sola llamada a Advance; que alguna
+// arista lleve role=loopback no cambia esa propiedad. Eliminar los wait, en vez
+// de aceptar cualquier SCC que contenga uno, también detecta un bypass automático
+// dentro de un componente que posee otra rama pausada.
+func automaticCycleWithoutWait(orderedNodes []Node, edges []Edge, nodes map[string]*Node) []string {
+	adjacency := make(map[string][]string, len(orderedNodes))
+	for _, edge := range edges {
+		source, target := nodes[edge.Source], nodes[edge.Target]
+		if source == nil || target == nil || source.Kind == "wait" || target.Kind == "wait" {
 			continue
 		}
-		seen[current] = true
-		if node := nodes[current]; node != nil && node.Kind == "wait" {
-			continue
-		}
-		for edgeIndex, edge := range edges {
-			if edgeIndex != excludedEdgeIndex && edge.Source == current {
-				queue = append(queue, edge.Target)
+		adjacency[edge.Source] = append(adjacency[edge.Source], edge.Target)
+	}
+
+	nextIndex := 0
+	indexes := make(map[string]int, len(orderedNodes))
+	lowlinks := make(map[string]int, len(orderedNodes))
+	onStack := make(map[string]bool, len(orderedNodes))
+	stack := make([]string, 0, len(orderedNodes))
+	var cycle []string
+
+	var strongConnect func(string)
+	strongConnect = func(id string) {
+		nextIndex++
+		indexes[id] = nextIndex
+		lowlinks[id] = nextIndex
+		stack = append(stack, id)
+		onStack[id] = true
+
+		for _, target := range adjacency[id] {
+			if _, visited := indexes[target]; !visited {
+				strongConnect(target)
+				if lowlinks[target] < lowlinks[id] {
+					lowlinks[id] = lowlinks[target]
+				}
+			} else if onStack[target] && indexes[target] < lowlinks[id] {
+				lowlinks[id] = indexes[target]
 			}
 		}
+
+		if lowlinks[id] != indexes[id] {
+			return
+		}
+		component := make([]string, 0, 1)
+		for len(stack) > 0 {
+			last := len(stack) - 1
+			member := stack[last]
+			stack = stack[:last]
+			onStack[member] = false
+			component = append(component, member)
+			if member == id {
+				break
+			}
+		}
+
+		cyclic := len(component) > 1
+		if !cyclic {
+			for _, target := range adjacency[id] {
+				if target == id {
+					cyclic = true
+					break
+				}
+			}
+		}
+		if cyclic && len(cycle) == 0 {
+			cycle = component
+			sort.Strings(cycle)
+		}
 	}
-	return false
+
+	for _, node := range orderedNodes {
+		if len(cycle) > 0 {
+			break
+		}
+		if node.Kind == "wait" {
+			continue
+		}
+		if _, visited := indexes[node.ID]; !visited {
+			strongConnect(node.ID)
+		}
+	}
+	return cycle
 }
