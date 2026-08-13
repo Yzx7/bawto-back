@@ -64,7 +64,11 @@ func PlatformSalesOrgID(ctx context.Context, pool *pgxpool.Pool) (string, error)
 	var orgID string
 	err := pool.QueryRow(ctx, `SELECT org_id::text FROM data_objects WHERE key=$1`, PlatformSubscriptionsObject).Scan(&orgID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", fmt.Errorf("el objeto %s todavía no está configurado", PlatformSubscriptionsObject)
+		err = pool.QueryRow(ctx, `SELECT id::text FROM organizations WHERE lower(name) LIKE '%sistemuino%' ORDER BY created_at LIMIT 1`).Scan(&orgID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", fmt.Errorf("la organización comercial Sistemuino no está configurada")
+		}
+		return orgID, nil
 	}
 	return orgID, err
 }

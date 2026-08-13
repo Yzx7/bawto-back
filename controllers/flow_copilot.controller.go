@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strconv"
@@ -556,6 +557,24 @@ func (s copilotTurnStream) usageRecorder() func(copilot.ModelUsage) {
 		})
 		if err != nil {
 			s.logger.Error("copilot: registrar usage de autoría", "turnId", s.turn.ID, "err", err.Error())
+		}
+		costUSD := (float64(usage.InputTokens)*usage.InputCostPerMillionUSD +
+			float64(usage.OutputTokens)*usage.OutputCostPerMillionUSD +
+			float64(usage.CacheReadInputTokens)*usage.CacheReadCostPerMillionUSD +
+			float64(usage.CacheWriteInputTokens)*usage.CacheWriteCostPerMillionUSD) / 1_000_000.0
+		credits := models.CostUSDToCredits(costUSD)
+		if credits > 0 {
+			if _, cErr := models.DeductCredits(context.Background(), s.pool, models.DeductCreditsInput{
+				OrgID:         s.organizationID,
+				Credits:       credits,
+				Type:          models.CreditTxAICopilotUsage,
+				ReferenceType: models.CreditRefAIUsageEvents,
+				ReferenceID:   usage.ProviderRequestID,
+				Notes:         fmt.Sprintf("Copilot autoría turno=%s bot=%s", s.turn.ID, s.botID),
+				AllowExceed:   true,
+			}); cErr != nil {
+				s.logger.Error("copilot: deducir créditos", "turnId", s.turn.ID, "err", cErr.Error())
+			}
 		}
 	}
 }

@@ -649,6 +649,25 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 			if toolErr != nil {
 				return engine.AgentResult{}, toolErr
 			}
+			wallet, wErr := models.GetOrCreateCreditWallet(ctx, pool, bot.OrgID)
+			if wErr == nil && wallet.Balance <= 0 && (!wallet.AllowOverage || wallet.Balance < -wallet.OverageLimit) {
+				con.whatsAppLogger().Warn("ai agent blocked: insufficient credits", "org_id", bot.OrgID, "bot_id", bot.ID, "balance", wallet.Balance)
+				fallbackBranch := ""
+				for _, b := range request.Outputs {
+					if b == "error" || b == "fallback" || b == "default" || b == "aclarar" || b == "asesor" {
+						fallbackBranch = b
+						break
+					}
+				}
+				if fallbackBranch == "" && len(request.Outputs) > 0 {
+					fallbackBranch = request.Outputs[0]
+				}
+				return engine.AgentResult{
+					Reply:  "Nuestros canales automáticos no cuentan con saldo disponible en este momento. Por favor comuníquese directamente con un asesor.",
+					Branch: fallbackBranch,
+				}, nil
+			}
+
 			for attempt := 1; attempt <= 2; attempt++ {
 				startedAt := time.Now()
 				// Sin herramientas se conserva el camino de una sola petición: un
@@ -700,6 +719,25 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 						Outcome:                  outcome, Metadata: metadata,
 					}); err != nil {
 						con.whatsAppLogger().Error("ai usage persist", "request", usage.RequestID, "err", err.Error())
+					}
+
+					costUSD := (float64(usage.InputTokens)*usage.Rates.InputPerMillion +
+						float64(usage.OutputTokens)*usage.Rates.OutputPerMillion +
+						float64(usage.CacheReadInputTokens)*usage.Rates.CacheReadPerMillion +
+						float64(usage.CacheCreationInputTokens)*usage.Rates.CacheWritePerMillion) / 1_000_000.0
+					credits := models.CostUSDToCredits(costUSD)
+					if credits > 0 {
+						if _, cErr := models.DeductCredits(ctx, pool, models.DeductCreditsInput{
+							OrgID:         bot.OrgID,
+							Credits:       credits,
+							Type:          models.CreditTxAIRuntimeUsage,
+							ReferenceType: models.CreditRefAIUsageEvents,
+							ReferenceID:   usage.RequestID,
+							Notes:         fmt.Sprintf("Turno IA bot=%s chat=%s nodo=%s", bot.ID, chatID, nodeID),
+							AllowExceed:   true,
+						}); cErr != nil {
+							con.whatsAppLogger().Error("credits deduction failed", "org_id", bot.OrgID, "request", usage.RequestID, "err", cErr.Error())
+						}
 					}
 				}
 
@@ -755,6 +793,8 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 			return con.execPaymentMethodsRender(ctx, bot)
 		case "subscription_activate":
 			return con.execSubscriptionActivate(ctx, bot, m.From, args)
+		case "credit_recharge_activate":
+			return con.execCreditRechargeActivate(ctx, bot, m.From, args)
 		default:
 			return "", fmt.Errorf("herramienta %q no implementada", ref)
 		}

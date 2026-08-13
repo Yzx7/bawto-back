@@ -37,6 +37,7 @@ func main() {
 	statementID := flags.String("statement-id", "", "estado de cuenta")
 	documentType := flags.String("document-type", "", "tipo del documento fiscal externo")
 	documentNumber := flags.String("document-number", "", "número del documento fiscal externo")
+	creditsAmount := flags.Float64("credits", 0, "monto de créditos a abonar")
 	_ = flags.Parse(os.Args[2:])
 
 	url := os.Getenv("DATABASE_URL")
@@ -52,6 +53,31 @@ func main() {
 	defer pool.Close()
 
 	switch action {
+	case "credits-overview":
+		if *orgID == "" {
+			fail("credits-overview requiere -org-id")
+		}
+		overview, err := models.GetCreditOverview(ctx, pool, *orgID)
+		if err != nil {
+			fail("credits overview: %v", err)
+		}
+		printJSON(overview)
+	case "credits-add":
+		if *orgID == "" || *creditsAmount <= 0 {
+			fail("credits-add requiere -org-id y -credits > 0")
+		}
+		txRecord, err := models.AddCredits(ctx, pool, models.AddCreditsInput{
+			OrgID:         *orgID,
+			Credits:       *creditsAmount,
+			Type:          models.CreditTxRecharge,
+			ReferenceType: models.CreditRefManual,
+			Notes:         *notes,
+			Metadata:      map[string]any{"source": "cli_billing"},
+		})
+		if err != nil {
+			fail("abonar creditos: %v", err)
+		}
+		printJSON(txRecord)
 	case "configure":
 		if *orgID == "" || *file == "" {
 			fail("configure requiere -org-id y -file")

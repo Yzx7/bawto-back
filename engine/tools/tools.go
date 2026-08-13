@@ -360,6 +360,18 @@ var registry = map[string]Spec{
 		ForGraph: true,
 	},
 
+	"credit_recharge_activate": {
+		Name:  "credit_recharge_activate",
+		Label: "Recargar créditos Bawto",
+		Help: "Valida el código de activación y el cobro, y abona créditos al monedero de la organización. " +
+			"Sólo funciona en el bot de la organización comercial propietaria del ledger.",
+		Accepts:  []PayloadType{PayloadDataRecord, PayloadStructuredData},
+		Produces: PayloadDataRecord,
+		Effect:   EffectWrite,
+		ForAgent: false,
+		ForGraph: true,
+	},
+
 	"payment_methods_render": {
 		Name:  "payment_methods_render",
 		Label: "Preparar métodos de pago",

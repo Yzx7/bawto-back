@@ -40,6 +40,12 @@ func RegisterHTTP(app *fiber.App, e *env.Env) {
 	org.Get("/:orgId/costs", con.GetOrganizationCosts)
 	org.Get("/:orgId/billing", con.GetOrganizationBilling)
 	org.Get("/:orgId/subscription", con.GetOrganizationSubscription)
+	org.Get("/:orgId/credits", con.GetOrganizationCredits)
+	org.Get("/:orgId/credits/transactions", con.ListOrganizationCreditTransactions)
+	org.Put("/:orgId/credits/settings", con.UpdateOrganizationCreditSettings)
+	org.Post("/:orgId/credits/recharge", con.RechargeOrganizationCredits)
+	org.Post("/:orgId/credits/request-recharge", con.RequestOrganizationCreditRecharge)
+	org.Get("/:orgId/credits/recharge-requests", con.ListOrganizationRechargeRequests)
 	org.Get("/:orgId/billing/statements/:statementId", con.GetOrganizationBillingStatement)
 	org.Get("/:orgId/data-objects", con.ListOrgDataObjects)
 	org.Post("/:orgId/data-objects", con.CreateOrgDataObject)
@@ -67,11 +73,16 @@ func RegisterHTTP(app *fiber.App, e *env.Env) {
 	org.Delete("/:orgId/data-objects/:objectId/views/:viewId", con.DeleteOrgDataView)
 
 	// Administración comercial: sólo owner/admin de la organización que posee
-	// el ledger reservado de suscripciones puede cruzar tenants.
+	// el ledger reservado de suscripciones y créditos puede cruzar tenants.
 	platform := app.Group("/platform/subscriptions", authmw.VerifyToken)
 	platform.Get("/", con.ListPlatformSubscriptions)
 	platform.Post("/", con.AssignPlatformSubscription)
 	platform.Put("/:recordId/cancel", con.CancelPlatformSubscription)
+
+	platformCredits := app.Group("/platform/credits", authmw.VerifyToken)
+	platformCredits.Get("/recharges", con.ListPlatformCreditRecharges)
+	platformCredits.Post("/recharges/:recordId/approve", con.ApprovePlatformCreditRecharge)
+	platformCredits.Post("/recharges/:recordId/reject", con.RejectPlatformCreditRecharge)
 
 	// ---- Bots (protegido; autz por membresía en la org dueña) ----
 	bots := app.Group("/bots", authmw.VerifyToken)
