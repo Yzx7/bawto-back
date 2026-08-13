@@ -457,6 +457,10 @@ func validateNode(n *Node, triggerType string) error {
 			if err := validateSubscriptionActivateArgs(n.Args); err != nil {
 				return err
 			}
+		case "credit_recharge_activate":
+			if err := validateCreditRechargeActivateArgs(n.Args); err != nil {
+				return err
+			}
 		}
 	case "condition":
 		if err := validateExpression(n.Expression); err != nil {
@@ -902,6 +906,26 @@ func validateSubscriptionActivateArgs(args map[string]string) error {
 	for key := range args {
 		if !allowed[key] {
 			return fmt.Errorf("subscription_activate no admite el argumento %q", key)
+		}
+	}
+	return nil
+}
+
+func validateCreditRechargeActivateArgs(args map[string]string) error {
+	required := []string{"activationCode", "paymentRecordId", "idempotencyKey"}
+	allowed := map[string]bool{"activationCode": true, "creditsAmount": true, "amount": true,
+		"paymentRecordId": true, "phone": true, "notes": true, "idempotencyKey": true}
+	for _, key := range required {
+		if strings.TrimSpace(args[key]) == "" {
+			return fmt.Errorf("credit_recharge_activate requiere %s", key)
+		}
+	}
+	if strings.TrimSpace(args["creditsAmount"]) == "" && strings.TrimSpace(args["amount"]) == "" {
+		return fmt.Errorf("credit_recharge_activate requiere creditsAmount o amount")
+	}
+	for key := range args {
+		if !allowed[key] {
+			return fmt.Errorf("credit_recharge_activate no admite el argumento %q", key)
 		}
 	}
 	return nil
