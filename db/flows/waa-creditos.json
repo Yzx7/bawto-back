@@ -53,30 +53,6 @@
       "target": "n_payment_not_receipt"
     },
     {
-      "id": "e_payment_saved",
-      "source": "n_save_payment",
-      "sourceHandle": "ok",
-      "target": "n_payment_needs_review"
-    },
-    {
-      "id": "e_payment_save_error",
-      "source": "n_save_payment",
-      "sourceHandle": "error",
-      "target": "n_payment_error"
-    },
-    {
-      "id": "e_payment_review",
-      "source": "n_payment_needs_review",
-      "sourceHandle": "true",
-      "target": "n_activate_subscription"
-    },
-    {
-      "id": "e_payment_confirmed",
-      "source": "n_payment_needs_review",
-      "sourceHandle": "false",
-      "target": "n_payment_review"
-    },
-    {
       "id": "e_payment_ok_end",
       "source": "n_payment_ok",
       "target": "n_fin"
@@ -508,12 +484,6 @@
       "target": "n_derivar"
     },
     {
-      "id": "e_classify_payment_valid",
-      "source": "n_classify_payment",
-      "sourceHandle": "valid",
-      "target": "n_save_payment"
-    },
-    {
       "id": "e_classify_payment_needs_review",
       "source": "n_classify_payment",
       "sourceHandle": "needs_review",
@@ -536,6 +506,42 @@
       "source": "n_payment_review",
       "sourceHandle": "out",
       "target": "n_fin"
+    },
+    {
+      "id": "e_classify_valid_check",
+      "source": "n_classify_payment",
+      "sourceHandle": "valid",
+      "target": "n_payment_needs_review"
+    },
+    {
+      "id": "e_has_code_save_payment",
+      "source": "n_payment_needs_review",
+      "sourceHandle": "true",
+      "target": "n_save_payment"
+    },
+    {
+      "id": "e_needs_code_ask",
+      "source": "n_payment_needs_review",
+      "sourceHandle": "false",
+      "target": "n_ask_org_code"
+    },
+    {
+      "id": "e_ask_code_espera",
+      "source": "n_ask_org_code",
+      "sourceHandle": "out",
+      "target": "n_espera"
+    },
+    {
+      "id": "e_save_payment_activate",
+      "source": "n_save_payment",
+      "sourceHandle": "ok",
+      "target": "n_activate_subscription"
+    },
+    {
+      "id": "e_save_payment_err",
+      "source": "n_save_payment",
+      "sourceHandle": "error",
+      "target": "n_payment_error"
     }
   ],
   "id": "flow_waa_creditos",
@@ -698,8 +704,8 @@
       "id": "n_save_payment",
       "kind": "tool",
       "pos": {
-        "x": 5383.0904150180395,
-        "y": 1069.8105584230727
+        "x": 5383,
+        "y": 1069
       },
       "saveAs": "payment_record",
       "toolRef": "data_mutate"
@@ -709,8 +715,8 @@
       "id": "n_payment_needs_review",
       "kind": "condition",
       "pos": {
-        "x": 5732.68905627721,
-        "y": 1033.3023006540225
+        "x": 4900,
+        "y": 586
       }
     },
     {
@@ -913,6 +919,7 @@
     {
       "args": {
         "activationCode": "{sale.organizationCode}",
+        "amount": "{receipt.amount}",
         "creditsAmount": "{sale.creditsAmount}",
         "idempotencyKey": "credits:{payment_record.recordId}",
         "paymentRecordId": "{payment_record.recordId}",
@@ -945,7 +952,7 @@
       "agentRole": "specialist",
       "contextMode": "recent",
       "id": "n_bawto_specialist",
-      "instruction": "Eres el especialista comercial de Bawto. El orquestador ya definió este tema. No llames herramientas: explica el modelo de Créditos Pay as you go de Bawto.\n\nModelo de Créditos Pay as you go:\n- Conversión fija: 5 Soles = 100 créditos (1 Sol = 20 créditos). 1 USD = 400 créditos.\n- Paquetes de recarga sugeridos: S/ 5 (100 cr), S/ 20 (400 cr), S/ 50 (1,000 cr - Popular), S/ 100 (2,000 cr), S/ 200 (4,000 cr), o cualquier monto libre en Soles.\n- Beneficios clave: Paga estrictamente por lo que consumes en IA (turnos de bots y Copilot de autoría), sin mensualidades forzosas, sin vencimiento de saldo, recarga instantánea por WhatsApp.\n\nAntes de cobrar confirma:\n1. Monto en Soles o cantidad de créditos deseada.\n2. Código de activación alfanumérico de 10 caracteres (visible en Panel → Facturación / Organización).\n\nElige cobrar solo si el cliente confirma su código de activación y el monto que recargará, o si ya pagó y enviará el comprobante. Devuelve organizationCode y creditsAmount calculados (o amountPen); pide la captura completa del comprobante (Yape, Plin o transferencia) con fecha, importe y número de operación para su acreditación automática.\n\nElige conversar mientras falte contexto o algún dato. Elige asesor si pide atención humana personalizada o una solución fuera de créditos.\n\nEl cliente se llama {contact_name}. Si llega vacío o entre llaves, no uses nombre. Responde en español neutro del Perú, profesional, directo y sobrio; máximo cinco líneas, una pregunta por turno y sin emojis salvo que el cliente los use primero. No pidas contraseñas, PIN, CVV, códigos de seguridad, tokens ni claves privadas. {contexto_organizacion}",
+      "instruction": "Eres el especialista comercial de Bawto (plataforma de chatbots con IA para WhatsApp de Sistemuino). Tu objetivo es asesorar sobre el modelo de Créditos Pay as you go y concretar la recarga.\n\nReglas del modelo Pay as you go:\n- Conversión fija: S/ 5 = 100 créditos (1 sol = 20 créditos).\n- Paquetes sugeridos: S/ 5 (100 cr.), S/ 20 (400 cr.), S/ 50 (1,000 cr., más popular), S/ 100 (2,000 cr.), S/ 200 (4,000 cr.), o cualquier monto libre en Soles.\n- Beneficios clave: Paga estrictamente por lo que consumes en IA (turnos de bots y Copilot), sin mensualidades, sin vencimiento de saldo, recarga instantánea por WhatsApp.\n\nAntes de cobrar confirma:\n1. Monto en Soles o cantidad de créditos deseada.\n2. Código de activación alfanumérico de 10 caracteres de su organización (visible en Panel de Bawto → Facturación / Organización).\n\nMantén la conversación (elige conversar) hasta que el cliente brinde su código de activación o aclare dudas. Elige cobrar cuando el cliente confirme su código de activación y el monto (o si ya envió o enviará el comprobante con su código). Devuelve organizationCode y creditsAmount calculados.\n\nEl cliente se llama {contact_name}. Responde en español neutro del Perú, profesional, directo y sobrio; máximo cinco líneas, una pregunta por turno. No pidas contraseñas, PIN, CVV, códigos de seguridad ni tokens. {contexto_organizacion}",
       "kind": "agent",
       "outputFields": [
         {
@@ -1022,7 +1029,7 @@
       "agentRole": "specialist",
       "contextMode": "recent",
       "id": "n_payment_specialist",
-      "instruction": "Eres el especialista de recepción de pagos de Sistemuino. El orquestador ya confirmó que el tema es un pago. No llames herramientas.\n\nSi el historial confirma una recarga de créditos Bawto, conserva exactamente el código de activación y la cantidad de créditos acordados y devuelve organizationCode y creditsAmount. Si no existe esa recarga confirmada, trátalo como pago general y deja esos datos vacíos. Elige cobrar cuando el cliente ya pagó o enviará el comprobante e indica que enviarás las instrucciones exactas de pago a continuación; no inventes ni redactes números o cuentas. Elige conversar si todavía no queda claro que exista un pago. Elige asesor si disputa un cobro o solicita devolución.\n\nEl cliente se llama {contact_name}. Si llega vacío o entre llaves, no uses nombre. Responde en español neutro del Perú, profesional, directo y sobrio; máximo cinco líneas, una pregunta por turno y sin emojis salvo que el cliente los use primero. No pidas contraseñas, PIN, CVV, códigos de seguridad, tokens ni claves privadas. {contexto_organizacion}",
+      "instruction": "Eres el especialista de recepción de pagos de Sistemuino. El orquestador ya confirmó que el tema es un pago. No llames herramientas.\n\nSi el cliente realiza una recarga de créditos Bawto o envió un comprobante de recarga, pide o conserva obligatoriamente su código de activación de 10 caracteres (visible en su Panel → Facturación / Organización) y el monto/créditos acordados. Devuelve organizationCode y creditsAmount.\n\nElige conversar mientras falte el código de activación de 10 caracteres o contexto. Elige cobrar cuando ya se tenga el código de activación confirmado y el cliente ya pagó o enviará el comprobante. Si es un pago general que no es de Bawto, trátalo como pago general y deja esos datos vacíos. Elige asesor si disputa un cobro o solicita devolución.\n\nEl cliente se llama {contact_name}. Responde en español neutro del Perú, profesional, directo y sobrio; máximo cinco líneas, una pregunta por turno. No pidas contraseñas, PIN, CVV ni tokens. {contexto_organizacion}",
       "kind": "agent",
       "outputFields": [
         {
@@ -1373,6 +1380,15 @@
       },
       "saveAs": "payment_record",
       "toolRef": "data_mutate"
+    },
+    {
+      "body": "¡Comprobante de {receipt.provider} por {receipt.currency} {receipt.amount} recibido exitosamente! Para asociarlo a tu organización y recargar tus créditos de inmediato, indícame tu código de activación de 10 caracteres (lo encuentras en tu Panel de Bawto → Facturación / Organización).",
+      "id": "n_ask_org_code",
+      "kind": "send",
+      "pos": {
+        "x": 5383,
+        "y": 586
+      }
     }
   ],
   "trigger": {

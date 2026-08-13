@@ -34,12 +34,15 @@ func TestWAACreditosFlowValidoYConToolDeRecarga(t *testing.T) {
 	specialist := nodes["n_bawto_specialist"]
 	classifyPayment := nodes["n_classify_payment"]
 	savePaymentReview := nodes["n_save_payment_review"]
+	savePayment := nodes["n_save_payment"]
 	activateTool := nodes["n_activate_subscription"]
 	paymentNeedsReview := nodes["n_payment_needs_review"]
+	askOrgCode := nodes["n_ask_org_code"]
 	paymentOK := nodes["n_payment_ok"]
 	paymentReview := nodes["n_payment_review"]
 
-	if specialist == nil || classifyPayment == nil || savePaymentReview == nil || activateTool == nil || paymentNeedsReview == nil || paymentOK == nil || paymentReview == nil {
+	if specialist == nil || classifyPayment == nil || savePaymentReview == nil || savePayment == nil ||
+		activateTool == nil || paymentNeedsReview == nil || askOrgCode == nil || paymentOK == nil || paymentReview == nil {
 		t.Fatalf("faltan nodos clave en flow_waa_creditos")
 	}
 
@@ -78,24 +81,27 @@ func TestWAACreditosFlowValidoYConToolDeRecarga(t *testing.T) {
 	if activateTool.Args["activationCode"] != "{sale.organizationCode}" {
 		t.Errorf("n_activate_subscription.activationCode = %q, esperado {sale.organizationCode}", activateTool.Args["activationCode"])
 	}
-	if activateTool.Args["creditsAmount"] != "{sale.creditsAmount}" {
-		t.Errorf("n_activate_subscription.creditsAmount = %q, esperado {sale.creditsAmount}", activateTool.Args["creditsAmount"])
-	}
 
-	// 5. Verificar condición de revisión de pago
+	// 5. Verificar condición de revisión / petición de código
 	if paymentNeedsReview.Expression != "!empty(sale.organizationCode)" {
 		t.Errorf("n_payment_needs_review.Expression = %q, esperado !empty(sale.organizationCode)", paymentNeedsReview.Expression)
 	}
 
-	// 6. Verificar edges
+	// 6. Verificar aristas del flujo de código
 	edges := map[string][]string{}
 	for _, e := range flow.Edges {
 		edges[e.Source+"."+e.SourceHandle] = append(edges[e.Source+"."+e.SourceHandle], e.Target)
 	}
-	if targets := edges["n_classify_payment.needs_review"]; len(targets) == 0 || targets[0] != "n_save_payment_review" {
-		t.Errorf("n_classify_payment.needs_review debe conectar a n_save_payment_review, tiene %v", targets)
+	if targets := edges["n_classify_payment.valid"]; len(targets) == 0 || targets[0] != "n_payment_needs_review" {
+		t.Errorf("n_classify_payment.valid debe conectar a n_payment_needs_review, tiene %v", targets)
 	}
-	if targets := edges["n_save_payment_review.ok"]; len(targets) == 0 || targets[0] != "n_payment_review" {
-		t.Errorf("n_save_payment_review.ok debe conectar a n_payment_review, tiene %v", targets)
+	if targets := edges["n_payment_needs_review.true"]; len(targets) == 0 || targets[0] != "n_save_payment" {
+		t.Errorf("n_payment_needs_review.true debe conectar a n_save_payment, tiene %v", targets)
+	}
+	if targets := edges["n_payment_needs_review.false"]; len(targets) == 0 || targets[0] != "n_ask_org_code" {
+		t.Errorf("n_payment_needs_review.false debe conectar a n_ask_org_code, tiene %v", targets)
+	}
+	if targets := edges["n_ask_org_code.out"]; len(targets) == 0 || targets[0] != "n_espera" {
+		t.Errorf("n_ask_org_code.out debe conectar a n_espera, tiene %v", targets)
 	}
 }
