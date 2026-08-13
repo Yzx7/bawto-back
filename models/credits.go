@@ -2,12 +2,14 @@ package models
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -35,6 +37,7 @@ const (
 var (
 	ErrInsufficientCredits = errors.New("saldo de créditos insuficiente")
 	ErrInvalidCreditAmount = errors.New("el monto de créditos debe ser estrictamente positivo")
+	ErrCreditIdempotency   = errors.New("la clave de idempotencia ya identifica otra operación")
 )
 
 type CreditWallet struct {
@@ -43,8 +46,6 @@ type CreditWallet struct {
 	LifetimeCredited    float64   `json:"lifetimeCredited"`
 	LifetimeConsumed    float64   `json:"lifetimeConsumed"`
 	LowBalanceThreshold float64   `json:"lowBalanceThreshold"`
-	AllowOverage        bool      `json:"allowOverage"`
-	OverageLimit        float64   `json:"overageLimit"`
 	CreatedAt           time.Time `json:"createdAt"`
 	UpdatedAt           time.Time `json:"updatedAt"`
 }
@@ -59,43 +60,47 @@ type CreditTransaction struct {
 	ReferenceID    string          `json:"referenceId,omitempty"`
 	Notes          string          `json:"notes,omitempty"`
 	Metadata       json.RawMessage `json:"metadata,omitempty"`
+	IdempotencyKey string          `json:"idempotencyKey,omitempty"`
 	CreatedAt      time.Time       `json:"createdAt"`
 }
 
 type CreditOverview struct {
-	Wallet                 CreditWallet        `json:"wallet"`
-	EstimatedCallsLeft     int64               `json:"estimatedCallsLeft"`
-	AverageCreditsPerCall  float64             `json:"averageCreditsPerCall"`
-	IsLowBalance           bool                `json:"isLowBalance"`
-	IsOutOfCredits         bool                `json:"isOutOfCredits"`
-	RecentTransactions     []CreditTransaction `json:"recentTransactions"`
+	Wallet                CreditWallet        `json:"wallet"`
+	EstimatedCallsLeft    int64               `json:"estimatedCallsLeft"`
+	AverageCreditsPerCall float64             `json:"averageCreditsPerCall"`
+	IsLowBalance          bool                `json:"isLowBalance"`
+	IsOutOfCredits        bool                `json:"isOutOfCredits"`
+	RecentTransactions    []CreditTransaction `json:"recentTransactions"`
 }
 
 type DeductCreditsInput struct {
-	OrgID         string
-	Credits       float64
-	Type          string
-	ReferenceType string
-	ReferenceID   string
-	Notes         string
-	Metadata      map[string]any
-	// If AllowExceed is true, will deduct even if balance goes below zero (used for essential turn completion).
-	AllowExceed   bool
+	OrgID          string
+	Credits        float64
+	Type           string
+	ReferenceType  string
+	ReferenceID    string
+	Notes          string
+	Metadata       map[string]any
+	IdempotencyKey string
+	// ClampToBalance cobra como máximo el saldo disponible. El costo real sigue
+	// en ai_usage_events; el ledger nunca convierte el prepago en deuda.
+	ClampToBalance bool
 }
 
 type AddCreditsInput struct {
-	OrgID         string
-	Credits       float64
-	Type          string
-	ReferenceType string
-	ReferenceID   string
-	Notes         string
-	Metadata      map[string]any
+	OrgID          string
+	Credits        float64
+	Type           string
+	ReferenceType  string
+	ReferenceID    string
+	Notes          string
+	Metadata       map[string]any
+	IdempotencyKey string
 }
 
 // CostUSDToCredits convierte un costo en USD a créditos exactos usando la tasa de 400 créditos por USD.
 func CostUSDToCredits(costUSD float64) float64 {
-	if costUSD <= 0 {
+	if !finitePositive(costUSD) {
 		return 0
 	}
 	return roundCredits(costUSD * CreditsPerUSD)
@@ -103,7 +108,7 @@ func CostUSDToCredits(costUSD float64) float64 {
 
 // SolesToCredits convierte un monto en Soles (PEN) a créditos comerciales (5 PEN = 100 créditos -> 1 PEN = 20 cr).
 func SolesToCredits(soles float64) float64 {
-	if soles <= 0 {
+	if !finitePositive(soles) {
 		return 0
 	}
 	return roundCredits(soles * CreditsPerSol)
@@ -111,7 +116,7 @@ func SolesToCredits(soles float64) float64 {
 
 // CreditsToSoles convierte una cantidad de créditos a su valor equivalente en Soles (PEN).
 func CreditsToSoles(credits float64) float64 {
-	if credits <= 0 {
+	if !finitePositive(credits) {
 		return 0
 	}
 	return roundCredits(credits / CreditsPerSol)
@@ -119,6 +124,25 @@ func CreditsToSoles(credits float64) float64 {
 
 func roundCredits(val float64) float64 {
 	return math.Round(val*1_000_000) / 1_000_000
+}
+
+func finitePositive(value float64) bool {
+	return value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+func normalizedCreditMutation(credits float64, idempotencyKey string) (float64, string, error) {
+	if !finitePositive(credits) {
+		return 0, "", ErrInvalidCreditAmount
+	}
+	credits = roundCredits(credits)
+	if credits <= 0 {
+		return 0, "", ErrInvalidCreditAmount
+	}
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if idempotencyKey == "" || len(idempotencyKey) > 220 {
+		return 0, "", fmt.Errorf("la clave de idempotencia es obligatoria y admite hasta 220 caracteres")
+	}
+	return credits, idempotencyKey, nil
 }
 
 // GetOrCreateCreditWallet recupera el monedero de la organización o crea uno con saldo 0 si no existe.
@@ -130,11 +154,11 @@ func GetOrCreateCreditWallet(ctx context.Context, pool *pgxpool.Pool, orgID stri
 		ON CONFLICT (organization_id) DO UPDATE SET updated_at = organization_credit_wallets.updated_at
 		RETURNING organization_id::text, balance::float8, lifetime_credited::float8,
 		          lifetime_consumed::float8, low_balance_threshold::float8,
-		          allow_overage, overage_limit::float8, created_at, updated_at`,
+		          created_at, updated_at`,
 		orgID).Scan(
 		&w.OrganizationID, &w.Balance, &w.LifetimeCredited,
 		&w.LifetimeConsumed, &w.LowBalanceThreshold,
-		&w.AllowOverage, &w.OverageLimit, &w.CreatedAt, &w.UpdatedAt,
+		&w.CreatedAt, &w.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("obtener monedero: %w", err)
@@ -144,106 +168,42 @@ func GetOrCreateCreditWallet(ctx context.Context, pool *pgxpool.Pool, orgID stri
 
 // DeductCredits descuenta créditos de forma atómica y registra la transacción en el ledger.
 func DeductCredits(ctx context.Context, pool *pgxpool.Pool, in DeductCreditsInput) (*CreditTransaction, error) {
-	if in.Credits <= 0 {
-		return nil, ErrInvalidCreditAmount
+	credits, idempotencyKey, err := normalizedCreditMutation(in.Credits, in.IdempotencyKey)
+	if err != nil {
+		return nil, err
 	}
-	credits := roundCredits(in.Credits)
+	in.Credits = credits
+	in.IdempotencyKey = idempotencyKey
 	if in.Type == "" {
 		in.Type = CreditTxAIRuntimeUsage
 	}
 
-	metaBytes := json.RawMessage(`{}`)
-	if len(in.Metadata) > 0 {
-		if b, err := json.Marshal(in.Metadata); err == nil {
-			metaBytes = b
-		}
-	}
-
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-
-	// Lock pesimista en la fila del monedero
-	var w CreditWallet
-	err = tx.QueryRow(ctx, `
-		INSERT INTO organization_credit_wallets (organization_id)
-		VALUES ($1::uuid)
-		ON CONFLICT (organization_id) DO UPDATE SET updated_at = NOW()
-		RETURNING organization_id::text, balance::float8, lifetime_credited::float8,
-		          lifetime_consumed::float8, low_balance_threshold::float8,
-		          allow_overage, overage_limit::float8, created_at, updated_at`,
-		in.OrgID).Scan(
-		&w.OrganizationID, &w.Balance, &w.LifetimeCredited,
-		&w.LifetimeConsumed, &w.LowBalanceThreshold,
-		&w.AllowOverage, &w.OverageLimit, &w.CreatedAt, &w.UpdatedAt,
-	)
+	txRecord, err := deductCreditsTx(ctx, tx, in)
 	if err != nil {
-		return nil, fmt.Errorf("bloquear monedero: %w", err)
-	}
-
-	newBalance := roundCredits(w.Balance - credits)
-	maxAllowedDebt := 0.0
-	if w.AllowOverage {
-		maxAllowedDebt = w.OverageLimit
-	}
-	if !in.AllowExceed && newBalance < -maxAllowedDebt {
-		return nil, ErrInsufficientCredits
-	}
-
-	newLifetimeConsumed := roundCredits(w.LifetimeConsumed + credits)
-
-	// Actualizar monedero
-	_, err = tx.Exec(ctx, `
-		UPDATE organization_credit_wallets
-		   SET balance = $2, lifetime_consumed = $3, updated_at = NOW()
-		 WHERE organization_id = $1::uuid`,
-		in.OrgID, newBalance, newLifetimeConsumed)
-	if err != nil {
-		return nil, fmt.Errorf("actualizar saldo monedero: %w", err)
-	}
-
-	// Registrar transacción inmutable
-	var txRecord CreditTransaction
-	err = tx.QueryRow(ctx, `
-		INSERT INTO organization_credit_transactions
-		    (organization_id, amount, balance_after, type, reference_type, reference_id, notes, metadata)
-		VALUES ($1::uuid, $2, $3, $4, NULLIF($5,''), NULLIF($6,''), NULLIF($7,''), $8::jsonb)
-		RETURNING id::text, organization_id::text, amount::float8, balance_after::float8,
-		          type, COALESCE(reference_type,''), COALESCE(reference_id,''),
-		          COALESCE(notes,''), metadata, created_at`,
-		in.OrgID, -credits, newBalance, in.Type, in.ReferenceType, in.ReferenceID, in.Notes, metaBytes,
-	).Scan(
-		&txRecord.ID, &txRecord.OrganizationID, &txRecord.Amount, &txRecord.BalanceAfter,
-		&txRecord.Type, &txRecord.ReferenceType, &txRecord.ReferenceID,
-		&txRecord.Notes, &txRecord.Metadata, &txRecord.CreatedAt,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("registrar transaccion credito: %w", err)
+		return nil, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	return &txRecord, nil
+	return txRecord, nil
 }
 
 // AddCredits acredita créditos a la organización y registra la transacción en el ledger.
 func AddCredits(ctx context.Context, pool *pgxpool.Pool, in AddCreditsInput) (*CreditTransaction, error) {
-	if in.Credits <= 0 {
-		return nil, ErrInvalidCreditAmount
+	credits, idempotencyKey, err := normalizedCreditMutation(in.Credits, in.IdempotencyKey)
+	if err != nil {
+		return nil, err
 	}
-	credits := roundCredits(in.Credits)
+	in.Credits = credits
+	in.IdempotencyKey = idempotencyKey
 	if in.Type == "" {
 		in.Type = CreditTxRecharge
-	}
-
-	metaBytes := json.RawMessage(`{}`)
-	if len(in.Metadata) > 0 {
-		if b, err := json.Marshal(in.Metadata); err == nil {
-			metaBytes = b
-		}
 	}
 
 	tx, err := pool.Begin(ctx)
@@ -251,81 +211,201 @@ func AddCredits(ctx context.Context, pool *pgxpool.Pool, in AddCreditsInput) (*C
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-
-	var w CreditWallet
-	err = tx.QueryRow(ctx, `
-		INSERT INTO organization_credit_wallets (organization_id)
-		VALUES ($1::uuid)
-		ON CONFLICT (organization_id) DO UPDATE SET updated_at = NOW()
-		RETURNING organization_id::text, balance::float8, lifetime_credited::float8,
-		          lifetime_consumed::float8, low_balance_threshold::float8,
-		          allow_overage, overage_limit::float8, created_at, updated_at`,
-		in.OrgID).Scan(
-		&w.OrganizationID, &w.Balance, &w.LifetimeCredited,
-		&w.LifetimeConsumed, &w.LowBalanceThreshold,
-		&w.AllowOverage, &w.OverageLimit, &w.CreatedAt, &w.UpdatedAt,
-	)
+	txRecord, err := addCreditsTx(ctx, tx, in)
 	if err != nil {
-		return nil, fmt.Errorf("bloquear monedero para abono: %w", err)
-	}
-
-	newBalance := roundCredits(w.Balance + credits)
-	newLifetimeCredited := roundCredits(w.LifetimeCredited + credits)
-
-	_, err = tx.Exec(ctx, `
-		UPDATE organization_credit_wallets
-		   SET balance = $2, lifetime_credited = $3, updated_at = NOW()
-		 WHERE organization_id = $1::uuid`,
-		in.OrgID, newBalance, newLifetimeCredited)
-	if err != nil {
-		return nil, fmt.Errorf("actualizar saldo monedero abono: %w", err)
-	}
-
-	var txRecord CreditTransaction
-	err = tx.QueryRow(ctx, `
-		INSERT INTO organization_credit_transactions
-		    (organization_id, amount, balance_after, type, reference_type, reference_id, notes, metadata)
-		VALUES ($1::uuid, $2, $3, $4, NULLIF($5,''), NULLIF($6,''), NULLIF($7,''), $8::jsonb)
-		RETURNING id::text, organization_id::text, amount::float8, balance_after::float8,
-		          type, COALESCE(reference_type,''), COALESCE(reference_id,''),
-		          COALESCE(notes,''), metadata, created_at`,
-		in.OrgID, credits, newBalance, in.Type, in.ReferenceType, in.ReferenceID, in.Notes, metaBytes,
-	).Scan(
-		&txRecord.ID, &txRecord.OrganizationID, &txRecord.Amount, &txRecord.BalanceAfter,
-		&txRecord.Type, &txRecord.ReferenceType, &txRecord.ReferenceID,
-		&txRecord.Notes, &txRecord.Metadata, &txRecord.CreatedAt,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("registrar abono de credito: %w", err)
+		return nil, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	return &txRecord, nil
+	return txRecord, nil
 }
 
-// UpdateWalletSettings actualiza los umbrales de alerta y límites de sobregiro.
-func UpdateWalletSettings(ctx context.Context, pool *pgxpool.Pool, orgID string, lowBalanceThreshold float64, allowOverage bool, overageLimit float64) (*CreditWallet, error) {
-	if lowBalanceThreshold < 0 || overageLimit < 0 {
-		return nil, fmt.Errorf("los umbrales no pueden ser negativos")
+func deductCreditsTx(ctx context.Context, tx pgx.Tx, in DeductCreditsInput) (*CreditTransaction, error) {
+	credits, idempotencyKey, err := normalizedCreditMutation(in.Credits, in.IdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	in.Credits = credits
+	in.IdempotencyKey = idempotencyKey
+	if in.Type == "" {
+		in.Type = CreditTxAIRuntimeUsage
+	}
+	if err := lockCreditIdempotency(ctx, tx, idempotencyKey); err != nil {
+		return nil, err
+	}
+	if existing, err := creditTransactionByKey(ctx, tx, idempotencyKey); err != nil {
+		return nil, err
+	} else if existing != nil {
+		if existing.OrganizationID != in.OrgID || existing.Type != in.Type || roundCredits(-existing.Amount) != credits {
+			return nil, ErrCreditIdempotency
+		}
+		return existing, nil
+	}
+
+	wallet, err := lockCreditWallet(ctx, tx, in.OrgID)
+	if err != nil {
+		return nil, err
+	}
+	charged := credits
+	if wallet.Balance < charged {
+		if !in.ClampToBalance || wallet.Balance <= 0 {
+			return nil, ErrInsufficientCredits
+		}
+		charged = roundCredits(wallet.Balance)
+	}
+	newBalance := roundCredits(wallet.Balance - charged)
+	newLifetimeConsumed := roundCredits(wallet.LifetimeConsumed + charged)
+	if _, err := tx.Exec(ctx, `UPDATE organization_credit_wallets
+		SET balance=$2, lifetime_consumed=$3, updated_at=NOW()
+		WHERE organization_id=$1::uuid`, in.OrgID, newBalance, newLifetimeConsumed); err != nil {
+		return nil, fmt.Errorf("actualizar saldo monedero: %w", err)
+	}
+	metadata := cloneCreditMetadata(in.Metadata)
+	if charged != credits {
+		metadata["requested_credits"] = credits
+		metadata["charged_credits"] = charged
+		metadata["partial_charge"] = true
+	}
+	return insertCreditTransaction(ctx, tx, in.OrgID, -charged, newBalance, in.Type,
+		in.ReferenceType, in.ReferenceID, in.Notes, metadata, idempotencyKey)
+}
+
+func addCreditsTx(ctx context.Context, tx pgx.Tx, in AddCreditsInput) (*CreditTransaction, error) {
+	credits, idempotencyKey, err := normalizedCreditMutation(in.Credits, in.IdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	in.Credits = credits
+	in.IdempotencyKey = idempotencyKey
+	if in.Type == "" {
+		in.Type = CreditTxRecharge
+	}
+	if err := lockCreditIdempotency(ctx, tx, idempotencyKey); err != nil {
+		return nil, err
+	}
+	if existing, err := creditTransactionByKey(ctx, tx, idempotencyKey); err != nil {
+		return nil, err
+	} else if existing != nil {
+		if existing.OrganizationID != in.OrgID || existing.Type != in.Type || roundCredits(existing.Amount) != credits {
+			return nil, ErrCreditIdempotency
+		}
+		return existing, nil
+	}
+
+	wallet, err := lockCreditWallet(ctx, tx, in.OrgID)
+	if err != nil {
+		return nil, err
+	}
+	newBalance := roundCredits(wallet.Balance + credits)
+	newLifetimeCredited := roundCredits(wallet.LifetimeCredited + credits)
+	if _, err := tx.Exec(ctx, `UPDATE organization_credit_wallets
+		SET balance=$2, lifetime_credited=$3, updated_at=NOW()
+		WHERE organization_id=$1::uuid`, in.OrgID, newBalance, newLifetimeCredited); err != nil {
+		return nil, fmt.Errorf("actualizar saldo monedero abono: %w", err)
+	}
+	return insertCreditTransaction(ctx, tx, in.OrgID, credits, newBalance, in.Type,
+		in.ReferenceType, in.ReferenceID, in.Notes, in.Metadata, idempotencyKey)
+}
+
+func lockCreditIdempotency(ctx context.Context, tx pgx.Tx, idempotencyKey string) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "credit:"+idempotencyKey)
+	return err
+}
+
+func creditTransactionByKey(ctx context.Context, tx pgx.Tx, idempotencyKey string) (*CreditTransaction, error) {
+	var item CreditTransaction
+	err := tx.QueryRow(ctx, `SELECT id::text, organization_id::text, amount::float8,
+		balance_after::float8, type, COALESCE(reference_type,''), COALESCE(reference_id,''),
+		COALESCE(notes,''), metadata, COALESCE(idempotency_key,''), created_at
+		FROM organization_credit_transactions WHERE idempotency_key=$1`, idempotencyKey).Scan(
+		&item.ID, &item.OrganizationID, &item.Amount, &item.BalanceAfter, &item.Type,
+		&item.ReferenceType, &item.ReferenceID, &item.Notes, &item.Metadata,
+		&item.IdempotencyKey, &item.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
+func lockCreditWallet(ctx context.Context, tx pgx.Tx, orgID string) (*CreditWallet, error) {
+	if _, err := tx.Exec(ctx, `INSERT INTO organization_credit_wallets (organization_id)
+		VALUES ($1::uuid) ON CONFLICT (organization_id) DO NOTHING`, orgID); err != nil {
+		return nil, fmt.Errorf("crear monedero: %w", err)
+	}
+	var wallet CreditWallet
+	err := tx.QueryRow(ctx, `SELECT organization_id::text, balance::float8,
+		lifetime_credited::float8, lifetime_consumed::float8, low_balance_threshold::float8,
+		created_at, updated_at
+		FROM organization_credit_wallets WHERE organization_id=$1::uuid FOR UPDATE`, orgID).Scan(
+		&wallet.OrganizationID, &wallet.Balance, &wallet.LifetimeCredited,
+		&wallet.LifetimeConsumed, &wallet.LowBalanceThreshold,
+		&wallet.CreatedAt, &wallet.UpdatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("bloquear monedero: %w", err)
+	}
+	return &wallet, nil
+}
+
+func insertCreditTransaction(ctx context.Context, tx pgx.Tx, orgID string, amount, balanceAfter float64,
+	typeName, referenceType, referenceID, notes string, metadata map[string]any, idempotencyKey string) (*CreditTransaction, error) {
+	metaBytes := json.RawMessage(`{}`)
+	if len(metadata) > 0 {
+		encoded, err := json.Marshal(metadata)
+		if err != nil {
+			return nil, fmt.Errorf("serializar metadata del ledger: %w", err)
+		}
+		metaBytes = encoded
+	}
+	var item CreditTransaction
+	err := tx.QueryRow(ctx, `INSERT INTO organization_credit_transactions
+		(organization_id,amount,balance_after,type,reference_type,reference_id,notes,metadata,idempotency_key)
+		VALUES($1::uuid,$2,$3,$4,NULLIF($5,''),NULLIF($6,''),NULLIF($7,''),$8::jsonb,$9)
+		RETURNING id::text, organization_id::text, amount::float8, balance_after::float8,
+		type, COALESCE(reference_type,''), COALESCE(reference_id,''), COALESCE(notes,''),
+		metadata, COALESCE(idempotency_key,''), created_at`, orgID, amount, balanceAfter,
+		typeName, referenceType, referenceID, notes, metaBytes, idempotencyKey).Scan(
+		&item.ID, &item.OrganizationID, &item.Amount, &item.BalanceAfter, &item.Type,
+		&item.ReferenceType, &item.ReferenceID, &item.Notes, &item.Metadata,
+		&item.IdempotencyKey, &item.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("registrar transacción de créditos: %w", err)
+	}
+	return &item, nil
+}
+
+func cloneCreditMetadata(source map[string]any) map[string]any {
+	out := make(map[string]any, len(source)+3)
+	for key, value := range source {
+		out[key] = value
+	}
+	return out
+}
+
+// UpdateWalletSettings actualiza únicamente la alerta. El prepago puro no
+// expone sobregiro como una preferencia del cliente.
+func UpdateWalletSettings(ctx context.Context, pool *pgxpool.Pool, orgID string, lowBalanceThreshold float64) (*CreditWallet, error) {
+	if lowBalanceThreshold < 0 || math.IsNaN(lowBalanceThreshold) || math.IsInf(lowBalanceThreshold, 0) {
+		return nil, fmt.Errorf("el umbral no puede ser negativo ni infinito")
 	}
 	var w CreditWallet
 	err := pool.QueryRow(ctx, `
-		UPDATE organization_credit_wallets
-		   SET low_balance_threshold = $2,
-		       allow_overage = $3,
-		       overage_limit = $4,
-		       updated_at = NOW()
-		 WHERE organization_id = $1::uuid
+		INSERT INTO organization_credit_wallets (organization_id, low_balance_threshold)
+		VALUES ($1::uuid, $2)
+		ON CONFLICT (organization_id) DO UPDATE
+		SET low_balance_threshold = EXCLUDED.low_balance_threshold, updated_at = NOW()
 		 RETURNING organization_id::text, balance::float8, lifetime_credited::float8,
 		           lifetime_consumed::float8, low_balance_threshold::float8,
-		           allow_overage, overage_limit::float8, created_at, updated_at`,
-		orgID, lowBalanceThreshold, allowOverage, overageLimit,
+		           created_at, updated_at`,
+		orgID, roundCredits(lowBalanceThreshold),
 	).Scan(
 		&w.OrganizationID, &w.Balance, &w.LifetimeCredited,
 		&w.LifetimeConsumed, &w.LowBalanceThreshold,
-		&w.AllowOverage, &w.OverageLimit, &w.CreatedAt, &w.UpdatedAt,
+		&w.CreatedAt, &w.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("actualizar ajustes monedero: %w", err)
@@ -342,18 +422,18 @@ func ListCreditTransactions(ctx context.Context, pool *pgxpool.Pool, orgID strin
 	var err error
 	if beforeCreatedAt != nil && !beforeCreatedAt.IsZero() {
 		rows, err = pool.Query(ctx, `
-			SELECT id::text, organization_id::text, amount::float8, balance_after::float8,
-			       type, COALESCE(reference_type,''), COALESCE(reference_id,''),
-			       COALESCE(notes,''), metadata, created_at
+		SELECT id::text, organization_id::text, amount::float8, balance_after::float8,
+		       type, COALESCE(reference_type,''), COALESCE(reference_id,''),
+		       COALESCE(notes,''), metadata, COALESCE(idempotency_key,''), created_at
 			  FROM organization_credit_transactions
 			 WHERE organization_id = $1::uuid AND created_at < $2
 			 ORDER BY created_at DESC LIMIT $3`,
 			orgID, beforeCreatedAt, limit)
 	} else {
 		rows, err = pool.Query(ctx, `
-			SELECT id::text, organization_id::text, amount::float8, balance_after::float8,
-			       type, COALESCE(reference_type,''), COALESCE(reference_id,''),
-			       COALESCE(notes,''), metadata, created_at
+		SELECT id::text, organization_id::text, amount::float8, balance_after::float8,
+		       type, COALESCE(reference_type,''), COALESCE(reference_id,''),
+		       COALESCE(notes,''), metadata, COALESCE(idempotency_key,''), created_at
 			  FROM organization_credit_transactions
 			 WHERE organization_id = $1::uuid
 			 ORDER BY created_at DESC LIMIT $2`,
@@ -370,7 +450,7 @@ func ListCreditTransactions(ctx context.Context, pool *pgxpool.Pool, orgID strin
 		if err := rows.Scan(
 			&tx.ID, &tx.OrganizationID, &tx.Amount, &tx.BalanceAfter,
 			&tx.Type, &tx.ReferenceType, &tx.ReferenceID,
-			&tx.Notes, &tx.Metadata, &tx.CreatedAt,
+			&tx.Notes, &tx.Metadata, &tx.IdempotencyKey, &tx.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -431,72 +511,304 @@ func GetCreditOverview(ctx context.Context, pool *pgxpool.Pool, orgID string) (*
 type RechargePlatformCreditsInput struct {
 	SellerOrgID     string
 	ActivationCode  string
-	Credits         float64
 	Phone           string
 	PaymentRecordID string
 	Notes           string
-	IdempotencyKey  string
 }
 
 // RechargePlatformCredits valida la procedencia comercial y acredita créditos a la organización identificada por su código de activación.
 func RechargePlatformCredits(ctx context.Context, pool *pgxpool.Pool, input RechargePlatformCreditsInput) (*CreditWallet, error) {
+	wallet, _, err := activatePlatformCreditRecharge(ctx, pool, platformCreditRechargeInput{
+		SellerOrgID: input.SellerOrgID, ActivationCode: input.ActivationCode,
+		PaymentRecordID: input.PaymentRecordID, Phone: input.Phone,
+		Notes: input.Notes, ExpectedStatus: "aceptado", Source: "whatsapp_bot",
+	})
+	return wallet, err
+}
+
+type platformCreditRechargeInput struct {
+	SellerOrgID     string
+	ActivationCode  string
+	PaymentRecordID string
+	Phone           string
+	Notes           string
+	ExpectedStatus  string
+	Source          string
+	ApprovedBy      string
+}
+
+type creditPaymentRecord struct {
+	OrganizationID string  `json:"organizacion_id"`
+	ActivationCode string  `json:"codigo_activacion"`
+	AmountPen      float64 `json:"monto"`
+	Currency       string  `json:"moneda"`
+	Credits        float64 `json:"creditos"`
+	Operation      string  `json:"operacion"`
+	Provider       string  `json:"proveedor"`
+	OccurredAt     string  `json:"fecha"`
+	Recipient      string  `json:"destinatario"`
+	Status         string  `json:"estado"`
+}
+
+func activatePlatformCreditRecharge(ctx context.Context, pool *pgxpool.Pool, input platformCreditRechargeInput) (*CreditWallet, *CreditTransaction, error) {
 	input.ActivationCode = strings.ToUpper(strings.TrimSpace(input.ActivationCode))
+	input.PaymentRecordID = strings.TrimSpace(input.PaymentRecordID)
 	input.Phone = NormalizePhone(input.Phone)
-	if input.Credits <= 0 {
-		return nil, ErrInvalidCreditAmount
+	if input.PaymentRecordID == "" {
+		return nil, nil, fmt.Errorf("el comprobante es obligatorio")
 	}
+	sellerOrgID, err := PlatformSalesOrgID(ctx, pool)
+	if err != nil {
+		return nil, nil, err
+	}
+	if input.SellerOrgID != "" && sellerOrgID != input.SellerOrgID {
+		return nil, nil, fmt.Errorf("el bot no pertenece a la organización comercial")
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	var raw json.RawMessage
+	err = tx.QueryRow(ctx, `SELECT r.data FROM data_records r
+		JOIN data_objects o ON o.id=r.object_id
+		WHERE r.id=$1::uuid AND o.org_id=$2::uuid AND o.key='cobros'
+		FOR UPDATE OF r`, input.PaymentRecordID, sellerOrgID).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, fmt.Errorf("el cobro no existe en la organización comercial")
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	var payment creditPaymentRecord
+	if err := json.Unmarshal(raw, &payment); err != nil {
+		return nil, nil, fmt.Errorf("datos del cobro inválidos: %w", err)
+	}
+	payment.Status = strings.ToLower(strings.TrimSpace(payment.Status))
+	payment.Currency = strings.ToUpper(strings.TrimSpace(payment.Currency))
+	payment.Operation = strings.TrimSpace(payment.Operation)
+	if !finitePositive(payment.AmountPen) || payment.Currency != "PEN" || payment.Operation == "" {
+		return nil, nil, fmt.Errorf("el cobro requiere importe PEN y número de operación válidos")
+	}
+
+	targetOrgID, activationCode, err := rechargeTargetOrganization(ctx, tx, input.ActivationCode, payment)
+	if err != nil {
+		return nil, nil, err
+	}
+	if input.ExpectedStatus == "aceptado" {
+		authorized, err := paymentRecipientAuthorized(ctx, tx, sellerOrgID, payment.Recipient)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !authorized {
+			return nil, nil, fmt.Errorf("el destinatario del comprobante no coincide con un método de pago activo")
+		}
+	}
+
+	credits := SolesToCredits(payment.AmountPen)
+	idempotencyKey := paymentCreditIdempotencyKey(sellerOrgID, payment)
+	if err := lockCreditIdempotency(ctx, tx, idempotencyKey); err != nil {
+		return nil, nil, err
+	}
+	if existing, err := creditTransactionByKey(ctx, tx, idempotencyKey); err != nil {
+		return nil, nil, err
+	} else if existing != nil {
+		if existing.OrganizationID != targetOrgID || existing.Type != CreditTxRecharge || roundCredits(existing.Amount) != credits {
+			return nil, nil, ErrCreditIdempotency
+		}
+		wallet, err := creditWalletTx(ctx, tx, targetOrgID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, nil, err
+		}
+		return wallet, existing, nil
+	}
+	if payment.Status != input.ExpectedStatus {
+		return nil, nil, fmt.Errorf("el cobro no está disponible para acreditar (estado actual: %s)", payment.Status)
+	}
+
+	notes := strings.TrimSpace(input.Notes)
+	if notes == "" {
+		notes = fmt.Sprintf("Recarga verificada S/ %.2f op=%s", payment.AmountPen, payment.Operation)
+	}
+	txRecord, err := addCreditsTx(ctx, tx, AddCreditsInput{
+		OrgID: targetOrgID, Credits: credits, Type: CreditTxRecharge,
+		ReferenceType: CreditRefPaymentRecords, ReferenceID: input.PaymentRecordID,
+		Notes: notes, IdempotencyKey: idempotencyKey,
+		Metadata: map[string]any{
+			"activation_code": activationCode, "phone": input.Phone,
+			"payment_record_id": input.PaymentRecordID, "operation": payment.Operation,
+			"amount_pen": payment.AmountPen, "provider": payment.Provider,
+			"source": input.Source, "approved_by": input.ApprovedBy,
+		},
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	confirmation := map[string]any{
+		"estado": "confirmado", "creditos": credits,
+		"organizacion_id": targetOrgID, "codigo_activacion": activationCode,
+		"confirmado_en":  time.Now().UTC().Format(time.RFC3339),
+		"confirmado_por": strings.TrimSpace(input.ApprovedBy),
+	}
+	confirmationRaw, _ := json.Marshal(confirmation)
+	if _, err := tx.Exec(ctx, `UPDATE data_records SET data=data || $2::jsonb, updated_at=NOW()
+		WHERE id=$1::uuid`, input.PaymentRecordID, confirmationRaw); err != nil {
+		return nil, nil, fmt.Errorf("confirmar cobro: %w", err)
+	}
+	wallet, err := creditWalletTx(ctx, tx, targetOrgID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, err
+	}
+	return wallet, txRecord, nil
+}
+
+func rechargeTargetOrganization(ctx context.Context, tx pgx.Tx, inputCode string, payment creditPaymentRecord) (string, string, error) {
+	code := strings.ToUpper(strings.TrimSpace(inputCode))
+	storedCode := strings.ToUpper(strings.TrimSpace(payment.ActivationCode))
+	if code == "" {
+		code = storedCode
+	}
+	if code == "" && strings.TrimSpace(payment.OrganizationID) == "" {
+		return "", "", fmt.Errorf("el cobro no identifica la organización destino")
+	}
+	if storedCode != "" && code != storedCode {
+		return "", "", fmt.Errorf("el código de activación no coincide con el cobro")
+	}
+	var orgID, canonicalCode string
+	if code != "" {
+		err := tx.QueryRow(ctx, `SELECT id::text, activation_code FROM organizations
+			WHERE upper(activation_code)=$1`, code).Scan(&orgID, &canonicalCode)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", "", fmt.Errorf("código de activación inválido")
+		}
+		if err != nil {
+			return "", "", err
+		}
+	} else {
+		err := tx.QueryRow(ctx, `SELECT id::text, activation_code FROM organizations
+			WHERE id=$1::uuid`, payment.OrganizationID).Scan(&orgID, &canonicalCode)
+		if err != nil {
+			return "", "", fmt.Errorf("organización cliente no encontrada")
+		}
+	}
+	if payment.OrganizationID != "" && payment.OrganizationID != orgID {
+		return "", "", fmt.Errorf("la organización del cobro no coincide con el código de activación")
+	}
+	return orgID, strings.ToUpper(strings.TrimSpace(canonicalCode)), nil
+}
+
+func paymentCreditIdempotencyKey(sellerOrgID string, payment creditPaymentRecord) string {
+	// El monto no participa: si alguien altera un registro ya acreditado, la
+	// misma operación bancaria sigue siendo la misma operación económica.
+	proof := strings.Join([]string{
+		strings.ToLower(strings.TrimSpace(payment.Provider)),
+		strings.ToLower(strings.TrimSpace(payment.Operation)),
+	}, "|")
+	hash := sha256.Sum256([]byte(proof))
+	return fmt.Sprintf("recharge:%s:%x", sellerOrgID, hash[:])
+}
+
+func creditWalletTx(ctx context.Context, tx pgx.Tx, orgID string) (*CreditWallet, error) {
+	var wallet CreditWallet
+	err := tx.QueryRow(ctx, `SELECT organization_id::text, balance::float8,
+		lifetime_credited::float8, lifetime_consumed::float8, low_balance_threshold::float8,
+		created_at, updated_at
+		FROM organization_credit_wallets WHERE organization_id=$1::uuid`, orgID).Scan(
+		&wallet.OrganizationID, &wallet.Balance, &wallet.LifetimeCredited,
+		&wallet.LifetimeConsumed, &wallet.LowBalanceThreshold,
+		&wallet.CreatedAt, &wallet.UpdatedAt)
+	return &wallet, err
+}
+
+type PlatformPaymentInstruction struct {
+	Key         string `json:"key"`
+	Medium      string `json:"medium"`
+	Destination string `json:"destination"`
+	Holder      string `json:"holder"`
+	Currency    string `json:"currency"`
+	Note        string `json:"note,omitempty"`
+}
+
+func ListPlatformPaymentInstructions(ctx context.Context, pool *pgxpool.Pool) ([]PlatformPaymentInstruction, error) {
 	sellerOrgID, err := PlatformSalesOrgID(ctx, pool)
 	if err != nil {
 		return nil, err
 	}
-	if sellerOrgID != input.SellerOrgID {
-		return nil, fmt.Errorf("el bot no pertenece a la organización comercial")
-	}
-	var targetOrgID string
-	if err := pool.QueryRow(ctx, `SELECT id::text FROM organizations WHERE upper(activation_code)=$1`, input.ActivationCode).Scan(&targetOrgID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("código de activación inválido")
-		}
-		return nil, err
-	}
-
-	operation := ""
-	if input.PaymentRecordID != "" {
-		operation, err = paymentOperation(ctx, pool, sellerOrgID, input.PaymentRecordID)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	notes := input.Notes
-	if notes == "" {
-		if operation != "" {
-			notes = fmt.Sprintf("Recarga por comprobante op=%s tel=%s", operation, input.Phone)
-		} else {
-			notes = fmt.Sprintf("Recarga comercial por bot tel=%s", input.Phone)
-		}
-	}
-
-	_, err = AddCredits(ctx, pool, AddCreditsInput{
-		OrgID:         targetOrgID,
-		Credits:       input.Credits,
-		Type:          CreditTxRecharge,
-		ReferenceType: CreditRefPaymentRecords,
-		ReferenceID:   input.PaymentRecordID,
-		Notes:         notes,
-		Metadata: map[string]any{
-			"activation_code":   input.ActivationCode,
-			"phone":             input.Phone,
-			"payment_record_id": input.PaymentRecordID,
-			"operation":         operation,
-			"idempotency_key":   input.IdempotencyKey,
-		},
-	})
+	rows, err := pool.Query(ctx, `SELECT COALESCE(r.data->>'clave',''),
+		COALESCE(r.data->>'medio',''), COALESCE(r.data->>'destino',''),
+		COALESCE(r.data->>'titular',''), COALESCE(r.data->>'moneda','PEN'),
+		COALESCE(r.data->>'nota','')
+		FROM data_records r JOIN data_objects o ON o.id=r.object_id
+		WHERE o.org_id=$1::uuid AND o.key='instrucciones_pago_bawto'
+		AND COALESCE((r.data->>'activo')::boolean,false)=true
+		ORDER BY COALESCE((r.data->>'prioridad')::int,9999), r.created_at`, sellerOrgID)
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
+	items := make([]PlatformPaymentInstruction, 0)
+	for rows.Next() {
+		var item PlatformPaymentInstruction
+		if err := rows.Scan(&item.Key, &item.Medium, &item.Destination, &item.Holder, &item.Currency, &item.Note); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(item.Medium) == "" || strings.TrimSpace(item.Destination) == "" || strings.TrimSpace(item.Holder) == "" {
+			continue
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("no hay métodos de pago activos")
+	}
+	return items, nil
+}
 
-	return GetOrCreateCreditWallet(ctx, pool, targetOrgID)
+func paymentRecipientAuthorized(ctx context.Context, tx pgx.Tx, sellerOrgID, recipient string) (bool, error) {
+	recipientID := normalizedPaymentIdentity(recipient)
+	if len(recipientID) < 6 {
+		return false, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT COALESCE(r.data->>'destino',''), COALESCE(r.data->>'titular','')
+		FROM data_records r JOIN data_objects o ON o.id=r.object_id
+		WHERE o.org_id=$1::uuid AND o.key='instrucciones_pago_bawto'
+		AND COALESCE((r.data->>'activo')::boolean,false)=true`, sellerOrgID)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var destination, holder string
+		if err := rows.Scan(&destination, &holder); err != nil {
+			return false, err
+		}
+		for _, official := range []string{destination, holder} {
+			officialID := normalizedPaymentIdentity(official)
+			if len(officialID) >= 6 && (strings.Contains(recipientID, officialID) || strings.Contains(officialID, recipientID)) {
+				return true, nil
+			}
+		}
+	}
+	return false, rows.Err()
+}
+
+func normalizedPaymentIdentity(value string) string {
+	return strings.Map(func(char rune) rune {
+		if unicode.IsLetter(char) || unicode.IsDigit(char) {
+			return unicode.ToLower(char)
+		}
+		return -1
+	}, strings.TrimSpace(value))
 }
 
 // EnsurePlatformCobrosObject asegura que el objeto cobros y sus campos existan en la organización comercial.
@@ -517,7 +829,7 @@ func EnsurePlatformCobrosObject(ctx context.Context, pool *pgxpool.Pool, sellerO
 	}{
 		{"monto", "Monto", "number", true},
 		{"moneda", "Moneda", "text", true},
-		{"creditos", "Créditos", "number", true},
+		{"creditos", "Créditos", "number", false},
 		{"operacion", "Operación", "text", false},
 		{"estado", "Estado", "text", true},
 		{"origen", "Origen", "text", true},
@@ -541,7 +853,6 @@ func EnsurePlatformCobrosObject(ctx context.Context, pool *pgxpool.Pool, sellerO
 type RequestCreditRechargeInput struct {
 	OrgID          string
 	AmountPen      float64
-	Credits        float64
 	Operation      string
 	PayerPhone     string
 	Notes          string
@@ -565,14 +876,14 @@ type PlatformRechargeRequest struct {
 
 // RequestPlatformCreditRecharge registra un cobro en estado pendiente en la tabla cobros de Sistemuino sin acreditar saldo aún.
 func RequestPlatformCreditRecharge(ctx context.Context, pool *pgxpool.Pool, input RequestCreditRechargeInput) (*PlatformRechargeRequest, error) {
-	if input.AmountPen <= 0 && input.Credits <= 0 {
-		return nil, fmt.Errorf("monto en soles o créditos inválido")
+	if !finitePositive(input.AmountPen) {
+		return nil, fmt.Errorf("monto en soles inválido")
 	}
-	if input.Credits <= 0 {
-		input.Credits = SolesToCredits(input.AmountPen)
-	}
-	if input.AmountPen <= 0 {
-		input.AmountPen = CreditsToSoles(input.Credits)
+	input.AmountPen = roundCredits(input.AmountPen)
+	credits := SolesToCredits(input.AmountPen)
+	input.Operation = strings.TrimSpace(input.Operation)
+	if input.Operation == "" {
+		return nil, fmt.Errorf("el número de operación es obligatorio")
 	}
 
 	sellerOrgID, err := PlatformSalesOrgID(ctx, pool)
@@ -604,8 +915,8 @@ func RequestPlatformCreditRecharge(ctx context.Context, pool *pgxpool.Pool, inpu
 			"codigo_activacion":   org.ActivationCode,
 			"monto":               input.AmountPen,
 			"moneda":              "PEN",
-			"creditos":            input.Credits,
-			"operacion":           strings.TrimSpace(input.Operation),
+			"creditos":            credits,
+			"operacion":           input.Operation,
 			"telefono":            NormalizePhone(input.PayerPhone),
 			"estado":              "pendiente",
 			"origen":              "plataforma",
@@ -624,7 +935,7 @@ func RequestPlatformCreditRecharge(ctx context.Context, pool *pgxpool.Pool, inpu
 		OrganizationName: org.Name,
 		ActivationCode:   org.ActivationCode,
 		AmountPen:        input.AmountPen,
-		Credits:          input.Credits,
+		Credits:          credits,
 		Operation:        input.Operation,
 		Status:           "pendiente",
 		Origen:           "plataforma",
@@ -639,84 +950,11 @@ func ApprovePlatformCreditRecharge(ctx context.Context, pool *pgxpool.Pool, reco
 	if err != nil {
 		return nil, nil, err
 	}
-
-	var raw json.RawMessage
-	err = pool.QueryRow(ctx, `
-		SELECT r.data FROM data_records r
-		JOIN data_objects o ON o.id = r.object_id
-		WHERE r.id = $1::uuid AND o.org_id = $2::uuid AND o.key = 'cobros'`,
-		recordID, sellerOrgID).Scan(&raw)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil, fmt.Errorf("el cobro no existe en la organización comercial")
-	}
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var cobro struct {
-		OrgID          string  `json:"organizacion_id"`
-		ActivationCode string  `json:"codigo_activacion"`
-		Monto          float64 `json:"monto"`
-		Creditos       float64 `json:"creditos"`
-		Operacion      string  `json:"operacion"`
-		Estado         string  `json:"estado"`
-		Origen         string  `json:"origen"`
-		SolicitadoPor  string  `json:"solicitado_por"`
-	}
-	if err := json.Unmarshal(raw, &cobro); err != nil {
-		return nil, nil, fmt.Errorf("datos del cobro inválidos: %w", err)
-	}
-
-	if cobro.Estado != "pendiente" {
-		return nil, nil, fmt.Errorf("el cobro ya no está pendiente (estado actual: %s)", cobro.Estado)
-	}
-	if cobro.Creditos <= 0 {
-		cobro.Creditos = SolesToCredits(cobro.Monto)
-	}
-
-	now := time.Now().UTC()
-	_, err = MutateDataRecord(ctx, pool, DataMutationInput{
-		OrgID:          sellerOrgID,
-		ObjectKey:      "cobros",
-		Operation:      "update",
-		RecordID:       recordID,
-		IdempotencyKey: fmt.Sprintf("approve:%s:%d", recordID, now.UnixNano()),
-		Values: map[string]any{
-			"estado":       "confirmado",
-			"aprobado_por": approverEmail,
-			"aprobado_en":  now.Format(time.RFC3339),
-		},
+	return activatePlatformCreditRecharge(ctx, pool, platformCreditRechargeInput{
+		SellerOrgID: sellerOrgID, PaymentRecordID: recordID,
+		ExpectedStatus: "pendiente", Source: "platform_review",
+		ApprovedBy: strings.TrimSpace(approverEmail),
 	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("confirmar cobro: %w", err)
-	}
-
-	notes := fmt.Sprintf("Recarga web aprobada (S/ %.2f) op=%s", cobro.Monto, cobro.Operacion)
-	if cobro.SolicitadoPor != "" {
-		notes += fmt.Sprintf(" solicitada por %s", cobro.SolicitadoPor)
-	}
-
-	txRecord, err := AddCredits(ctx, pool, AddCreditsInput{
-		OrgID:         cobro.OrgID,
-		Credits:       cobro.Creditos,
-		Type:          CreditTxRecharge,
-		ReferenceType: CreditRefPaymentRecords,
-		ReferenceID:   recordID,
-		Notes:         notes,
-		Metadata: map[string]any{
-			"payment_record_id": recordID,
-			"operation":         cobro.Operacion,
-			"amount_pen":        cobro.Monto,
-			"approver_email":    approverEmail,
-			"approved_at":       now.Format(time.RFC3339),
-		},
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("abonar créditos: %w", err)
-	}
-
-	wallet, err := GetOrCreateCreditWallet(ctx, pool, cobro.OrgID)
-	return wallet, txRecord, err
 }
 
 // RejectPlatformCreditRecharge rechaza un cobro pendiente en la organización comercial.
@@ -726,20 +964,21 @@ func RejectPlatformCreditRecharge(ctx context.Context, pool *pgxpool.Pool, recor
 		return err
 	}
 	now := time.Now().UTC()
-	_, err = MutateDataRecord(ctx, pool, DataMutationInput{
-		OrgID:          sellerOrgID,
-		ObjectKey:      "cobros",
-		Operation:      "update",
-		RecordID:       recordID,
-		IdempotencyKey: fmt.Sprintf("reject:%s:%d", recordID, now.UnixNano()),
-		Values: map[string]any{
-			"estado":         "rechazado",
-			"motivo_rechazo": strings.TrimSpace(reason),
-			"rechazado_por":  rejecterEmail,
-			"rechazado_en":   now.Format(time.RFC3339),
-		},
+	patch, _ := json.Marshal(map[string]any{
+		"estado": "rechazado", "motivo_rechazo": strings.TrimSpace(reason),
+		"rechazado_por": strings.TrimSpace(rejecterEmail), "rechazado_en": now.Format(time.RFC3339),
 	})
-	return err
+	tag, err := pool.Exec(ctx, `UPDATE data_records r SET data=r.data || $4::jsonb, updated_at=NOW()
+		FROM data_objects o WHERE r.id=$1::uuid AND o.id=r.object_id
+		AND o.org_id=$2::uuid AND o.key='cobros' AND r.data->>'estado'=$3`,
+		recordID, sellerOrgID, "pendiente", patch)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("el cobro no está pendiente o no existe")
+	}
+	return nil
 }
 
 // ListPlatformCreditRecharges lista las solicitudes de recarga de créditos registradas en cobros.

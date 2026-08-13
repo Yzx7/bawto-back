@@ -363,7 +363,8 @@ var registry = map[string]Spec{
 	"credit_recharge_activate": {
 		Name:  "credit_recharge_activate",
 		Label: "Recargar créditos Bawto",
-		Help: "Valida el código de activación y el cobro, y abona créditos al monedero de la organización. " +
+		Help: "Consume una sola vez un comprobante aceptado, calcula los créditos desde su importe PEN " +
+			"y los abona al monedero identificado por el código de activación. " +
 			"Sólo funciona en el bot de la organización comercial propietaria del ledger.",
 		Accepts:  []PayloadType{PayloadDataRecord, PayloadStructuredData},
 		Produces: PayloadDataRecord,

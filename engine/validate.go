@@ -912,16 +912,12 @@ func validateSubscriptionActivateArgs(args map[string]string) error {
 }
 
 func validateCreditRechargeActivateArgs(args map[string]string) error {
-	required := []string{"activationCode", "paymentRecordId", "idempotencyKey"}
-	allowed := map[string]bool{"activationCode": true, "creditsAmount": true, "amount": true,
-		"paymentRecordId": true, "phone": true, "notes": true, "idempotencyKey": true}
+	required := []string{"activationCode", "paymentRecordId"}
+	allowed := map[string]bool{"activationCode": true, "paymentRecordId": true, "phone": true, "notes": true}
 	for _, key := range required {
 		if strings.TrimSpace(args[key]) == "" {
 			return fmt.Errorf("credit_recharge_activate requiere %s", key)
 		}
-	}
-	if strings.TrimSpace(args["creditsAmount"]) == "" && strings.TrimSpace(args["amount"]) == "" {
-		return fmt.Errorf("credit_recharge_activate requiere creditsAmount o amount")
 	}
 	for key := range args {
 		if !allowed[key] {

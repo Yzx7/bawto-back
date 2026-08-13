@@ -765,6 +765,41 @@ CREATE INDEX IF NOT EXISTS idx_ai_usage_org_time ON ai_usage_events(organization
 CREATE INDEX IF NOT EXISTS idx_ai_usage_bot_time ON ai_usage_events(bot_id, occurred_at DESC) WHERE bot_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_ai_usage_org_purpose_time ON ai_usage_events(organization_id, purpose, occurred_at DESC);
 
+-- Espejo de 023, 024 y 025. El monedero es prepago puro: no existe sobregiro.
+-- idempotency_key identifica la operación económica, aunque el caller se
+-- reintente o el mismo comprobante se guarde en más de un data_record.
+CREATE TABLE IF NOT EXISTS organization_credit_wallets (
+    organization_id      UUID          PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
+    balance              NUMERIC(14,6) NOT NULL DEFAULT 0,
+    lifetime_credited    NUMERIC(14,6) NOT NULL DEFAULT 0,
+    lifetime_consumed    NUMERIC(14,6) NOT NULL DEFAULT 0,
+    low_balance_threshold NUMERIC(14,6) NOT NULL DEFAULT 50,
+    created_at           TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    CHECK (low_balance_threshold >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS organization_credit_transactions (
+    id              UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID          NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    amount          NUMERIC(14,6) NOT NULL,
+    balance_after   NUMERIC(14,6) NOT NULL,
+    type            VARCHAR(32)   NOT NULL,
+    reference_type  VARCHAR(64),
+    reference_id    VARCHAR(128),
+    notes           TEXT,
+    metadata        JSONB         NOT NULL DEFAULT '{}',
+    idempotency_key VARCHAR(220) NOT NULL,
+    created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    CHECK (idempotency_key IS NULL OR btrim(idempotency_key) <> '')
+);
+CREATE INDEX IF NOT EXISTS idx_credit_tx_org_created
+    ON organization_credit_transactions(organization_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_credit_tx_ref
+    ON organization_credit_transactions(reference_type, reference_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_credit_tx_idempotency
+    ON organization_credit_transactions(idempotency_key);
+
 CREATE TABLE IF NOT EXISTS message_correlations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     inbound_message_id BIGINT NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE,

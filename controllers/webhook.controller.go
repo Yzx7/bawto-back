@@ -650,7 +650,10 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 				return engine.AgentResult{}, toolErr
 			}
 			wallet, wErr := models.GetOrCreateCreditWallet(ctx, pool, bot.OrgID)
-			if wErr == nil && wallet.Balance <= 0 && (!wallet.AllowOverage || wallet.Balance < -wallet.OverageLimit) {
+			if wErr != nil {
+				return engine.AgentResult{}, fmt.Errorf("comprobar saldo de créditos: %w", wErr)
+			}
+			if wallet.Balance <= 0 {
 				con.whatsAppLogger().Warn("ai agent blocked: insufficient credits", "org_id", bot.OrgID, "bot_id", bot.ID, "balance", wallet.Balance)
 				fallbackBranch := ""
 				for _, b := range request.Outputs {
@@ -705,39 +708,29 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 						usageMetadata["tool_trace"] = usage.ToolTrace
 					}
 					metadata, _ := json.Marshal(usageMetadata)
-					if err := models.RecordAIUsage(ctx, pool, models.AIUsageEventInput{
-						OrganizationID: bot.OrgID, BotID: bot.ID, ChatID: chatID,
-						InboundMessageID: inboundMessageID, Provider: usage.Provider,
-						Model: usage.Model, ProviderRequestID: usage.RequestID,
-						InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
-						CacheReadInputTokens:     usage.CacheReadInputTokens,
-						CacheCreationInputTokens: usage.CacheCreationInputTokens,
-						InputUSDPerMillion:       usage.Rates.InputPerMillion,
-						OutputUSDPerMillion:      usage.Rates.OutputPerMillion,
-						CacheReadUSDPerMillion:   usage.Rates.CacheReadPerMillion,
-						CacheWriteUSDPerMillion:  usage.Rates.CacheWritePerMillion,
-						Outcome:                  outcome, Metadata: metadata,
-					}); err != nil {
-						con.whatsAppLogger().Error("ai usage persist", "request", usage.RequestID, "err", err.Error())
+					creditKey := fmt.Sprintf("ai:%s:%s", usage.Provider, usage.RequestID)
+					if strings.TrimSpace(usage.RequestID) == "" {
+						creditKey = fmt.Sprintf("ai-runtime:%s:%d:%s:%d", bot.ID, inboundMessageID, nodeID, attempt)
 					}
-
-					costUSD := (float64(usage.InputTokens)*usage.Rates.InputPerMillion +
-						float64(usage.OutputTokens)*usage.Rates.OutputPerMillion +
-						float64(usage.CacheReadInputTokens)*usage.Rates.CacheReadPerMillion +
-						float64(usage.CacheCreationInputTokens)*usage.Rates.CacheWritePerMillion) / 1_000_000.0
-					credits := models.CostUSDToCredits(costUSD)
-					if credits > 0 {
-						if _, cErr := models.DeductCredits(ctx, pool, models.DeductCreditsInput{
-							OrgID:         bot.OrgID,
-							Credits:       credits,
-							Type:          models.CreditTxAIRuntimeUsage,
-							ReferenceType: models.CreditRefAIUsageEvents,
-							ReferenceID:   usage.RequestID,
-							Notes:         fmt.Sprintf("Turno IA bot=%s chat=%s nodo=%s", bot.ID, chatID, nodeID),
-							AllowExceed:   true,
-						}); cErr != nil {
-							con.whatsAppLogger().Error("credits deduction failed", "org_id", bot.OrgID, "request", usage.RequestID, "err", cErr.Error())
-						}
+					if err := models.RecordAIUsageAndChargeCredits(ctx, pool, models.AIUsageChargeInput{
+						CreditType:     models.CreditTxAIRuntimeUsage,
+						IdempotencyKey: creditKey,
+						Notes:          fmt.Sprintf("Turno IA bot=%s chat=%s nodo=%s", bot.ID, chatID, nodeID),
+						Usage: models.AIUsageEventInput{
+							OrganizationID: bot.OrgID, BotID: bot.ID, ChatID: chatID,
+							InboundMessageID: inboundMessageID, Provider: usage.Provider,
+							Model: usage.Model, ProviderRequestID: usage.RequestID,
+							InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
+							CacheReadInputTokens:     usage.CacheReadInputTokens,
+							CacheCreationInputTokens: usage.CacheCreationInputTokens,
+							InputUSDPerMillion:       usage.Rates.InputPerMillion,
+							OutputUSDPerMillion:      usage.Rates.OutputPerMillion,
+							CacheReadUSDPerMillion:   usage.Rates.CacheReadPerMillion,
+							CacheWriteUSDPerMillion:  usage.Rates.CacheWritePerMillion,
+							Outcome:                  outcome, Metadata: metadata,
+						},
+					}); err != nil {
+						con.whatsAppLogger().Error("ai usage and credits persist", "request", usage.RequestID, "err", err.Error())
 					}
 				}
 

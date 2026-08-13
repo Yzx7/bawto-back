@@ -44,7 +44,7 @@ func (con *Controller) ListOrganizationCreditTransactions(c *fiber.Ctx) error {
 	return con.ok(c, "ok", txs)
 }
 
-// UpdateOrganizationCreditSettings actualiza umbrales de alerta y sobregiro.
+// UpdateOrganizationCreditSettings actualiza el umbral de alerta del prepago.
 func (con *Controller) UpdateOrganizationCreditSettings(c *fiber.Ctx) error {
 	orgID := c.Params("orgId")
 	if _, err := con.requireOrgRole(c, orgID, "owner", "admin"); err != nil {
@@ -52,50 +52,15 @@ func (con *Controller) UpdateOrganizationCreditSettings(c *fiber.Ctx) error {
 	}
 	var body struct {
 		LowBalanceThreshold float64 `json:"lowBalanceThreshold"`
-		AllowOverage        bool    `json:"allowOverage"`
-		OverageLimit        float64 `json:"overageLimit"`
 	}
 	if err := c.BodyParser(&body); err != nil {
 		return con.fail(c, fiber.StatusBadRequest, "datos inválidos")
 	}
-	wallet, err := models.UpdateWalletSettings(c.Context(), con.Env.Postgres, orgID,
-		body.LowBalanceThreshold, body.AllowOverage, body.OverageLimit)
+	wallet, err := models.UpdateWalletSettings(c.Context(), con.Env.Postgres, orgID, body.LowBalanceThreshold)
 	if err != nil {
 		return con.fail(c, fiber.StatusBadRequest, err.Error())
 	}
 	return con.ok(c, "ajustes de créditos actualizados", wallet)
-}
-
-// RechargeOrganizationCredits abona créditos de forma manual o administrativa directa.
-func (con *Controller) RechargeOrganizationCredits(c *fiber.Ctx) error {
-	orgID := c.Params("orgId")
-	mem, err := con.requireOrgRole(c, orgID, "owner", "admin")
-	if err != nil {
-		return con.failErr(c, err)
-	}
-	var body struct {
-		Credits float64 `json:"credits"`
-		Notes   string  `json:"notes"`
-	}
-	if err := c.BodyParser(&body); err != nil || body.Credits <= 0 {
-		return con.fail(c, fiber.StatusBadRequest, "el monto de créditos debe ser mayor a cero")
-	}
-	txRecord, err := models.AddCredits(c.Context(), con.Env.Postgres, models.AddCreditsInput{
-		OrgID:         orgID,
-		Credits:       body.Credits,
-		Type:          models.CreditTxRecharge,
-		ReferenceType: models.CreditRefManual,
-		ReferenceID:   mem.UserID,
-		Notes:         body.Notes,
-		Metadata: map[string]any{
-			"user_id": mem.UserID,
-			"source":  "api_recharge",
-		},
-	})
-	if err != nil {
-		return con.fail(c, fiber.StatusBadRequest, err.Error())
-	}
-	return c.Status(fiber.StatusCreated).JSON(types.OK("créditos abonados", txRecord))
 }
 
 // RequestOrganizationCreditRecharge registra un cobro en estado pendiente en la tabla cobros de Sistemuino.
@@ -106,7 +71,6 @@ func (con *Controller) RequestOrganizationCreditRecharge(c *fiber.Ctx) error {
 	}
 	var body struct {
 		AmountPen  float64 `json:"amountPen"`
-		Credits    float64 `json:"credits"`
 		Operation  string  `json:"operation"`
 		PayerPhone string  `json:"payerPhone"`
 		Notes      string  `json:"notes"`
@@ -114,8 +78,8 @@ func (con *Controller) RequestOrganizationCreditRecharge(c *fiber.Ctx) error {
 	if err := c.BodyParser(&body); err != nil {
 		return con.fail(c, fiber.StatusBadRequest, "datos inválidos")
 	}
-	if body.AmountPen <= 0 && body.Credits <= 0 {
-		return con.fail(c, fiber.StatusBadRequest, "el monto en soles o créditos debe ser mayor a cero")
+	if body.AmountPen <= 0 {
+		return con.fail(c, fiber.StatusBadRequest, "el monto en soles debe ser mayor a cero")
 	}
 
 	userEmail := ""
@@ -126,7 +90,6 @@ func (con *Controller) RequestOrganizationCreditRecharge(c *fiber.Ctx) error {
 	req, err := models.RequestPlatformCreditRecharge(c.Context(), con.Env.Postgres, models.RequestCreditRechargeInput{
 		OrgID:      orgID,
 		AmountPen:  body.AmountPen,
-		Credits:    body.Credits,
 		Operation:  body.Operation,
 		PayerPhone: body.PayerPhone,
 		Notes:      body.Notes,
@@ -136,6 +99,20 @@ func (con *Controller) RequestOrganizationCreditRecharge(c *fiber.Ctx) error {
 		return con.fail(c, fiber.StatusBadRequest, err.Error())
 	}
 	return c.Status(fiber.StatusCreated).JSON(types.OK("Solicitud de recarga registrada en estado pendiente de confirmación", req))
+}
+
+// GetCreditPaymentInstructions expone únicamente métodos activos del ledger
+// comercial; el cliente no necesita ni obtiene acceso al resto de ese tenant.
+func (con *Controller) GetCreditPaymentInstructions(c *fiber.Ctx) error {
+	orgID := c.Params("orgId")
+	if _, err := con.requireOrgRole(c, orgID); err != nil {
+		return con.failErr(c, err)
+	}
+	items, err := models.ListPlatformPaymentInstructions(c.Context(), con.Env.Postgres)
+	if err != nil {
+		return con.fail(c, fiber.StatusInternalServerError, "no se pudieron cargar los métodos de pago")
+	}
+	return con.ok(c, "ok", items)
 }
 
 // ListOrganizationRechargeRequests devuelve las solicitudes de recarga de la organización.

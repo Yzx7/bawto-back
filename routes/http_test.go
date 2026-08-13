@@ -99,6 +99,22 @@ func TestRutasDeAudienciasRetiradas(t *testing.T) {
 	}
 }
 
+func TestRutasDeCreditosNoPermitenAcuñarSaldoAlCliente(t *testing.T) {
+	paths := registeredPaths(t)
+	if paths[http.MethodPost+" /orgs/:orgId/credits/recharge"] {
+		t.Error("una organización cliente no puede abonarse créditos directamente")
+	}
+	for _, ruta := range []string{
+		http.MethodGet + " /orgs/:orgId/credits",
+		http.MethodPost + " /orgs/:orgId/credits/request-recharge",
+		http.MethodGet + " /orgs/:orgId/credits/payment-instructions",
+	} {
+		if !paths[ruta] {
+			t.Errorf("ruta segura de créditos no registrada: %s", ruta)
+		}
+	}
+}
+
 // Las conexiones externas cuelgan de `/orgs/:orgId`, que ya tiene muchas rutas
 // paramétricas. Se comprueba contra la tabla por la misma razón que el resto:
 // el grupo lleva VerifyToken, así que una petición sin token responde 401 exista

@@ -9,7 +9,7 @@
       "id": "e_router_image",
       "source": "n_entry_router",
       "sourceHandle": "image",
-      "target": "n_classify_payment"
+      "target": "n_read_authorized_payment_methods"
     },
     {
       "id": "e_router_default",
@@ -32,7 +32,7 @@
       "id": "e_payment_router_image",
       "source": "n_payment_input_router",
       "sourceHandle": "image",
-      "target": "n_classify_payment"
+      "target": "n_read_authorized_payment_methods"
     },
     {
       "id": "e_payment_router_default",
@@ -189,7 +189,7 @@
       "id": "e_orchestrator_bawto",
       "source": "n_agente",
       "sourceHandle": "bawto",
-      "target": "n_read_plans"
+      "target": "n_bawto_specialist"
     },
     {
       "id": "e_orchestrator_services",
@@ -217,23 +217,10 @@
       "target": "n_derivar"
     },
     {
-      "id": "e_read_plans_ok",
-      "source": "n_read_plans",
-      "sourceHandle": "ok",
-      "target": "n_bawto_specialist"
-    },
-    {
-      "id": "e_read_plans_error",
-      "source": "n_read_plans",
-      "sourceHandle": "error",
-      "tag": "DERIVAR",
-      "target": "n_derivar"
-    },
-    {
       "id": "e_bawto_charge",
       "source": "n_bawto_specialist",
       "sourceHandle": "cobrar",
-      "target": "n_render_payment_methods"
+      "target": "n_existing_receipt_router"
     },
     {
       "id": "e_bawto_advisor",
@@ -283,7 +270,7 @@
       "id": "e_payment_charge",
       "source": "n_payment_specialist",
       "sourceHandle": "cobrar",
-      "target": "n_render_payment_methods"
+      "target": "n_existing_receipt_router"
     },
     {
       "id": "e_payment_advisor",
@@ -414,7 +401,7 @@
       "id": "e_prod_13",
       "source": "n_store_receipt_wait",
       "sourceHandle": "out",
-      "target": "n_store_receipt"
+      "target": "n_read_store_payment_methods"
     },
     {
       "id": "e_prod_14",
@@ -542,6 +529,42 @@
       "source": "n_save_payment",
       "sourceHandle": "error",
       "target": "n_payment_error"
+    },
+    {
+      "id": "e_existing_receipt_save",
+      "source": "n_existing_receipt_router",
+      "sourceHandle": "ready",
+      "target": "n_save_payment"
+    },
+    {
+      "id": "e_existing_receipt_payment_methods",
+      "source": "n_existing_receipt_router",
+      "sourceHandle": "default",
+      "target": "n_render_payment_methods"
+    },
+    {
+      "id": "e_authorized_methods_classify",
+      "source": "n_read_authorized_payment_methods",
+      "sourceHandle": "ok",
+      "target": "n_classify_payment"
+    },
+    {
+      "id": "e_authorized_methods_error",
+      "source": "n_read_authorized_payment_methods",
+      "sourceHandle": "error",
+      "target": "n_payment_error"
+    },
+    {
+      "id": "e_store_authorized_methods_classify",
+      "source": "n_read_store_payment_methods",
+      "sourceHandle": "ok",
+      "target": "n_store_receipt"
+    },
+    {
+      "id": "e_store_authorized_methods_error",
+      "source": "n_read_store_payment_methods",
+      "sourceHandle": "error",
+      "target": "n_derivar"
     }
   ],
   "id": "flow_waa_creditos",
@@ -631,7 +654,7 @@
       "agentRole": "specialist",
       "contextMode": "none",
       "id": "n_classify_payment",
-      "instruction": "Analiza únicamente la imagen actual como posible comprobante de pago peruano enviado a Sistemuino / Bawto. No uses el historial para completar datos que no aparezcan en la captura.\n\nCuentas y métodos de pago autorizados de Sistemuino / Bawto:\n- Titular / Destinatario oficial: \"Gerson Rodriguez\", \"Sistemuino S.A.C.S\" o \"Sistemuino\".\n- Número / Destino Yape/Plin o cuenta bancaria oficial: \"973021342\" o transferencias a nombre de Gerson Rodriguez o Sistemuino.\n\nReglas estrictas de clasificación:\n- Elige valid ÚNICAMENTE si:\n  1) La imagen muestra una operación exitosa y se distinguen con claridad el importe, la fecha/hora y el número o código de operación.\n  2) Y el destinatario / \"enviado a\" / titular coincide con alguna de las cuentas autorizadas de Sistemuino (por ejemplo \"Gerson Rodriguez\", \"Sistemuino S.A.C.S\", \"Sistemuino\" o \"973021342\").\n- Elige needs_review si:\n  1) El comprobante es exitoso pero el destinatario NO coincide con las cuentas autorizadas de Sistemuino (o el destinatario no se ve / es diferente).\n  2) O falta algún dato clave (fecha, importe u operación) o hay ambigüedad o la confianza es insuficiente.\n- Elige unreadable si la captura está borrosa, cortada o no puede leerse.\n- Elige not_receipt si la imagen no es un comprobante de pago.\n\nExtrae únicamente datos visibles y no inventes. provider debe ser exactamente uno de estos valores canónicos en minúsculas: yape, plin, bcp, interbank u other. El proveedor es el canal del comprobante, no la red del destinatario: si aparece el logo de Plin y dice Pago exitoso, usa plin aunque la app sea de Interbank; usa bcp para una transferencia emitida por BCP e interbank para una transferencia bancaria de Interbank que no sea Plin. amount es el importe transferido sin comisión; currency usa ISO 4217; occurredAt usa RFC3339 con la zona de Perú (-05:00); operationCode conserva ceros iniciales; recipient es el destinatario visible; confidence va de 0 a 1.",
+      "instruction": "Analiza únicamente la imagen actual como posible comprobante de pago peruano enviado a Sistemuino / Bawto. No uses el historial para completar datos que no aparezcan en la captura.\n\nEstos son los únicos métodos de pago autorizados activos, leídos de la fuente de verdad justo antes de analizar la imagen:\n{authorized_payment_methods}\n\nReglas estrictas de clasificación:\n- Elige valid ÚNICAMENTE si la imagen muestra una operación exitosa, se distinguen con claridad importe, fecha/hora y número o código de operación, y el destinatario visible coincide con el destino o titular de uno de los métodos autorizados anteriores.\n- Elige needs_review si el comprobante parece exitoso pero el destinatario no coincide/no se ve, falta un dato clave o hay ambigüedad.\n- Elige unreadable si la captura está borrosa, cortada o no puede leerse.\n- Elige not_receipt si la imagen no es un comprobante de pago.\n\nExtrae únicamente datos visibles y no inventes. provider debe ser exactamente uno de estos valores canónicos en minúsculas: yape, plin, bcp, interbank u other. El proveedor es el canal del comprobante, no la red del destinatario. amount es el importe transferido sin comisión; currency usa ISO 4217; occurredAt usa RFC3339 con la zona de Perú (-05:00); operationCode conserva ceros iniciales; recipient es el destinatario visible; confidence va de 0 a 1.",
       "kind": "agent",
       "outputFields": [
         {
@@ -687,7 +710,6 @@
       "args": {
         "field.codigo_activacion": "{sale.organizationCode}",
         "field.confianza": "{receipt.confidence}",
-        "field.creditos": "{sale.creditsAmount}",
         "field.destinatario": "{receipt.recipient}",
         "field.estado": "aceptado",
         "field.fecha": "{receipt.occurredAt}",
@@ -919,9 +941,6 @@
     {
       "args": {
         "activationCode": "{sale.organizationCode}",
-        "amount": "{receipt.amount}",
-        "creditsAmount": "{sale.creditsAmount}",
-        "idempotencyKey": "credits:{payment_record.recordId}",
         "paymentRecordId": "{payment_record.recordId}",
         "phone": "{contact_phone}"
       },
@@ -935,40 +954,16 @@
       "toolRef": "credit_recharge_activate"
     },
     {
-      "args": {
-        "limit": "4",
-        "object": "instrucciones_pago_bawto"
-      },
-      "id": "n_read_plans",
-      "kind": "tool",
-      "pos": {
-        "x": 3181.6202119624827,
-        "y": 2034.1664249236837
-      },
-      "saveAs": "payment_instructions",
-      "toolRef": "data_query"
-    },
-    {
       "agentRole": "specialist",
       "contextMode": "recent",
       "id": "n_bawto_specialist",
-      "instruction": "Eres el especialista comercial de Bawto (plataforma de chatbots con IA para WhatsApp de Sistemuino). Tu objetivo es asesorar sobre el modelo de Créditos Pay as you go y concretar la recarga.\n\nReglas del modelo Pay as you go:\n- Conversión fija: S/ 5 = 100 créditos (1 sol = 20 créditos).\n- Paquetes sugeridos: S/ 5 (100 cr.), S/ 20 (400 cr.), S/ 50 (1,000 cr., más popular), S/ 100 (2,000 cr.), S/ 200 (4,000 cr.), o cualquier monto libre en Soles.\n- Beneficios clave: Paga estrictamente por lo que consumes en IA (turnos de bots y Copilot), sin mensualidades, sin vencimiento de saldo, recarga instantánea por WhatsApp.\n\nAntes de cobrar confirma:\n1. Monto en Soles o cantidad de créditos deseada.\n2. Código de activación alfanumérico de 10 caracteres de su organización (visible en Panel de Bawto → Facturación / Organización).\n\nMantén la conversación (elige conversar) hasta que el cliente brinde su código de activación o aclare dudas. Elige cobrar cuando el cliente confirme su código de activación y el monto (o si ya envió o enviará el comprobante con su código). Devuelve organizationCode y creditsAmount calculados.\n\nEl cliente se llama {contact_name}. Responde en español neutro del Perú, profesional, directo y sobrio; máximo cinco líneas, una pregunta por turno. No pidas contraseñas, PIN, CVV, códigos de seguridad ni tokens. {contexto_organizacion}",
+      "instruction": "Eres el especialista comercial de Bawto (plataforma de chatbots con IA para WhatsApp de Sistemuino). Tu objetivo es asesorar sobre el modelo de Créditos Pay as you go y concretar la recarga.\n\nReglas del modelo Pay as you go:\n- Conversión fija: S/ 5 = 100 créditos (1 sol = 20 créditos).\n- Paquetes sugeridos: S/ 5 (100 cr.), S/ 20 (400 cr.), S/ 50 (1,000 cr., más popular), S/ 100 (2,000 cr.), S/ 200 (4,000 cr.), o cualquier monto libre en Soles.\n- Beneficios clave: Paga estrictamente por lo que consumes en IA (turnos de bots y Copilot), sin mensualidades, sin vencimiento de saldo.\n\nAntes de cobrar confirma:\n1. Monto en Soles o cantidad de créditos deseada.\n2. Código de activación alfanumérico de 10 caracteres de su organización (visible en Panel de Bawto → Facturación / Organización).\n\nMantén la conversación (elige conversar) hasta que el cliente brinde su código de activación o aclare dudas. Elige cobrar cuando el cliente confirme su código de activación y el monto (o si ya envió o enviará el comprobante con su código). Devuelve únicamente organizationCode como dato estructurado: el servidor calcula los créditos desde el importe visible del comprobante y tú nunca eliges el saldo.\n\nEl cliente se llama {contact_name}. Responde en español neutro del Perú, profesional, directo y sobrio; máximo cinco líneas, una pregunta por turno. No pidas contraseñas, PIN, CVV, códigos de seguridad ni tokens. {contexto_organizacion}",
       "kind": "agent",
       "outputFields": [
         {
           "description": "Código de activación de 10 caracteres; vacío hasta que el cliente lo confirme.",
           "key": "organizationCode",
           "type": "string"
-        },
-        {
-          "description": "Cantidad de créditos a recargar calculada (monto en Soles * 20).",
-          "key": "creditsAmount",
-          "type": "number"
-        },
-        {
-          "description": "Monto en Soles (PEN) acordado para la recarga.",
-          "key": "amountPen",
-          "type": "number"
         }
       ],
       "outputs": [
@@ -1000,20 +995,8 @@
       "agentRole": "specialist",
       "contextMode": "recent",
       "id": "n_services_specialist",
-      "instruction": "Eres el especialista comercial de servicios tecnológicos de Sistemuino. El orquestador ya definió este tema. No llames herramientas y recomienda únicamente registros presentes en este catálogo:\n{service_catalog}\n\nAclara alcance con una sola pregunta y no inventes precios, plazos, capacidades ni servicios. Elige conversar para orientar o completar contexto. Elige asesor cuando el cliente pida una cotización, una persona o una solución a medida. Elige cobrar solo si afirma que ya hizo un pago general a Sistemuino; deja organizationCode, creditsAmount y amountPen vacíos y indica que enviarás las instrucciones exactas de pago a continuación; no inventes ni redactes números o cuentas.\n\nEl cliente se llama {contact_name}. Si llega vacío o entre llaves, no uses nombre. Responde en español neutro del Perú, profesional, directo y sobrio; máximo cinco líneas, una pregunta por turno y sin emojis salvo que el cliente los use primero. No pidas contraseñas, PIN, CVV, códigos de seguridad, tokens ni claves privadas. {contexto_organizacion}",
+      "instruction": "Eres el especialista comercial de servicios tecnológicos de Sistemuino. El orquestador ya definió este tema. No llames herramientas y recomienda únicamente registros presentes en este catálogo:\n{service_catalog}\n\nAclara alcance con una sola pregunta y no inventes precios, plazos, capacidades ni servicios. Elige conversar para orientar o completar contexto. Elige asesor cuando el cliente pida una cotización, una persona o una solución a medida. Elige cobrar solo si afirma que ya hizo un pago general a Sistemuino e indica que enviarás las instrucciones exactas de pago a continuación; no inventes ni redactes números o cuentas.\n\nEl cliente se llama {contact_name}. Si llega vacío o entre llaves, no uses nombre. Responde en español neutro del Perú, profesional, directo y sobrio; máximo cinco líneas, una pregunta por turno y sin emojis salvo que el cliente los use primero. No pidas contraseñas, PIN, CVV, códigos de seguridad, tokens ni claves privadas. {contexto_organizacion}",
       "kind": "agent",
-      "outputFields": [
-        {
-          "description": "Código de activación de 10 caracteres; vacío hasta que el cliente lo confirme.",
-          "key": "organizationCode",
-          "type": "string"
-        },
-        {
-          "description": "Cantidad de créditos a recargar.",
-          "key": "creditsAmount",
-          "type": "number"
-        }
-      ],
       "outputs": [
         "cobrar",
         "asesor",
@@ -1029,18 +1012,13 @@
       "agentRole": "specialist",
       "contextMode": "recent",
       "id": "n_payment_specialist",
-      "instruction": "Eres el especialista de recepción de pagos de Sistemuino. El orquestador ya confirmó que el tema es un pago. No llames herramientas.\n\nSi el cliente realiza una recarga de créditos Bawto o envió un comprobante de recarga, pide o conserva obligatoriamente su código de activación de 10 caracteres (visible en su Panel → Facturación / Organización) y el monto/créditos acordados. Devuelve organizationCode y creditsAmount.\n\nElige conversar mientras falte el código de activación de 10 caracteres o contexto. Elige cobrar cuando ya se tenga el código de activación confirmado y el cliente ya pagó o enviará el comprobante. Si es un pago general que no es de Bawto, trátalo como pago general y deja esos datos vacíos. Elige asesor si disputa un cobro o solicita devolución.\n\nEl cliente se llama {contact_name}. Responde en español neutro del Perú, profesional, directo y sobrio; máximo cinco líneas, una pregunta por turno. No pidas contraseñas, PIN, CVV ni tokens. {contexto_organizacion}",
+      "instruction": "Eres el especialista de recepción de pagos de Sistemuino. El orquestador ya confirmó que el tema es un pago. No llames herramientas.\n\nSi el cliente realiza una recarga de créditos Bawto o envió un comprobante de recarga, pide o conserva obligatoriamente su código de activación de 10 caracteres (visible en su Panel → Facturación / Organización). Devuelve únicamente organizationCode como dato estructurado: el importe y los créditos los determina el servidor desde el comprobante.\n\nElige conversar mientras falte el código de activación de 10 caracteres o contexto. Elige cobrar cuando ya se tenga el código de activación confirmado y el cliente ya pagó o enviará el comprobante. Si es un pago general que no es de Bawto, trátalo como pago general y deja organizationCode vacío. Elige asesor si disputa un cobro o solicita devolución.\n\nEl cliente se llama {contact_name}. Responde en español neutro del Perú, profesional, directo y sobrio; máximo cinco líneas, una pregunta por turno. No pidas contraseñas, PIN, CVV ni tokens. {contexto_organizacion}",
       "kind": "agent",
       "outputFields": [
         {
           "description": "Código de activación de 10 caracteres; vacío hasta que el cliente lo confirme.",
           "key": "organizationCode",
           "type": "string"
-        },
-        {
-          "description": "Cantidad de créditos a recargar.",
-          "key": "creditsAmount",
-          "type": "number"
         }
       ],
       "outputs": [
@@ -1240,7 +1218,7 @@
       "agentRole": "specialist",
       "contextMode": "none",
       "id": "n_store_receipt",
-      "instruction": "Analiza únicamente la imagen actual como posible comprobante de un pago hecho a la tienda Sistemuino por el pedido {pedido.orderNumber}, de {cobro_tienda.currency} {cobro_tienda.amount}. No uses el historial para completar datos que no aparezcan en la captura.\n\nCuentas y métodos de pago autorizados de Sistemuino:\n- Titular / Destinatario oficial: \"Gerson Rodriguez\", \"Sistemuino S.A.C.S\" o \"Sistemuino\".\n- Número / Destino Yape/Plin o cuenta bancaria oficial: \"973021342\" o transferencias a nombre de Gerson Rodriguez o Sistemuino.\n\nReglas estrictas de clasificación:\n- Elige valid ÚNICAMENTE si la imagen muestra una operación exitosa, el destinatario coincide con las cuentas autorizadas de Sistemuino (Gerson Rodriguez, Sistemuino S.A.C.S o 973021342) y se distinguen con claridad el importe, la fecha/hora y el número o código de operación.\n- Elige needs_review si el destinatario no coincide con las cuentas de Sistemuino, o si parece un comprobante exitoso pero falta algún dato, hay ambigüedad o la confianza no es suficiente.\n- Elige unreadable si la captura no puede leerse.\n- Elige not_receipt si no hay imagen o la imagen no es un comprobante de pago.\n\nExtrae únicamente datos visibles y no inventes. provider debe ser exactamente uno de estos valores canónicos en minúsculas: yape, plin, bcp, interbank, transfer u other. amount es el importe transferido sin comisión; currency usa ISO 4217; occurredAt usa RFC3339 con la zona visible o, si no aparece, la zona de Perú (-05:00); operationCode conserva ceros iniciales; payerName es el nombre visible del pagador o titular de origen; recipient es el destinatario visible; confidence va de 0 a 1.",
+      "instruction": "Analiza únicamente la imagen actual como posible comprobante de un pago hecho a la tienda Sistemuino por el pedido {pedido.orderNumber}, de {cobro_tienda.currency} {cobro_tienda.amount}. No uses el historial para completar datos que no aparezcan en la captura.\n\nEstos son los únicos métodos de pago autorizados activos, leídos de la fuente de verdad justo antes de analizar la imagen:\n{store_authorized_payment_methods}\n\nElige valid únicamente si la imagen muestra una operación exitosa, el destinatario coincide con el destino o titular de uno de esos métodos y se distinguen importe, fecha/hora y número de operación. Elige needs_review si el destinatario no coincide/no se ve, falta un dato o hay ambigüedad. Elige unreadable si no puede leerse y not_receipt si no es un comprobante.\n\nExtrae únicamente datos visibles y no inventes. provider debe ser exactamente uno de estos valores canónicos en minúsculas: yape, plin, bcp, interbank, transfer u other. amount es el importe transferido sin comisión; currency usa ISO 4217; occurredAt usa RFC3339 con la zona visible o, si no aparece, la zona de Perú (-05:00); operationCode conserva ceros iniciales; payerName es el nombre visible del pagador o titular de origen; recipient es el destinatario visible; confidence va de 0 a 1.",
       "kind": "agent",
       "outputFields": [
         {
@@ -1357,7 +1335,6 @@
       "args": {
         "field.codigo_activacion": "{sale.organizationCode}",
         "field.confianza": "{receipt.confidence}",
-        "field.creditos": "{sale.creditsAmount}",
         "field.destinatario": "{receipt.recipient}",
         "field.estado": "pendiente",
         "field.fecha": "{receipt.occurredAt}",
@@ -1389,6 +1366,61 @@
         "x": 5383,
         "y": 586
       }
+    },
+    {
+      "cases": [
+        {
+          "expression": "!empty(receipt.operationCode) && !empty(receipt.amount) && !empty(sale.organizationCode)",
+          "id": "ready",
+          "label": "Comprobante y código disponibles"
+        }
+      ],
+      "id": "n_existing_receipt_router",
+      "kind": "router",
+      "pos": {
+        "x": 3650,
+        "y": 750
+      }
+    },
+    {
+      "args": {
+        "fields": "medio,destino,titular,moneda,activo,prioridad",
+        "limit": "20",
+        "object": "instrucciones_pago_bawto",
+        "orderBy": "prioridad",
+        "orderDir": "asc",
+        "where.1.field": "activo",
+        "where.1.op": "eq",
+        "where.1.value": "true"
+      },
+      "id": "n_read_authorized_payment_methods",
+      "kind": "tool",
+      "pos": {
+        "x": 4050,
+        "y": 586
+      },
+      "saveAs": "authorized_payment_methods",
+      "toolRef": "data_query"
+    },
+    {
+      "args": {
+        "fields": "medio,destino,titular,moneda,activo,prioridad",
+        "limit": "20",
+        "object": "instrucciones_pago_bawto",
+        "orderBy": "prioridad",
+        "orderDir": "asc",
+        "where.1.field": "activo",
+        "where.1.op": "eq",
+        "where.1.value": "true"
+      },
+      "id": "n_read_store_payment_methods",
+      "kind": "tool",
+      "pos": {
+        "x": 5900,
+        "y": 4200
+      },
+      "saveAs": "store_authorized_payment_methods",
+      "toolRef": "data_query"
     }
   ],
   "trigger": {

@@ -3,11 +3,13 @@ package models
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -43,9 +45,72 @@ type AIUsageEventInput struct {
 	Metadata                 json.RawMessage
 }
 
+type AIUsageChargeInput struct {
+	Usage          AIUsageEventInput
+	CreditType     string
+	IdempotencyKey string
+	Notes          string
+}
+
+type aiUsageExecer interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
 // RecordAIUsage es idempotente por proveedor + request id. Un request id vacío
 // se admite para proveedores compatibles que no lo entreguen.
 func RecordAIUsage(ctx context.Context, pool *pgxpool.Pool, in AIUsageEventInput) error {
+	if err := normalizeAIUsage(&in); err != nil {
+		return err
+	}
+	_, err := insertAIUsage(ctx, pool, in)
+	return err
+}
+
+// RecordAIUsageAndChargeCredits hace indivisible la telemetría económica: una
+// llamada del proveedor y su cargo comparten transacción e idempotencia. Si dos
+// chats agotaron el último saldo a la vez, conserva el uso real pero nunca crea
+// deuda; el segundo cargo devuelve ErrInsufficientCredits.
+func RecordAIUsageAndChargeCredits(ctx context.Context, pool *pgxpool.Pool, in AIUsageChargeInput) error {
+	if err := normalizeAIUsage(&in.Usage); err != nil {
+		return err
+	}
+	credits := CostUSDToCredits(aiUsageCostUSD(in.Usage))
+	if credits <= 0 {
+		return RecordAIUsage(ctx, pool, in.Usage)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := insertAIUsage(ctx, tx, in.Usage); err != nil {
+		return err
+	}
+	_, chargeErr := deductCreditsTx(ctx, tx, DeductCreditsInput{
+		OrgID:          in.Usage.OrganizationID,
+		Credits:        credits,
+		Type:           in.CreditType,
+		ReferenceType:  CreditRefAIUsageEvents,
+		ReferenceID:    in.Usage.ProviderRequestID,
+		Notes:          in.Notes,
+		IdempotencyKey: in.IdempotencyKey,
+		ClampToBalance: true,
+		Metadata: map[string]any{
+			"provider":            in.Usage.Provider,
+			"provider_request_id": in.Usage.ProviderRequestID,
+			"purpose":             in.Usage.Purpose,
+		},
+	})
+	if chargeErr != nil && !errors.Is(chargeErr, ErrInsufficientCredits) {
+		return chargeErr
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return chargeErr
+}
+
+func normalizeAIUsage(in *AIUsageEventInput) error {
 	if strings.TrimSpace(in.Provider) == "" || strings.TrimSpace(in.Model) == "" {
 		return fmt.Errorf("usage IA sin proveedor o modelo")
 	}
@@ -61,7 +126,16 @@ func RecordAIUsage(ctx context.Context, pool *pgxpool.Pool, in AIUsageEventInput
 	if len(in.Metadata) == 0 {
 		in.Metadata = json.RawMessage(`{}`)
 	}
-	_, err := pool.Exec(ctx, `
+	for _, rate := range []float64{in.InputUSDPerMillion, in.OutputUSDPerMillion, in.CacheReadUSDPerMillion, in.CacheWriteUSDPerMillion} {
+		if rate < 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
+			return fmt.Errorf("tarifa IA inválida")
+		}
+	}
+	return nil
+}
+
+func insertAIUsage(ctx context.Context, execer aiUsageExecer, in AIUsageEventInput) (bool, error) {
+	tag, err := execer.Exec(ctx, `
 		INSERT INTO ai_usage_events
 		    (organization_id,bot_id,chat_id,inbound_message_id,purpose,provider,model,
 		     provider_request_id,input_tokens,output_tokens,cache_read_input_tokens,
@@ -77,7 +151,14 @@ func RecordAIUsage(ctx context.Context, pool *pgxpool.Pool, in AIUsageEventInput
 		in.InputUSDPerMillion, in.OutputUSDPerMillion,
 		in.CacheReadUSDPerMillion, in.CacheWriteUSDPerMillion,
 		in.Outcome, in.Metadata)
-	return err
+	return tag.RowsAffected() > 0, err
+}
+
+func aiUsageCostUSD(in AIUsageEventInput) float64 {
+	return (float64(in.InputTokens)*in.InputUSDPerMillion +
+		float64(in.OutputTokens)*in.OutputUSDPerMillion +
+		float64(in.CacheReadInputTokens)*in.CacheReadUSDPerMillion +
+		float64(in.CacheCreationInputTokens)*in.CacheWriteUSDPerMillion) / 1_000_000
 }
 
 type CostReport struct {

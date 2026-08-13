@@ -38,6 +38,7 @@ func main() {
 	documentType := flags.String("document-type", "", "tipo del documento fiscal externo")
 	documentNumber := flags.String("document-number", "", "número del documento fiscal externo")
 	creditsAmount := flags.Float64("credits", 0, "monto de créditos a abonar")
+	idempotencyKey := flags.String("idempotency-key", "", "identidad estable del ajuste manual")
 	_ = flags.Parse(os.Args[2:])
 
 	url := os.Getenv("DATABASE_URL")
@@ -63,16 +64,17 @@ func main() {
 		}
 		printJSON(overview)
 	case "credits-add":
-		if *orgID == "" || *creditsAmount <= 0 {
-			fail("credits-add requiere -org-id y -credits > 0")
+		if *orgID == "" || *creditsAmount <= 0 || *idempotencyKey == "" {
+			fail("credits-add requiere -org-id, -credits > 0 e -idempotency-key")
 		}
 		txRecord, err := models.AddCredits(ctx, pool, models.AddCreditsInput{
-			OrgID:         *orgID,
-			Credits:       *creditsAmount,
-			Type:          models.CreditTxRecharge,
-			ReferenceType: models.CreditRefManual,
-			Notes:         *notes,
-			Metadata:      map[string]any{"source": "cli_billing"},
+			OrgID:          *orgID,
+			Credits:        *creditsAmount,
+			Type:           models.CreditTxRecharge,
+			ReferenceType:  models.CreditRefManual,
+			Notes:          *notes,
+			IdempotencyKey: "manual:" + *orgID + ":" + *idempotencyKey,
+			Metadata:       map[string]any{"source": "cli_billing"},
 		})
 		if err != nil {
 			fail("abonar creditos: %v", err)

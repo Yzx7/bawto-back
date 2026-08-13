@@ -38,11 +38,12 @@ func TestWAACreditosFlowValidoYConToolDeRecarga(t *testing.T) {
 	activateTool := nodes["n_activate_subscription"]
 	paymentNeedsReview := nodes["n_payment_needs_review"]
 	askOrgCode := nodes["n_ask_org_code"]
+	existingReceiptRouter := nodes["n_existing_receipt_router"]
 	paymentOK := nodes["n_payment_ok"]
 	paymentReview := nodes["n_payment_review"]
 
 	if specialist == nil || classifyPayment == nil || savePaymentReview == nil || savePayment == nil ||
-		activateTool == nil || paymentNeedsReview == nil || askOrgCode == nil || paymentOK == nil || paymentReview == nil {
+		activateTool == nil || paymentNeedsReview == nil || askOrgCode == nil || existingReceiptRouter == nil || paymentOK == nil || paymentReview == nil {
 		t.Fatalf("faltan nodos clave en flow_waa_creditos")
 	}
 
@@ -57,13 +58,16 @@ func TestWAACreditosFlowValidoYConToolDeRecarga(t *testing.T) {
 	if fields["organizationCode"] != "string" {
 		t.Errorf("n_bawto_specialist debe declarar organizationCode string: %+v", specialist.OutputFields)
 	}
-	if fields["creditsAmount"] != "number" {
-		t.Errorf("n_bawto_specialist debe declarar creditsAmount number: %+v", specialist.OutputFields)
+	if _, exists := fields["creditsAmount"]; exists {
+		t.Errorf("la IA no debe decidir cuántos créditos acreditar: %+v", specialist.OutputFields)
 	}
 
 	// 2. Verificar instrucción de n_classify_payment con validación de destinatario
-	if !strings.Contains(classifyPayment.Instruction, "Gerson Rodriguez") || !strings.Contains(classifyPayment.Instruction, "973021342") {
-		t.Errorf("n_classify_payment debe incluir cuentas autorizadas de Sistemuino / Bawto en su prompt")
+	if !strings.Contains(classifyPayment.Instruction, "{authorized_payment_methods}") {
+		t.Errorf("n_classify_payment debe leer las cuentas autorizadas de la fuente de verdad")
+	}
+	if strings.Contains(classifyPayment.Instruction, "973021342") || strings.Contains(classifyPayment.Instruction, "Gerson Rodriguez") {
+		t.Errorf("n_classify_payment no debe congelar cuentas de pago en el prompt")
 	}
 	if !strings.Contains(classifyPayment.Instruction, "needs_review") {
 		t.Errorf("n_classify_payment debe derivar a needs_review si el destinatario no coincide")
@@ -80,6 +84,9 @@ func TestWAACreditosFlowValidoYConToolDeRecarga(t *testing.T) {
 	}
 	if activateTool.Args["activationCode"] != "{sale.organizationCode}" {
 		t.Errorf("n_activate_subscription.activationCode = %q, esperado {sale.organizationCode}", activateTool.Args["activationCode"])
+	}
+	if activateTool.Args["creditsAmount"] != "" || activateTool.Args["amount"] != "" || activateTool.Args["idempotencyKey"] != "" {
+		t.Errorf("el flujo no debe decidir monto ni idempotencia de la recarga: %+v", activateTool.Args)
 	}
 
 	// 5. Verificar condición de revisión / petición de código
@@ -103,5 +110,11 @@ func TestWAACreditosFlowValidoYConToolDeRecarga(t *testing.T) {
 	}
 	if targets := edges["n_ask_org_code.out"]; len(targets) == 0 || targets[0] != "n_espera" {
 		t.Errorf("n_ask_org_code.out debe conectar a n_espera, tiene %v", targets)
+	}
+	if targets := edges["n_bawto_specialist.cobrar"]; len(targets) == 0 || targets[0] != "n_existing_receipt_router" {
+		t.Errorf("la rama cobrar debe reutilizar un comprobante previo, tiene %v", targets)
+	}
+	if targets := edges["n_existing_receipt_router.ready"]; len(targets) == 0 || targets[0] != "n_save_payment" {
+		t.Errorf("comprobante previo + código deben guardarse sin pedir otra imagen, tiene %v", targets)
 	}
 }
