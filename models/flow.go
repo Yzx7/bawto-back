@@ -36,12 +36,15 @@ type Flow struct {
 	Audience           json.RawMessage `db:"audience" json:"audience,omitempty"`
 	Draft              json.RawMessage `db:"draft" json:"-"`
 	PublishedVersionID *string         `db:"published_version_id" json:"publishedVersionId,omitempty"`
-	CreatedBy          *string         `db:"created_by" json:"createdBy,omitempty"`
-	UpdatedBy          *string         `db:"updated_by" json:"updatedBy,omitempty"`
-	ArchivedAt         *time.Time      `db:"archived_at" json:"archivedAt,omitempty"`
-	LastTickAt         *time.Time      `db:"last_tick_at" json:"lastTickAt,omitempty"`
-	CreatedAt          time.Time       `db:"created_at" json:"createdAt"`
-	UpdatedAt          time.Time       `db:"updated_at" json:"updatedAt"`
+	// PublishedVersion es el número legible de la versión que ejecuta el bot.
+	// Se hidrata junto con el checksum publicado, sin una consulta adicional.
+	PublishedVersion *int       `db:"-" json:"publishedVersion,omitempty"`
+	CreatedBy        *string    `db:"created_by" json:"createdBy,omitempty"`
+	UpdatedBy        *string    `db:"updated_by" json:"updatedBy,omitempty"`
+	ArchivedAt       *time.Time `db:"archived_at" json:"archivedAt,omitempty"`
+	LastTickAt       *time.Time `db:"last_tick_at" json:"lastTickAt,omitempty"`
+	CreatedAt        time.Time  `db:"created_at" json:"createdAt"`
+	UpdatedAt        time.Time  `db:"updated_at" json:"updatedAt"`
 
 	// UnpublishedChanges: el borrador no coincide con la versión que el bot
 	// ejecuta. No sale de la base —se calcula comparando checksums— y por eso
@@ -246,33 +249,40 @@ func annotateUnpublished(ctx context.Context, p *pgxpool.Pool, flows []Flow) {
 	if len(ids) == 0 {
 		return
 	}
-	rows, err := p.Query(ctx, `SELECT id::text, checksum FROM flow_versions WHERE id = ANY($1::uuid[])`, ids)
+	rows, err := p.Query(ctx, `SELECT id::text, checksum, version FROM flow_versions WHERE id = ANY($1::uuid[])`, ids)
 	if err != nil {
 		return
 	}
 	defer rows.Close()
-	checksums := make(map[string]string, len(ids))
+	type publishedFlowVersion struct {
+		checksum string
+		version  int
+	}
+	publishedVersions := make(map[string]publishedFlowVersion, len(ids))
 	for rows.Next() {
 		var id, checksum string
-		if rows.Scan(&id, &checksum) == nil {
-			checksums[id] = checksum
+		var version int
+		if rows.Scan(&id, &checksum, &version) == nil {
+			publishedVersions[id] = publishedFlowVersion{checksum: checksum, version: version}
 		}
 	}
 	for i := range flows {
 		if flows[i].PublishedVersionID == nil {
 			continue
 		}
-		published, ok := checksums[*flows[i].PublishedVersionID]
+		published, ok := publishedVersions[*flows[i].PublishedVersionID]
 		if !ok {
 			continue
 		}
+		version := published.version
+		flows[i].PublishedVersion = &version
 		_, draft, err := engine.CanonicalChecksum(flows[i].Draft)
 		if err != nil {
 			// Un borrador que ni siquiera normaliza no es lo publicado.
 			flows[i].UnpublishedChanges = true
 			continue
 		}
-		flows[i].UnpublishedChanges = draft != published
+		flows[i].UnpublishedChanges = draft != published.checksum
 	}
 }
 
@@ -707,6 +717,8 @@ func PublishFlow(
 			if err := tx.Commit(ctx); err != nil {
 				return nil, err
 			}
+			currentVersion := current.Version
+			updated.PublishedVersion = &currentVersion
 			return &PublishResult{
 				Flow: &updated, Version: &current, Created: false, Warnings: templateWarnings,
 			}, nil
@@ -747,6 +759,8 @@ func PublishFlow(
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
+	publishedVersion := version.Version
+	updated.PublishedVersion = &publishedVersion
 	return &PublishResult{
 		Flow: &updated, Version: &version, Created: true, Warnings: templateWarnings,
 	}, nil

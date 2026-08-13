@@ -118,6 +118,13 @@ func TestFlowPublicarDosVecesEsNoOp(t *testing.T) {
 	if first.Flow.Status != "published" || first.Flow.PublishedVersionID == nil {
 		t.Fatalf("el flujo no quedó publicado: %+v", first.Flow)
 	}
+	if first.Flow.PublishedVersion == nil || *first.Flow.PublishedVersion != 1 {
+		t.Fatalf("la publicación no expuso su versión legible: %+v", first.Flow.PublishedVersion)
+	}
+	read, err := GetFlow(ctx, pool, bot.ID, flow.ID)
+	if err != nil || read == nil || read.PublishedVersion == nil || *read.PublishedVersion != 1 {
+		t.Fatalf("GetFlow no expuso la versión publicada: flow=%+v err=%v", read, err)
+	}
 
 	// Mismo grafo, distinto orden de claves: sigue siendo el mismo flujo.
 	var doc map[string]any

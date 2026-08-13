@@ -293,6 +293,10 @@ para y recrea el contenedor, y sondea `http://127.0.0.1:3010/signin` durante 30 
 Si no queda sano, **vuelve solo** a la imagen anterior, que capturó al empezar con
 `docker inspect`. Imprime `FRONTEND_HEALTHY` o `FRONTEND_ROLLED_BACK`.
 
+La construcción debe pasar `--build-arg NEXT_PUBLIC_APP_VERSION="$release"`.
+Ese valor aparece en el sidebar y el footer público, así que el frontend visible
+identifica la imagen activa sin depender de una constante editada a mano.
+
 ### Cómo publicar un release
 
 Desde la PC, en `frontend/`. El tarball se genera con `git archive HEAD` **a
