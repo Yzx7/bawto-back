@@ -41,17 +41,6 @@
       "target": "n_payment_need_image"
     },
     {
-      "id": "e_payment_valid_save",
-      "source": "n_classify_payment",
-      "sourceHandle": "valid",
-      "target": "n_save_payment"
-    },
-    {
-      "source": "n_classify_payment",
-      "sourceHandle": "needs_review",
-      "target": "n_save_payment_review"
-    },
-    {
       "id": "e_payment_unreadable_retry",
       "source": "n_classify_payment",
       "sourceHandle": "unreadable",
@@ -90,11 +79,6 @@
     {
       "id": "e_payment_ok_end",
       "source": "n_payment_ok",
-      "target": "n_fin"
-    },
-    {
-      "id": "e_payment_review_handoff",
-      "source": "n_payment_review",
       "target": "n_fin"
     },
     {
@@ -524,14 +508,34 @@
       "target": "n_derivar"
     },
     {
+      "id": "e_classify_payment_valid",
+      "source": "n_classify_payment",
+      "sourceHandle": "valid",
+      "target": "n_save_payment"
+    },
+    {
+      "id": "e_classify_payment_needs_review",
+      "source": "n_classify_payment",
+      "sourceHandle": "needs_review",
+      "target": "n_save_payment_review"
+    },
+    {
+      "id": "e_save_review_ok",
       "source": "n_save_payment_review",
       "sourceHandle": "ok",
       "target": "n_payment_review"
     },
     {
+      "id": "e_save_review_error",
       "source": "n_save_payment_review",
       "sourceHandle": "error",
       "target": "n_payment_error"
+    },
+    {
+      "id": "e_payment_review_fin",
+      "source": "n_payment_review",
+      "sourceHandle": "out",
+      "target": "n_fin"
     }
   ],
   "id": "flow_waa_creditos",
@@ -723,8 +727,8 @@
       "id": "n_payment_review",
       "kind": "send",
       "pos": {
-        "x": 6641.211743919515,
-        "y": 1416.3704195413577
+        "x": 5800,
+        "y": 1400
       }
     },
     {
