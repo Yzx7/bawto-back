@@ -2,6 +2,31 @@ package models
 
 import "testing"
 
+func TestNormalizeMutationValuesUsesDeclaredTypes(t *testing.T) {
+	fields := []DataField{
+		{Key: "monto", Label: "Monto", Type: "number"},
+		{Key: "activo", Label: "Activo", Type: "boolean"},
+		{Key: "nota", Label: "Nota", Type: "text"},
+	}
+	values, err := normalizeMutationValues(fields, map[string]any{
+		"monto": "125.00", "activo": "true", "nota": "visible",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["monto"] != float64(125) || values["activo"] != true || values["nota"] != "visible" {
+		t.Fatalf("valores normalizados inesperados: %#v", values)
+	}
+
+	empty, err := normalizeMutationValues(fields, map[string]any{"monto": "", "activo": nil})
+	if err != nil || empty["monto"] != "" || empty["activo"] != nil {
+		t.Fatalf("los opcionales vacíos deben conservarse: %#v err=%v", empty, err)
+	}
+	if _, err := normalizeMutationValues(fields, map[string]any{"monto": "ciento"}); err == nil {
+		t.Fatal("se esperaba rechazar un número inválido")
+	}
+}
+
 // Requiere DATABASE_URL con migración 014. Comprueba la frontera que no cubre
 // el motor: ownership, schema, vínculo y ledger idempotente en una transacción.
 func TestMutateDataRecordIntegration(t *testing.T) {
@@ -55,11 +80,11 @@ func TestMutateDataRecordIntegration(t *testing.T) {
 		t.Fatalf("upsert=%+v err=%v", upserted, err)
 	}
 
-	var amount, linkedContact string
-	if err = pool.QueryRow(ctx, `SELECT r.data->>'monto',rc.contact_id::text FROM data_records r
+	var amount, amountType, linkedContact string
+	if err = pool.QueryRow(ctx, `SELECT r.data->>'monto',jsonb_typeof(r.data->'monto'),rc.contact_id::text FROM data_records r
 		JOIN data_record_contacts rc ON rc.record_id=r.id AND rc.role='primary' WHERE r.id=$1::uuid`,
-		created.RecordID).Scan(&amount, &linkedContact); err != nil || amount != "20.00" || linkedContact != contact.ID {
-		t.Fatalf("monto=%s contact=%s err=%v", amount, linkedContact, err)
+		created.RecordID).Scan(&amount, &amountType, &linkedContact); err != nil || amount != "20" || amountType != "number" || linkedContact != contact.ID {
+		t.Fatalf("monto=%s type=%s contact=%s err=%v", amount, amountType, linkedContact, err)
 	}
 
 	input.IdempotencyKey = "message:3"

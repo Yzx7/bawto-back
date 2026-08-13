@@ -71,7 +71,7 @@ func TestValidateAutomaticPaymentReceipt(t *testing.T) {
 	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.FixedZone("PET", -5*60*60))
 	valid := creditPaymentRecord{
 		Provider: "bcp", AmountPen: 240, Currency: "PEN", Operation: "01391991",
-		OccurredAt: now.Add(-time.Hour).Format(time.RFC3339),
+		OccurredAt: now.Add(-time.Hour).Format(time.RFC3339), ResultText: "¡Operación exitosa!",
 	}
 	if err := validatePaymentForRecharge(valid); err != nil {
 		t.Fatalf("comprobante económico válido: %v", err)
@@ -89,6 +89,7 @@ func TestValidateAutomaticPaymentReceipt(t *testing.T) {
 		{"sin fecha", func(p *creditPaymentRecord) { p.OccurredAt = "" }, "requiere fecha"},
 		{"antiguo", func(p *creditPaymentRecord) { p.OccurredAt = now.Add(-73 * time.Hour).Format(time.RFC3339) }, "72 horas"},
 		{"futuro", func(p *creditPaymentRecord) { p.OccurredAt = now.Add(11 * time.Minute).Format(time.RFC3339) }, "en el futuro"},
+		{"sin éxito visible", func(p *creditPaymentRecord) { p.ResultText = "Procesando" }, "resultado exitoso"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -98,6 +99,19 @@ func TestValidateAutomaticPaymentReceipt(t *testing.T) {
 				t.Fatalf("se esperaba error con %q, se obtuvo %v", tc.want, err)
 			}
 		})
+	}
+}
+
+func TestPaymentReceiptSuccessfulUsesVisibleStatus(t *testing.T) {
+	for _, visible := range []string{"¡Yapeaste!", "Operación exitosa", "PAGO EXITOSO", "Transferencia completada"} {
+		if !paymentReceiptSuccessful(visible) {
+			t.Errorf("debía reconocer %q", visible)
+		}
+	}
+	for _, visible := range []string{"", "Procesando", "Operación rechazada", "Pendiente"} {
+		if paymentReceiptSuccessful(visible) {
+			t.Errorf("no debía reconocer %q", visible)
+		}
 	}
 }
 

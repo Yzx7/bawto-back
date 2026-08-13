@@ -9,7 +9,7 @@
       "id": "e_router_image",
       "source": "n_entry_router",
       "sourceHandle": "image",
-      "target": "n_read_authorized_payment_methods"
+      "target": "n_classify_payment"
     },
     {
       "id": "e_router_default",
@@ -32,25 +32,13 @@
       "id": "e_payment_router_image",
       "source": "n_payment_input_router",
       "sourceHandle": "image",
-      "target": "n_read_authorized_payment_methods"
+      "target": "n_classify_payment"
     },
     {
       "id": "e_payment_router_default",
       "source": "n_payment_input_router",
       "sourceHandle": "default",
       "target": "n_payment_need_image"
-    },
-    {
-      "id": "e_payment_unreadable_retry",
-      "source": "n_classify_payment",
-      "sourceHandle": "unreadable",
-      "target": "n_payment_retry"
-    },
-    {
-      "id": "e_payment_not_receipt",
-      "source": "n_classify_payment",
-      "sourceHandle": "not_receipt",
-      "target": "n_payment_not_receipt"
     },
     {
       "id": "e_payment_ok_end",
@@ -75,12 +63,6 @@
     {
       "id": "xy-edge__n_payment_need_imageout-n_espera",
       "source": "n_payment_need_image",
-      "sourceHandle": "out",
-      "target": "n_espera"
-    },
-    {
-      "id": "xy-edge__n_payment_not_receiptout-n_espera",
-      "source": "n_payment_not_receipt",
       "sourceHandle": "out",
       "target": "n_espera"
     },
@@ -472,33 +454,9 @@
       "target": "n_derivar"
     },
     {
-      "id": "e_classify_payment_needs_review",
-      "source": "n_classify_payment",
-      "sourceHandle": "needs_review",
-      "target": "n_receipt_reviewable_router"
-    },
-    {
-      "id": "e_save_review_ok",
-      "source": "n_save_payment_review",
-      "sourceHandle": "ok",
-      "target": "n_payment_review"
-    },
-    {
-      "id": "e_save_review_error",
-      "source": "n_save_payment_review",
-      "sourceHandle": "error",
-      "target": "n_payment_error"
-    },
-    {
-      "id": "e_payment_review_fin",
-      "source": "n_payment_review",
-      "sourceHandle": "out",
-      "target": "n_fin"
-    },
-    {
       "id": "e_classify_valid_check",
       "source": "n_classify_payment",
-      "sourceHandle": "valid",
+      "sourceHandle": "scanned",
       "target": "n_receipt_complete_router"
     },
     {
@@ -544,18 +502,6 @@
       "target": "n_render_payment_methods"
     },
     {
-      "id": "e_authorized_methods_classify",
-      "source": "n_read_authorized_payment_methods",
-      "sourceHandle": "ok",
-      "target": "n_classify_payment"
-    },
-    {
-      "id": "e_authorized_methods_error",
-      "source": "n_read_authorized_payment_methods",
-      "sourceHandle": "error",
-      "target": "n_payment_error"
-    },
-    {
       "id": "e_store_authorized_methods_classify",
       "source": "n_read_store_payment_methods",
       "sourceHandle": "ok",
@@ -577,25 +523,36 @@
       "id": "e_receipt_complete_retry",
       "source": "n_receipt_complete_router",
       "sourceHandle": "default",
-      "target": "n_payment_retry"
-    },
-    {
-      "id": "e_receipt_reviewable_save",
-      "source": "n_receipt_reviewable_router",
-      "sourceHandle": "reviewable",
-      "target": "n_save_payment_review"
-    },
-    {
-      "id": "e_receipt_reviewable_retry",
-      "source": "n_receipt_reviewable_router",
-      "sourceHandle": "default",
-      "target": "n_payment_retry"
+      "target": "n_classify_payment_retry"
     },
     {
       "id": "e_existing_receipt_incomplete",
       "source": "n_existing_receipt_router",
       "sourceHandle": "incomplete",
       "target": "n_payment_retry"
+    },
+    {
+      "id": "e_scan_retry_result",
+      "source": "n_classify_payment_retry",
+      "sourceHandle": "scanned",
+      "target": "n_receipt_retry_complete_router"
+    },
+    {
+      "id": "e_scan_retry_complete",
+      "source": "n_receipt_retry_complete_router",
+      "sourceHandle": "complete",
+      "target": "n_copy_receipt_retry"
+    },
+    {
+      "id": "e_scan_retry_incomplete",
+      "source": "n_receipt_retry_complete_router",
+      "sourceHandle": "default",
+      "target": "n_payment_retry"
+    },
+    {
+      "id": "e_copy_retry_continue",
+      "source": "n_copy_receipt_retry",
+      "target": "n_payment_needs_review"
     }
   ],
   "id": "flow_waa_creditos",
@@ -647,8 +604,8 @@
       "id": "n_payment_wait",
       "kind": "wait",
       "pos": {
-        "x": 3704.359856098115,
-        "y": 1194.950302564131
+        "x": 3163.3616126812285,
+        "y": 1181.755223456402
       },
       "timeoutHours": 24
     },
@@ -663,8 +620,8 @@
       "id": "n_payment_input_router",
       "kind": "router",
       "pos": {
-        "x": 4110.8558996311385,
-        "y": 940.2481396283556
+        "x": 3524.901230444942,
+        "y": 1107.3988763674697
       }
     },
     {
@@ -672,67 +629,62 @@
       "id": "n_payment_need_image",
       "kind": "send",
       "pos": {
-        "x": 4869.325805529734,
-        "y": 1338.8509834271701
+        "x": 4872.808007782918,
+        "y": 1361.4852980728692
       }
     },
     {
       "accepts": [
-        "text",
-        "interactive",
         "image"
       ],
       "agentRole": "specialist",
       "contextMode": "none",
       "id": "n_classify_payment",
-      "instruction": "Analiza únicamente la imagen actual como posible comprobante de pago peruano enviado a Sistemuino / Bawto. No uses el historial para completar datos que no aparezcan en la captura.\n\nEstos son los únicos métodos de pago autorizados activos, leídos de la fuente de verdad justo antes de analizar la imagen:\n{authorized_payment_methods}\n\nReglas estrictas de clasificación:\n- Elige valid ÚNICAMENTE si la imagen muestra una operación exitosa, se distinguen con claridad importe, fecha/hora y número o código de operación, y el destinatario visible coincide con el destino o titular de uno de los métodos autorizados anteriores.\n- Elige needs_review si el comprobante parece exitoso pero el destinatario no coincide/no se ve, falta un dato clave o hay ambigüedad.\n- Elige unreadable si la captura está borrosa, cortada o no puede leerse.\n- Elige not_receipt si la imagen no es un comprobante de pago.\n\nExtrae únicamente datos visibles y no inventes. provider debe ser exactamente uno de estos valores canónicos en minúsculas: yape, plin, bcp, interbank u other. El proveedor es el canal del comprobante, no la red del destinatario. amount es el importe transferido sin comisión; currency usa ISO 4217; occurredAt usa RFC3339 con la zona de Perú (-05:00); operationCode conserva ceros iniciales; recipient es el destinatario visible; confidence va de 0 a 1.\n\nContrato obligatorio de valid: si eliges valid debes incluir provider, amount, currency, occurredAt, operationCode y recipient. Si no puedes devolver cualquiera de esos campos, elige needs_review; nunca marques valid con data incompleta.",
+      "instruction": "Transcribe los datos visibles del comprobante en la imagen actual. Completa provider con el canal visible en minúsculas (yape, plin, bcp, interbank u other); amount únicamente con el importe decimal sin símbolo de moneda; currency con el código ISO 4217; occurredAt en RFC3339 con la zona de Perú (-05:00); operationCode conservando ceros iniciales; recipient con el destinatario visible; y statusText con el texto visible que indica el resultado de la operación. Usa solamente información que pueda leerse en la imagen y omite cualquier campo que no aparezca o no sea legible.",
       "kind": "agent",
       "outputFields": [
         {
-          "description": "Canal canónico del comprobante; exactamente yape, plin, bcp, interbank u other.",
+          "description": "Canal visible: yape, plin, bcp, interbank u other.",
           "key": "provider",
           "type": "string"
         },
         {
-          "description": "Importe transferido, sin comisión.",
+          "description": "Importe decimal visible sin símbolo de moneda.",
           "key": "amount",
-          "type": "number"
+          "type": "string"
         },
         {
-          "description": "Moneda en código ISO 4217, por ejemplo PEN.",
+          "description": "Moneda visible en código ISO 4217.",
           "key": "currency",
           "type": "string"
         },
         {
-          "description": "Fecha y hora visibles de la operación, en RFC3339 y zona de Perú (-05:00).",
+          "description": "Fecha y hora visibles en RFC3339 con zona -05:00.",
           "key": "occurredAt",
-          "type": "datetime"
+          "type": "string"
         },
         {
-          "description": "Número o código de operación, conservando ceros iniciales.",
+          "description": "Número de operación visible, conservando ceros iniciales.",
           "key": "operationCode",
           "type": "string"
         },
         {
-          "description": "Nombre del destinatario visible en el comprobante.",
+          "description": "Destinatario visible.",
           "key": "recipient",
           "type": "string"
         },
         {
-          "description": "Confianza global de la extracción entre 0 y 1.",
-          "key": "confidence",
-          "type": "number"
+          "description": "Texto visible que indica el resultado de la operación.",
+          "key": "statusText",
+          "type": "string"
         }
       ],
       "outputs": [
-        "valid",
-        "needs_review",
-        "unreadable",
-        "not_receipt"
+        "scanned"
       ],
       "pos": {
-        "x": 4450.968142167468,
-        "y": 586.6942278485509
+        "x": 4092.731405775243,
+        "y": 493.0618889023657
       },
       "saveAs": "receipt",
       "silent": true
@@ -740,7 +692,6 @@
     {
       "args": {
         "field.codigo_activacion": "{sale.organizationCode}",
-        "field.confianza": "{receipt.confidence}",
         "field.destinatario": "{receipt.recipient}",
         "field.estado": "aceptado",
         "field.fecha": "{receipt.occurredAt}",
@@ -749,6 +700,7 @@
         "field.operacion": "{receipt.operationCode}",
         "field.origen": "bot",
         "field.proveedor": "{receipt.provider}",
+        "field.resultado": "{receipt.statusText}",
         "idempotencyKey": "payment:{input.id}",
         "linkCurrentContact": "false",
         "object": "cobros",
@@ -757,8 +709,8 @@
       "id": "n_save_payment",
       "kind": "tool",
       "pos": {
-        "x": 5355.431239480072,
-        "y": 1075.8921901299823
+        "x": 5358.070255301617,
+        "y": 922.8292724803266
       },
       "saveAs": "payment_record",
       "toolRef": "data_mutate"
@@ -768,8 +720,8 @@
       "id": "n_payment_needs_review",
       "kind": "condition",
       "pos": {
-        "x": 4900,
-        "y": 586
+        "x": 4782.367587285476,
+        "y": 565.2263380597191
       }
     },
     {
@@ -782,30 +734,12 @@
       }
     },
     {
-      "body": "Comprobante recibido y registrado en estado pendiente. Como el comprobante requiere validación manual del destinatario o datos, conservé la evidencia para que nuestro equipo lo verifique y abone tus créditos.",
-      "id": "n_payment_review",
-      "kind": "send",
-      "pos": {
-        "x": 5848.750831544583,
-        "y": 1413.928809012738
-      }
-    },
-    {
       "body": "No pude validar todos los datos obligatorios del comprobante. Envía otra foto o captura completa, nítida y sin recortes; deben verse fecha, importe, operación y destinatario. No se acreditó ningún saldo.",
       "id": "n_payment_retry",
       "kind": "send",
       "pos": {
-        "x": 4907.155901254294,
-        "y": 926.5023975848728
-      }
-    },
-    {
-      "body": "La imagen no parece ser un comprobante de pago. Envía una captura de Yape, Plin o del depósito donde se vean fecha, importe y operación.",
-      "id": "n_payment_not_receipt",
-      "kind": "send",
-      "pos": {
-        "x": 4869.34508328085,
-        "y": 1129.0410820468503
+        "x": 4787.557002853094,
+        "y": 924.1917513432161
       }
     },
     {
@@ -1110,8 +1044,8 @@
       "id": "n_payment_method_unavailable",
       "kind": "send",
       "pos": {
-        "x": 4822.246467783786,
-        "y": 1748.574229882725
+        "x": 4941.002179753346,
+        "y": 1764.4083248119996
       }
     },
     {
@@ -1371,50 +1305,23 @@
       }
     },
     {
-      "args": {
-        "field.codigo_activacion": "{sale.organizationCode}",
-        "field.confianza": "{receipt.confidence}",
-        "field.destinatario": "{receipt.recipient}",
-        "field.estado": "pendiente",
-        "field.fecha": "{receipt.occurredAt}",
-        "field.moneda": "{receipt.currency}",
-        "field.monto": "{receipt.amount}",
-        "field.notas": "Comprobante derivado a revisión (destinatario o datos por validar)",
-        "field.operacion": "{receipt.operationCode}",
-        "field.origen": "bot",
-        "field.proveedor": "{receipt.provider}",
-        "idempotencyKey": "payment:{input.id}",
-        "linkCurrentContact": "false",
-        "object": "cobros",
-        "operation": "create"
-      },
-      "id": "n_save_payment_review",
-      "kind": "tool",
-      "pos": {
-        "x": 5445.120126187879,
-        "y": 1377.0260329000591
-      },
-      "saveAs": "payment_record",
-      "toolRef": "data_mutate"
-    },
-    {
       "body": "Leí un comprobante de {receipt.provider} por {receipt.currency} {receipt.amount}. Para validarlo y asociarlo a tu organización, indícame tu código de activación de 10 caracteres (Panel de Bawto → Facturación / Organización). La recarga solo se confirmará después de la validación del servidor.",
       "id": "n_ask_org_code",
       "kind": "send",
       "pos": {
-        "x": 4941.673766841212,
-        "y": 218.56182092587244
+        "x": 4946.897070220989,
+        "y": 222.04402317905692
       }
     },
     {
       "cases": [
         {
-          "expression": "!empty(receipt.provider) \u0026\u0026 !empty(receipt.amount) \u0026\u0026 receipt.amount \u003e 0 \u0026\u0026 receipt.currency == PEN \u0026\u0026 !empty(receipt.occurredAt) \u0026\u0026 !empty(receipt.operationCode) \u0026\u0026 !empty(receipt.recipient) \u0026\u0026 !empty(sale.organizationCode)",
+          "expression": "!empty(receipt.provider) \u0026\u0026 !empty(receipt.amount) \u0026\u0026 receipt.amount \u003e 0 \u0026\u0026 !empty(receipt.currency) \u0026\u0026 !empty(receipt.occurredAt) \u0026\u0026 !empty(receipt.operationCode) \u0026\u0026 !empty(receipt.recipient) \u0026\u0026 !empty(receipt.statusText) \u0026\u0026 !empty(sale.organizationCode)",
           "id": "ready",
           "label": "Comprobante completo y código disponibles"
         },
         {
-          "expression": "!empty(receipt.provider) || !empty(receipt.amount) || !empty(receipt.currency) || !empty(receipt.occurredAt) || !empty(receipt.operationCode) || !empty(receipt.recipient)",
+          "expression": "!empty(receipt.provider) || !empty(receipt.amount) || !empty(receipt.currency) || !empty(receipt.occurredAt) || !empty(receipt.operationCode) || !empty(receipt.recipient) || !empty(receipt.statusText)",
           "id": "incomplete",
           "label": "Comprobante previo incompleto"
         }
@@ -1437,31 +1344,11 @@
         "where.1.op": "eq",
         "where.1.value": "true"
       },
-      "id": "n_read_authorized_payment_methods",
-      "kind": "tool",
-      "pos": {
-        "x": 4050,
-        "y": 586
-      },
-      "saveAs": "authorized_payment_methods",
-      "toolRef": "data_query"
-    },
-    {
-      "args": {
-        "fields": "medio,destino,titular,moneda,activo,prioridad",
-        "limit": "20",
-        "object": "instrucciones_pago_bawto",
-        "orderBy": "prioridad",
-        "orderDir": "asc",
-        "where.1.field": "activo",
-        "where.1.op": "eq",
-        "where.1.value": "true"
-      },
       "id": "n_read_store_payment_methods",
       "kind": "tool",
       "pos": {
-        "x": 5900,
-        "y": 4200
+        "x": 5718.114012018752,
+        "y": 3802.882259574276
       },
       "saveAs": "store_authorized_payment_methods",
       "toolRef": "data_query"
@@ -1469,31 +1356,105 @@
     {
       "cases": [
         {
-          "expression": "!empty(receipt.provider) \u0026\u0026 !empty(receipt.amount) \u0026\u0026 receipt.amount \u003e 0 \u0026\u0026 receipt.currency == PEN \u0026\u0026 !empty(receipt.occurredAt) \u0026\u0026 !empty(receipt.operationCode) \u0026\u0026 !empty(receipt.recipient)",
+          "expression": "!empty(receipt.provider) \u0026\u0026 !empty(receipt.amount) \u0026\u0026 receipt.amount \u003e 0 \u0026\u0026 !empty(receipt.currency) \u0026\u0026 !empty(receipt.occurredAt) \u0026\u0026 !empty(receipt.operationCode) \u0026\u0026 !empty(receipt.recipient) \u0026\u0026 !empty(receipt.statusText)",
           "id": "complete",
-          "label": "Datos obligatorios completos"
+          "label": "Lectura completa"
         }
       ],
       "id": "n_receipt_complete_router",
       "kind": "router",
       "pos": {
-        "x": 4800,
-        "y": 420
+        "x": 4463.222773779281,
+        "y": 521.1424749178523
       }
+    },
+    {
+      "accepts": [
+        "image"
+      ],
+      "agentRole": "specialist",
+      "contextMode": "none",
+      "id": "n_classify_payment_retry",
+      "instruction": "Transcribe los datos visibles del comprobante en la imagen actual. Completa provider con el canal visible en minúsculas (yape, plin, bcp, interbank u other); amount únicamente con el importe decimal sin símbolo de moneda; currency con el código ISO 4217; occurredAt en RFC3339 con la zona de Perú (-05:00); operationCode conservando ceros iniciales; recipient con el destinatario visible; y statusText con el texto visible que indica el resultado de la operación. Usa solamente información que pueda leerse en la imagen y omite cualquier campo que no aparezca o no sea legible.",
+      "kind": "agent",
+      "outputFields": [
+        {
+          "description": "Canal visible: yape, plin, bcp, interbank u other.",
+          "key": "provider",
+          "type": "string"
+        },
+        {
+          "description": "Importe decimal visible sin símbolo de moneda.",
+          "key": "amount",
+          "type": "string"
+        },
+        {
+          "description": "Moneda visible en código ISO 4217.",
+          "key": "currency",
+          "type": "string"
+        },
+        {
+          "description": "Fecha y hora visibles en RFC3339 con zona -05:00.",
+          "key": "occurredAt",
+          "type": "string"
+        },
+        {
+          "description": "Número de operación visible, conservando ceros iniciales.",
+          "key": "operationCode",
+          "type": "string"
+        },
+        {
+          "description": "Destinatario visible.",
+          "key": "recipient",
+          "type": "string"
+        },
+        {
+          "description": "Texto visible que indica el resultado de la operación.",
+          "key": "statusText",
+          "type": "string"
+        }
+      ],
+      "outputs": [
+        "scanned"
+      ],
+      "pos": {
+        "x": 4720,
+        "y": 720
+      },
+      "saveAs": "receipt_retry",
+      "silent": true
     },
     {
       "cases": [
         {
-          "expression": "!empty(receipt.provider) \u0026\u0026 !empty(receipt.amount) \u0026\u0026 receipt.amount \u003e 0 \u0026\u0026 receipt.currency == PEN \u0026\u0026 !empty(receipt.occurredAt) \u0026\u0026 !empty(receipt.operationCode)",
-          "id": "reviewable",
-          "label": "Datos suficientes para revisión"
+          "expression": "!empty(receipt_retry.provider) \u0026\u0026 !empty(receipt_retry.amount) \u0026\u0026 receipt_retry.amount \u003e 0 \u0026\u0026 !empty(receipt_retry.currency) \u0026\u0026 !empty(receipt_retry.occurredAt) \u0026\u0026 !empty(receipt_retry.operationCode) \u0026\u0026 !empty(receipt_retry.recipient) \u0026\u0026 !empty(receipt_retry.statusText)",
+          "id": "complete",
+          "label": "Segunda lectura completa"
         }
       ],
-      "id": "n_receipt_reviewable_router",
+      "id": "n_receipt_retry_complete_router",
       "kind": "router",
       "pos": {
-        "x": 5000,
-        "y": 1120
+        "x": 5050,
+        "y": 780
+      }
+    },
+    {
+      "action": "set",
+      "id": "n_copy_receipt_retry",
+      "kind": "action",
+      "params": {
+        "receipt.amount": "{receipt_retry.amount}",
+        "receipt.currency": "{receipt_retry.currency}",
+        "receipt.occurredAt": "{receipt_retry.occurredAt}",
+        "receipt.operationCode": "{receipt_retry.operationCode}",
+        "receipt.provider": "{receipt_retry.provider}",
+        "receipt.recipient": "{receipt_retry.recipient}",
+        "receipt.statusText": "{receipt_retry.statusText}"
+      },
+      "pos": {
+        "x": 5350,
+        "y": 780
       }
     }
   ],

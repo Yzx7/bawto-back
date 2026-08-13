@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -98,6 +100,11 @@ func MutateDataRecord(ctx context.Context, pool *pgxpool.Pool, input DataMutatio
 	if err = validateMutationFieldNames(fields, input.Values); err != nil {
 		return nil, err
 	}
+	normalizedValues, err := normalizeMutationValues(fields, input.Values)
+	if err != nil {
+		return nil, err
+	}
+	input.Values = normalizedValues
 
 	var recordID string
 	var current map[string]any
@@ -180,6 +187,46 @@ func MutateDataRecord(ctx context.Context, pool *pgxpool.Pool, input DataMutatio
 		RecordID: recordID, ObjectKey: input.ObjectKey, Operation: input.Operation,
 		Created: created, Idempotent: false, Data: raw,
 	}, nil
+}
+
+func normalizeMutationValues(fields []DataField, values map[string]any) (map[string]any, error) {
+	fieldTypes := make(map[string]string, len(fields))
+	for _, field := range fields {
+		fieldTypes[field.Key] = field.Type
+	}
+	normalized := make(map[string]any, len(values))
+	for key, value := range values {
+		if value == nil || strings.TrimSpace(fmt.Sprint(value)) == "" {
+			normalized[key] = value
+			continue
+		}
+		switch fieldTypes[key] {
+		case "number":
+			parsed, err := strconv.ParseFloat(strings.TrimSpace(fmt.Sprint(value)), 64)
+			if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+				return nil, fmt.Errorf("el campo %q debe ser numérico", dataFieldLabel(fields, key))
+			}
+			normalized[key] = parsed
+		case "boolean":
+			parsed, err := strconv.ParseBool(strings.TrimSpace(fmt.Sprint(value)))
+			if err != nil {
+				return nil, fmt.Errorf("el campo %q debe ser verdadero o falso", dataFieldLabel(fields, key))
+			}
+			normalized[key] = parsed
+		default:
+			normalized[key] = value
+		}
+	}
+	return normalized, nil
+}
+
+func dataFieldLabel(fields []DataField, key string) string {
+	for _, field := range fields {
+		if field.Key == key {
+			return field.Label
+		}
+	}
+	return key
 }
 
 func validateMutationFieldNames(fields []DataField, values map[string]any) error {

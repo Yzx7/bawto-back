@@ -20,7 +20,7 @@ func loadWAACreditosFlow(t *testing.T) *Flow {
 	return &flow
 }
 
-func TestWAACreditosFlowValidoYConToolDeRecarga(t *testing.T) {
+func TestWAACreditosFlowSeparaEscaneoVisualDeValidacion(t *testing.T) {
 	flow := loadWAACreditosFlow(t)
 	if err := Validate(flow); err != nil {
 		t.Fatalf("flow_waa_creditos inválido: %v", err)
@@ -33,25 +33,31 @@ func TestWAACreditosFlowValidoYConToolDeRecarga(t *testing.T) {
 
 	specialist := nodes["n_bawto_specialist"]
 	classifyPayment := nodes["n_classify_payment"]
-	savePaymentReview := nodes["n_save_payment_review"]
+	retryScan := nodes["n_classify_payment_retry"]
+	completeRouter := nodes["n_receipt_complete_router"]
+	retryCompleteRouter := nodes["n_receipt_retry_complete_router"]
+	copyRetry := nodes["n_copy_receipt_retry"]
 	savePayment := nodes["n_save_payment"]
 	activateTool := nodes["n_activate_subscription"]
-	paymentNeedsReview := nodes["n_payment_needs_review"]
+	paymentHasCode := nodes["n_payment_needs_review"]
 	askOrgCode := nodes["n_ask_org_code"]
 	existingReceiptRouter := nodes["n_existing_receipt_router"]
-	receiptCompleteRouter := nodes["n_receipt_complete_router"]
-	receiptReviewableRouter := nodes["n_receipt_reviewable_router"]
 	paymentSpecialist := nodes["n_payment_specialist"]
-	paymentOK := nodes["n_payment_ok"]
-	paymentReview := nodes["n_payment_review"]
 
-	if specialist == nil || classifyPayment == nil || savePaymentReview == nil || savePayment == nil ||
-		activateTool == nil || paymentNeedsReview == nil || askOrgCode == nil || existingReceiptRouter == nil ||
-		receiptCompleteRouter == nil || receiptReviewableRouter == nil || paymentSpecialist == nil || paymentOK == nil || paymentReview == nil {
+	if specialist == nil || classifyPayment == nil || retryScan == nil || completeRouter == nil ||
+		retryCompleteRouter == nil || copyRetry == nil || savePayment == nil || activateTool == nil ||
+		paymentHasCode == nil || askOrgCode == nil || existingReceiptRouter == nil || paymentSpecialist == nil {
 		t.Fatalf("faltan nodos clave en flow_waa_creditos")
 	}
+	for _, removed := range []string{
+		"n_read_authorized_payment_methods", "n_payment_not_receipt", "n_payment_review",
+		"n_save_payment_review", "n_receipt_reviewable_router",
+	} {
+		if nodes[removed] != nil {
+			t.Errorf("el nodo visual obsoleto %s no debe permanecer", removed)
+		}
+	}
 
-	// 1. Verificar especialista orientado a créditos
 	if specialist.ToolRef != "" {
 		t.Errorf("n_bawto_specialist no debe llamar herramientas directamente")
 	}
@@ -66,20 +72,59 @@ func TestWAACreditosFlowValidoYConToolDeRecarga(t *testing.T) {
 		t.Errorf("la IA no debe decidir cuántos créditos acreditar: %+v", specialist.OutputFields)
 	}
 
-	// 2. Verificar instrucción de n_classify_payment con validación de destinatario
-	if !strings.Contains(classifyPayment.Instruction, "{authorized_payment_methods}") {
-		t.Errorf("n_classify_payment debe leer las cuentas autorizadas de la fuente de verdad")
+	if classifyPayment.Instruction != retryScan.Instruction {
+		t.Errorf("ambos intentos deben usar exactamente la misma instrucción de escaneo")
 	}
-	if strings.Contains(classifyPayment.Instruction, "973021342") || strings.Contains(classifyPayment.Instruction, "Gerson Rodriguez") {
-		t.Errorf("n_classify_payment no debe congelar cuentas de pago en el prompt")
-	}
-	if !strings.Contains(classifyPayment.Instruction, "needs_review") {
-		t.Errorf("n_classify_payment debe derivar a needs_review si el destinatario no coincide")
-	}
-	for _, field := range []string{"provider", "amount", "currency", "occurredAt", "operationCode", "recipient"} {
-		if !strings.Contains(classifyPayment.Instruction, field) {
-			t.Errorf("n_classify_payment no declara %s como obligatorio para valid", field)
+	lowerInstruction := strings.ToLower(classifyPayment.Instruction)
+	for _, forbidden := range []string{
+		"authorized_payment_methods", "cuentas autorizadas", "destinatario coincide",
+		"pago válido", "valid", "needs_review", "confidence",
+	} {
+		if strings.Contains(lowerInstruction, forbidden) {
+			t.Errorf("el escáner visual no debe decidir validez (%q): %q", forbidden, classifyPayment.Instruction)
 		}
+	}
+	for _, scanner := range []*Node{classifyPayment, retryScan} {
+		if len(scanner.Accepts) != 1 || scanner.Accepts[0] != "image" {
+			t.Errorf("%s debe aceptar solo imágenes: %v", scanner.ID, scanner.Accepts)
+		}
+		if len(scanner.Outputs) != 1 || scanner.Outputs[0] != "scanned" {
+			t.Errorf("%s debe producir una sola rama scanned: %v", scanner.ID, scanner.Outputs)
+		}
+		scanFields := map[string]string{}
+		for _, field := range scanner.OutputFields {
+			scanFields[field.Key] = field.Type
+		}
+		for _, field := range []string{"provider", "amount", "currency", "occurredAt", "operationCode", "recipient", "statusText"} {
+			if scanFields[field] != "string" {
+				t.Errorf("%s debe transcribir %s como string: %+v", scanner.ID, field, scanner.OutputFields)
+			}
+		}
+		if len(scanFields) != 7 {
+			t.Errorf("%s tiene campos ajenos a la transcripción: %+v", scanner.ID, scanner.OutputFields)
+		}
+	}
+	if classifyPayment.SaveAs != "receipt" || retryScan.SaveAs != "receipt_retry" {
+		t.Errorf("los dos escaneos deben conservar resultados separados: %q / %q", classifyPayment.SaveAs, retryScan.SaveAs)
+	}
+
+	if savePayment.Args["field.resultado"] != "{receipt.statusText}" {
+		t.Errorf("n_save_payment debe persistir el resultado visible: %+v", savePayment.Args)
+	}
+	if _, exists := savePayment.Args["field.confianza"]; exists {
+		t.Errorf("n_save_payment no debe guardar una confianza decidida por la IA")
+	}
+	if activateTool.ToolRef != "credit_recharge_activate" {
+		t.Errorf("n_activate_subscription debe usar credit_recharge_activate, tiene %q", activateTool.ToolRef)
+	}
+	if activateTool.Args["activationCode"] != "{sale.organizationCode}" {
+		t.Errorf("n_activate_subscription.activationCode = %q", activateTool.Args["activationCode"])
+	}
+	if activateTool.Args["creditsAmount"] != "" || activateTool.Args["amount"] != "" || activateTool.Args["idempotencyKey"] != "" {
+		t.Errorf("el flujo no debe decidir monto ni idempotencia de la recarga: %+v", activateTool.Args)
+	}
+	if paymentHasCode.Expression != "!empty(sale.organizationCode)" {
+		t.Errorf("n_payment_needs_review.Expression = %q", paymentHasCode.Expression)
 	}
 	if strings.Contains(askOrgCode.Body, "recibido exitosamente") {
 		t.Errorf("n_ask_org_code no debe afirmar éxito antes de acreditar")
@@ -88,104 +133,117 @@ func TestWAACreditosFlowValidoYConToolDeRecarga(t *testing.T) {
 		t.Errorf("los especialistas no deben responder antes de ejecutar la rama cobrar")
 	}
 
-	// 3. Verificar n_save_payment_review
-	if savePaymentReview.Args["field.estado"] != "pendiente" {
-		t.Errorf("n_save_payment_review debe guardar estado: pendiente, tiene %q", savePaymentReview.Args["field.estado"])
-	}
-
-	// 4. Verificar tool de recarga de créditos
-	if activateTool.ToolRef != "credit_recharge_activate" {
-		t.Errorf("n_activate_subscription debe usar toolRef credit_recharge_activate, tiene %q", activateTool.ToolRef)
-	}
-	if activateTool.Args["activationCode"] != "{sale.organizationCode}" {
-		t.Errorf("n_activate_subscription.activationCode = %q, esperado {sale.organizationCode}", activateTool.Args["activationCode"])
-	}
-	if activateTool.Args["creditsAmount"] != "" || activateTool.Args["amount"] != "" || activateTool.Args["idempotencyKey"] != "" {
-		t.Errorf("el flujo no debe decidir monto ni idempotencia de la recarga: %+v", activateTool.Args)
-	}
-
-	// 5. Verificar condición de revisión / petición de código
-	if paymentNeedsReview.Expression != "!empty(sale.organizationCode)" {
-		t.Errorf("n_payment_needs_review.Expression = %q, esperado !empty(sale.organizationCode)", paymentNeedsReview.Expression)
-	}
-
-	// 6. Verificar aristas del flujo de código
 	edges := map[string][]string{}
-	for _, e := range flow.Edges {
-		edges[e.Source+"."+e.SourceHandle] = append(edges[e.Source+"."+e.SourceHandle], e.Target)
+	for _, edge := range flow.Edges {
+		edges[edge.Source+"."+edge.SourceHandle] = append(edges[edge.Source+"."+edge.SourceHandle], edge.Target)
 	}
-	if targets := edges["n_classify_payment.valid"]; len(targets) == 0 || targets[0] != "n_receipt_complete_router" {
-		t.Errorf("n_classify_payment.valid debe validar campos obligatorios, tiene %v", targets)
+	assertEdge := func(sourceHandle, target string) {
+		t.Helper()
+		targets := edges[sourceHandle]
+		if len(targets) != 1 || targets[0] != target {
+			t.Errorf("%s debe conectar a %s, tiene %v", sourceHandle, target, targets)
+		}
 	}
-	if targets := edges["n_receipt_complete_router.complete"]; len(targets) == 0 || targets[0] != "n_payment_needs_review" {
-		t.Errorf("solo un comprobante completo debe continuar hacia la recarga, tiene %v", targets)
+	assertEdge("n_classify_payment.scanned", "n_receipt_complete_router")
+	assertEdge("n_receipt_complete_router.complete", "n_payment_needs_review")
+	assertEdge("n_receipt_complete_router.default", "n_classify_payment_retry")
+	assertEdge("n_classify_payment_retry.scanned", "n_receipt_retry_complete_router")
+	assertEdge("n_receipt_retry_complete_router.complete", "n_copy_receipt_retry")
+	assertEdge("n_receipt_retry_complete_router.default", "n_payment_retry")
+	assertEdge("n_copy_receipt_retry.", "n_payment_needs_review")
+	assertEdge("n_payment_needs_review.true", "n_save_payment")
+	assertEdge("n_payment_needs_review.false", "n_ask_org_code")
+	assertEdge("n_ask_org_code.out", "n_espera")
+	assertEdge("n_bawto_specialist.cobrar", "n_existing_receipt_router")
+	assertEdge("n_existing_receipt_router.ready", "n_save_payment")
+	assertEdge("n_existing_receipt_router.incomplete", "n_payment_retry")
+
+	if !strings.Contains(completeRouter.Cases[0].Expression, "receipt.statusText") ||
+		!strings.Contains(retryCompleteRouter.Cases[0].Expression, "receipt_retry.statusText") ||
+		!strings.Contains(existingReceiptRouter.Cases[0].Expression, "receipt.statusText") {
+		t.Errorf("los routers deterministas deben exigir el resultado visible")
 	}
-	if targets := edges["n_receipt_complete_router.default"]; len(targets) == 0 || targets[0] != "n_payment_retry" {
-		t.Errorf("un valid incompleto debe pedir otra captura, tiene %v", targets)
-	}
-	if targets := edges["n_classify_payment.needs_review"]; len(targets) == 0 || targets[0] != "n_receipt_reviewable_router" {
-		t.Errorf("needs_review debe comprobar si hay datos suficientes para registrar, tiene %v", targets)
-	}
-	if targets := edges["n_receipt_reviewable_router.reviewable"]; len(targets) == 0 || targets[0] != "n_save_payment_review" {
-		t.Errorf("un comprobante revisable debe guardarse pendiente, tiene %v", targets)
-	}
-	if targets := edges["n_receipt_reviewable_router.default"]; len(targets) == 0 || targets[0] != "n_payment_retry" {
-		t.Errorf("un comprobante insuficiente no debe crear un cobro, tiene %v", targets)
-	}
-	if targets := edges["n_payment_needs_review.true"]; len(targets) == 0 || targets[0] != "n_save_payment" {
-		t.Errorf("n_payment_needs_review.true debe conectar a n_save_payment, tiene %v", targets)
-	}
-	if targets := edges["n_payment_needs_review.false"]; len(targets) == 0 || targets[0] != "n_ask_org_code" {
-		t.Errorf("n_payment_needs_review.false debe conectar a n_ask_org_code, tiene %v", targets)
-	}
-	if targets := edges["n_ask_org_code.out"]; len(targets) == 0 || targets[0] != "n_espera" {
-		t.Errorf("n_ask_org_code.out debe conectar a n_espera, tiene %v", targets)
-	}
-	if targets := edges["n_bawto_specialist.cobrar"]; len(targets) == 0 || targets[0] != "n_existing_receipt_router" {
-		t.Errorf("la rama cobrar debe reutilizar un comprobante previo, tiene %v", targets)
-	}
-	if targets := edges["n_existing_receipt_router.ready"]; len(targets) == 0 || targets[0] != "n_save_payment" {
-		t.Errorf("comprobante previo + código deben guardarse sin pedir otra imagen, tiene %v", targets)
-	}
-	if targets := edges["n_existing_receipt_router.incomplete"]; len(targets) == 0 || targets[0] != "n_payment_retry" {
-		t.Errorf("un comprobante previo incompleto no debe volver a mostrar medios de pago, tiene %v", targets)
+	if copyRetry.Params["receipt.amount"] != "{receipt_retry.amount}" ||
+		copyRetry.Params["receipt.statusText"] != "{receipt_retry.statusText}" {
+		t.Errorf("n_copy_receipt_retry no copia la segunda transcripción: %+v", copyRetry.Params)
 	}
 }
 
-func TestWAACreditosValidSinMontoNoGuardaNiPrometeRecarga(t *testing.T) {
+func TestWAACreditosReescaneaAntesDePedirOtraImagen(t *testing.T) {
 	flow := loadWAACreditosFlow(t)
-	toolCalls := []string{}
+	agentCalls := []string{}
 	result, err := Advance(flow, nil, "", Deps{
 		InputType: "image",
-		WaID:      "wamid-valid-sin-monto",
+		WaID:      "wamid-reescaneo-completo",
 		AgentStructured: func(request AgentRequest) (AgentResult, error) {
-			if request.NodeID != "n_classify_payment" {
+			agentCalls = append(agentCalls, request.NodeID)
+			switch request.NodeID {
+			case "n_classify_payment":
+				return AgentResult{Branch: "scanned", Data: map[string]any{
+					"provider": "yape", "currency": "PEN", "occurredAt": "2026-08-13T02:23:00-05:00",
+					"operationCode": "10484343", "recipient": "Gerson Rod*", "statusText": "¡Yapeaste!",
+				}}, nil
+			case "n_classify_payment_retry":
+				return AgentResult{Branch: "scanned", Data: map[string]any{
+					"provider": "yape", "amount": "125.00", "currency": "PEN",
+					"occurredAt": "2026-08-13T02:23:00-05:00", "operationCode": "10484343",
+					"recipient": "Gerson Rod*", "statusText": "¡Yapeaste!",
+				}}, nil
+			default:
 				t.Fatalf("agente inesperado: %s", request.NodeID)
+				return AgentResult{}, nil
 			}
-			return AgentResult{Branch: "valid", Data: map[string]any{
-				"provider": "bcp", "currency": "PEN",
-				"occurredAt":    "2026-08-13T02:23:00-05:00",
-				"operationCode": "01391991", "recipient": "Gerson Rodriguez",
-			}}, nil
 		},
 		Tool: func(ref string, _ map[string]string, _ map[string]string) (string, error) {
-			toolCalls = append(toolCalls, ref)
-			if ref != "data_query" {
-				t.Fatalf("un valid incompleto no debe ejecutar %s", ref)
-			}
-			return `{"found":true,"count":1,"first":{"recordId":"method","data":{"activo":true,"destino":"973021342","titular":"Gerson Rodriguez"}}}`, nil
+			t.Fatalf("no debe ejecutar %s antes de recibir el código de activación", ref)
+			return "", nil
 		},
 	})
 	if err != nil {
-		t.Fatalf("avance con extracción incompleta: %v", err)
+		t.Fatalf("avance con segunda lectura completa: %v", err)
 	}
-	if len(toolCalls) != 1 || toolCalls[0] != "data_query" {
-		t.Fatalf("herramientas inesperadas: %v", toolCalls)
+	if strings.Join(agentCalls, ",") != "n_classify_payment,n_classify_payment_retry" {
+		t.Fatalf("secuencia de escaneo inesperada: %v", agentCalls)
 	}
 	if result.State == nil || result.State.NodeID != "n_espera" || len(result.Sends) != 1 {
 		t.Fatalf("resultado inesperado: %+v", result)
 	}
+	if !strings.Contains(result.Sends[0], "PEN 125.00") || !strings.Contains(result.Sends[0], "código de activación") {
+		t.Fatalf("la segunda lectura no se propagó: %q", result.Sends[0])
+	}
 	if strings.Contains(result.Sends[0], "{receipt.amount}") || strings.Contains(result.Sends[0], "créditos acreditados") {
 		t.Fatalf("respuesta insegura: %q", result.Sends[0])
+	}
+}
+
+func TestWAACreditosDosEscaneosIncompletosPidenOtraImagen(t *testing.T) {
+	flow := loadWAACreditosFlow(t)
+	agentCalls := []string{}
+	result, err := Advance(flow, nil, "", Deps{
+		InputType: "image",
+		WaID:      "wamid-dos-escaneos-incompletos",
+		AgentStructured: func(request AgentRequest) (AgentResult, error) {
+			agentCalls = append(agentCalls, request.NodeID)
+			return AgentResult{Branch: "scanned", Data: map[string]any{
+				"provider": "yape", "currency": "PEN", "occurredAt": "2026-08-13T02:23:00-05:00",
+				"operationCode": "10484343", "recipient": "Gerson Rod*", "statusText": "¡Yapeaste!",
+			}}, nil
+		},
+		Tool: func(ref string, _ map[string]string, _ map[string]string) (string, error) {
+			t.Fatalf("un escaneo incompleto no debe ejecutar %s", ref)
+			return "", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("avance con dos lecturas incompletas: %v", err)
+	}
+	if strings.Join(agentCalls, ",") != "n_classify_payment,n_classify_payment_retry" {
+		t.Fatalf("secuencia de escaneo inesperada: %v", agentCalls)
+	}
+	if result.State == nil || result.State.NodeID != "n_espera" || len(result.Sends) != 1 {
+		t.Fatalf("resultado inesperado: %+v", result)
+	}
+	if !strings.Contains(result.Sends[0], "otra foto") || !strings.Contains(result.Sends[0], "No se acreditó ningún saldo") {
+		t.Fatalf("respuesta de reintento inesperada: %q", result.Sends[0])
 	}
 }

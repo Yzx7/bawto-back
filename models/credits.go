@@ -551,6 +551,7 @@ type creditPaymentRecord struct {
 	Provider       string  `json:"proveedor"`
 	OccurredAt     string  `json:"fecha"`
 	Recipient      string  `json:"destinatario"`
+	ResultText     string  `json:"resultado"`
 	Status         string  `json:"estado"`
 }
 
@@ -703,7 +704,38 @@ func validateAutomaticPaymentReceipt(payment creditPaymentRecord, now time.Time)
 	if occurredAt.Before(now.Add(-automaticPaymentMaxAge)) {
 		return fmt.Errorf("el comprobante supera las 72 horas permitidas para acreditación automática")
 	}
+	if !paymentReceiptSuccessful(payment.ResultText) {
+		return fmt.Errorf("el comprobante no muestra un resultado exitoso reconocido")
+	}
 	return nil
+}
+
+func paymentReceiptSuccessful(resultText string) bool {
+	normalized := normalizeReceiptText(resultText)
+	for _, marker := range []string{
+		"yapeaste", "operacion exitosa", "operacion completada", "pago exitoso",
+		"pago completado", "transferencia exitosa", "transferencia completada",
+		"transaccion exitosa", "transaccion completada",
+	} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeReceiptText(value string) string {
+	value = strings.NewReplacer(
+		"á", "a", "é", "e", "í", "i", "ó", "o", "ú", "u", "ü", "u",
+		"Á", "a", "É", "e", "Í", "i", "Ó", "o", "Ú", "u", "Ü", "u",
+	).Replace(value)
+	value = strings.Map(func(char rune) rune {
+		if unicode.IsLetter(char) || unicode.IsDigit(char) {
+			return unicode.ToLower(char)
+		}
+		return ' '
+	}, value)
+	return strings.Join(strings.Fields(value), " ")
 }
 
 func deferAutomaticPaymentReview(ctx context.Context, tx pgx.Tx, paymentRecordID string, validationErr error) error {
@@ -891,6 +923,7 @@ func EnsurePlatformCobrosObject(ctx context.Context, pool *pgxpool.Pool, sellerO
 		{"telefono", "Teléfono", "text", false},
 		{"solicitado_por", "Solicitado por", "text", false},
 		{"notas", "Notas", "text", false},
+		{"resultado", "Resultado visible", "text", false},
 	}
 	for _, f := range fields {
 		_, _ = pool.Exec(ctx, `
