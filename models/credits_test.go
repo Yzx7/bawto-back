@@ -1,11 +1,14 @@
 package models
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -61,6 +64,85 @@ func TestPaymentCreditIdempotencyIgnoresMutableAmount(t *testing.T) {
 	altered.Recipient = "Otro texto"
 	if paymentCreditIdempotencyKey("seller", first) != paymentCreditIdempotencyKey("seller", altered) {
 		t.Fatal("la misma operación bancaria no puede acreditarse otra vez alterando monto o destinatario")
+	}
+}
+
+func TestValidateAutomaticPaymentReceipt(t *testing.T) {
+	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.FixedZone("PET", -5*60*60))
+	valid := creditPaymentRecord{
+		Provider: "bcp", AmountPen: 240, Currency: "PEN", Operation: "01391991",
+		OccurredAt: now.Add(-time.Hour).Format(time.RFC3339),
+	}
+	if err := validatePaymentForRecharge(valid); err != nil {
+		t.Fatalf("comprobante económico válido: %v", err)
+	}
+	if err := validateAutomaticPaymentReceipt(valid, now); err != nil {
+		t.Fatalf("comprobante automático reciente: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*creditPaymentRecord)
+		want   string
+	}{
+		{"sin proveedor", func(p *creditPaymentRecord) { p.Provider = "" }, "requiere proveedor"},
+		{"sin fecha", func(p *creditPaymentRecord) { p.OccurredAt = "" }, "requiere fecha"},
+		{"antiguo", func(p *creditPaymentRecord) { p.OccurredAt = now.Add(-73 * time.Hour).Format(time.RFC3339) }, "72 horas"},
+		{"futuro", func(p *creditPaymentRecord) { p.OccurredAt = now.Add(11 * time.Minute).Format(time.RFC3339) }, "en el futuro"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payment := valid
+			tc.mutate(&payment)
+			if err := validateAutomaticPaymentReceipt(payment, now); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("se esperaba error con %q, se obtuvo %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestAutomaticStalePaymentIsDeferredWithoutCredit(t *testing.T) {
+	_ = godotenv.Load("../.env")
+	pool, ctx := flowTestPool(t)
+	sellerOrgID, err := PlatformSalesOrgID(ctx, pool)
+	if err != nil {
+		t.Fatalf("organización comercial: %v", err)
+	}
+	var objectID string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM data_objects WHERE org_id=$1::uuid AND key='cobros'`, sellerOrgID).Scan(&objectID); err != nil {
+		t.Fatalf("objeto cobros: %v", err)
+	}
+	payment := map[string]any{
+		"monto": 240, "moneda": "PEN", "operacion": "STALE-" + randID("pay_"),
+		"proveedor": "bcp", "fecha": time.Now().Add(-73 * time.Hour).Format(time.RFC3339),
+		"destinatario": "Sistemuino", "estado": "aceptado",
+	}
+	raw, _ := json.Marshal(payment)
+	var recordID string
+	if err := pool.QueryRow(ctx, `INSERT INTO data_records(object_id, data) VALUES ($1::uuid, $2::jsonb) RETURNING id::text`, objectID, raw).Scan(&recordID); err != nil {
+		t.Fatalf("crear cobro antiguo: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM data_records WHERE id=$1::uuid`, recordID) })
+
+	_, err = RechargePlatformCredits(ctx, pool, RechargePlatformCreditsInput{
+		SellerOrgID: sellerOrgID, ActivationCode: "NO-SE-DEBE-RESOLVER", PaymentRecordID: recordID,
+	})
+	if err == nil || !strings.Contains(err.Error(), "72 horas") {
+		t.Fatalf("el cobro antiguo debía quedar en revisión, se obtuvo %v", err)
+	}
+	var status, notes string
+	if err := pool.QueryRow(ctx, `SELECT data->>'estado', data->>'notas' FROM data_records WHERE id=$1::uuid`, recordID).Scan(&status, &notes); err != nil {
+		t.Fatalf("releer cobro antiguo: %v", err)
+	}
+	if status != "pendiente" || !strings.Contains(notes, "72 horas") {
+		t.Fatalf("revisión no persistida: estado=%q notas=%q", status, notes)
+	}
+	var ledgerCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM organization_credit_transactions WHERE reference_id=$1`, recordID).Scan(&ledgerCount); err != nil {
+		t.Fatalf("consultar ledger: %v", err)
+	}
+	if ledgerCount != 0 {
+		t.Fatalf("un comprobante antiguo creó %d movimientos", ledgerCount)
 	}
 }
 

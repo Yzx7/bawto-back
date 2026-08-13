@@ -39,11 +39,15 @@ func TestWAACreditosFlowValidoYConToolDeRecarga(t *testing.T) {
 	paymentNeedsReview := nodes["n_payment_needs_review"]
 	askOrgCode := nodes["n_ask_org_code"]
 	existingReceiptRouter := nodes["n_existing_receipt_router"]
+	receiptCompleteRouter := nodes["n_receipt_complete_router"]
+	receiptReviewableRouter := nodes["n_receipt_reviewable_router"]
+	paymentSpecialist := nodes["n_payment_specialist"]
 	paymentOK := nodes["n_payment_ok"]
 	paymentReview := nodes["n_payment_review"]
 
 	if specialist == nil || classifyPayment == nil || savePaymentReview == nil || savePayment == nil ||
-		activateTool == nil || paymentNeedsReview == nil || askOrgCode == nil || existingReceiptRouter == nil || paymentOK == nil || paymentReview == nil {
+		activateTool == nil || paymentNeedsReview == nil || askOrgCode == nil || existingReceiptRouter == nil ||
+		receiptCompleteRouter == nil || receiptReviewableRouter == nil || paymentSpecialist == nil || paymentOK == nil || paymentReview == nil {
 		t.Fatalf("faltan nodos clave en flow_waa_creditos")
 	}
 
@@ -72,6 +76,17 @@ func TestWAACreditosFlowValidoYConToolDeRecarga(t *testing.T) {
 	if !strings.Contains(classifyPayment.Instruction, "needs_review") {
 		t.Errorf("n_classify_payment debe derivar a needs_review si el destinatario no coincide")
 	}
+	for _, field := range []string{"provider", "amount", "currency", "occurredAt", "operationCode", "recipient"} {
+		if !strings.Contains(classifyPayment.Instruction, field) {
+			t.Errorf("n_classify_payment no declara %s como obligatorio para valid", field)
+		}
+	}
+	if strings.Contains(askOrgCode.Body, "recibido exitosamente") {
+		t.Errorf("n_ask_org_code no debe afirmar éxito antes de acreditar")
+	}
+	if strings.Contains(strings.Join(specialist.ReplyOn, ","), "cobrar") || strings.Contains(strings.Join(paymentSpecialist.ReplyOn, ","), "cobrar") {
+		t.Errorf("los especialistas no deben responder antes de ejecutar la rama cobrar")
+	}
 
 	// 3. Verificar n_save_payment_review
 	if savePaymentReview.Args["field.estado"] != "pendiente" {
@@ -99,8 +114,23 @@ func TestWAACreditosFlowValidoYConToolDeRecarga(t *testing.T) {
 	for _, e := range flow.Edges {
 		edges[e.Source+"."+e.SourceHandle] = append(edges[e.Source+"."+e.SourceHandle], e.Target)
 	}
-	if targets := edges["n_classify_payment.valid"]; len(targets) == 0 || targets[0] != "n_payment_needs_review" {
-		t.Errorf("n_classify_payment.valid debe conectar a n_payment_needs_review, tiene %v", targets)
+	if targets := edges["n_classify_payment.valid"]; len(targets) == 0 || targets[0] != "n_receipt_complete_router" {
+		t.Errorf("n_classify_payment.valid debe validar campos obligatorios, tiene %v", targets)
+	}
+	if targets := edges["n_receipt_complete_router.complete"]; len(targets) == 0 || targets[0] != "n_payment_needs_review" {
+		t.Errorf("solo un comprobante completo debe continuar hacia la recarga, tiene %v", targets)
+	}
+	if targets := edges["n_receipt_complete_router.default"]; len(targets) == 0 || targets[0] != "n_payment_retry" {
+		t.Errorf("un valid incompleto debe pedir otra captura, tiene %v", targets)
+	}
+	if targets := edges["n_classify_payment.needs_review"]; len(targets) == 0 || targets[0] != "n_receipt_reviewable_router" {
+		t.Errorf("needs_review debe comprobar si hay datos suficientes para registrar, tiene %v", targets)
+	}
+	if targets := edges["n_receipt_reviewable_router.reviewable"]; len(targets) == 0 || targets[0] != "n_save_payment_review" {
+		t.Errorf("un comprobante revisable debe guardarse pendiente, tiene %v", targets)
+	}
+	if targets := edges["n_receipt_reviewable_router.default"]; len(targets) == 0 || targets[0] != "n_payment_retry" {
+		t.Errorf("un comprobante insuficiente no debe crear un cobro, tiene %v", targets)
 	}
 	if targets := edges["n_payment_needs_review.true"]; len(targets) == 0 || targets[0] != "n_save_payment" {
 		t.Errorf("n_payment_needs_review.true debe conectar a n_save_payment, tiene %v", targets)
@@ -116,5 +146,46 @@ func TestWAACreditosFlowValidoYConToolDeRecarga(t *testing.T) {
 	}
 	if targets := edges["n_existing_receipt_router.ready"]; len(targets) == 0 || targets[0] != "n_save_payment" {
 		t.Errorf("comprobante previo + código deben guardarse sin pedir otra imagen, tiene %v", targets)
+	}
+	if targets := edges["n_existing_receipt_router.incomplete"]; len(targets) == 0 || targets[0] != "n_payment_retry" {
+		t.Errorf("un comprobante previo incompleto no debe volver a mostrar medios de pago, tiene %v", targets)
+	}
+}
+
+func TestWAACreditosValidSinMontoNoGuardaNiPrometeRecarga(t *testing.T) {
+	flow := loadWAACreditosFlow(t)
+	toolCalls := []string{}
+	result, err := Advance(flow, nil, "", Deps{
+		InputType: "image",
+		WaID:      "wamid-valid-sin-monto",
+		AgentStructured: func(request AgentRequest) (AgentResult, error) {
+			if request.NodeID != "n_classify_payment" {
+				t.Fatalf("agente inesperado: %s", request.NodeID)
+			}
+			return AgentResult{Branch: "valid", Data: map[string]any{
+				"provider": "bcp", "currency": "PEN",
+				"occurredAt":    "2026-08-13T02:23:00-05:00",
+				"operationCode": "01391991", "recipient": "Gerson Rodriguez",
+			}}, nil
+		},
+		Tool: func(ref string, _ map[string]string, _ map[string]string) (string, error) {
+			toolCalls = append(toolCalls, ref)
+			if ref != "data_query" {
+				t.Fatalf("un valid incompleto no debe ejecutar %s", ref)
+			}
+			return `{"found":true,"count":1,"first":{"recordId":"method","data":{"activo":true,"destino":"973021342","titular":"Gerson Rodriguez"}}}`, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("avance con extracción incompleta: %v", err)
+	}
+	if len(toolCalls) != 1 || toolCalls[0] != "data_query" {
+		t.Fatalf("herramientas inesperadas: %v", toolCalls)
+	}
+	if result.State == nil || result.State.NodeID != "n_espera" || len(result.Sends) != 1 {
+		t.Fatalf("resultado inesperado: %+v", result)
+	}
+	if strings.Contains(result.Sends[0], "{receipt.amount}") || strings.Contains(result.Sends[0], "créditos acreditados") {
+		t.Fatalf("respuesta insegura: %q", result.Sends[0])
 	}
 }

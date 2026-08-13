@@ -20,6 +20,10 @@ const (
 	CreditsPerUSD = 400.0
 	// CreditsPerSol es la tasa de recarga comercial: 5 Soles = 100 créditos (1 Sol = 20 créditos).
 	CreditsPerSol = 20.0
+	// Los comprobantes fuera de esta ventana no se acreditan automáticamente:
+	// quedan pendientes para que una persona determine si aún corresponden.
+	automaticPaymentMaxAge     = 72 * time.Hour
+	automaticPaymentFutureSkew = 10 * time.Minute
 
 	CreditTxRecharge         = "recharge"
 	CreditTxPlanAllowance    = "plan_allowance"
@@ -589,8 +593,16 @@ func activatePlatformCreditRecharge(ctx context.Context, pool *pgxpool.Pool, inp
 	payment.Status = strings.ToLower(strings.TrimSpace(payment.Status))
 	payment.Currency = strings.ToUpper(strings.TrimSpace(payment.Currency))
 	payment.Operation = strings.TrimSpace(payment.Operation)
-	if !finitePositive(payment.AmountPen) || payment.Currency != "PEN" || payment.Operation == "" {
-		return nil, nil, fmt.Errorf("el cobro requiere importe PEN y número de operación válidos")
+	if validationErr := validatePaymentForRecharge(payment); validationErr != nil {
+		if input.ExpectedStatus == "aceptado" {
+			return nil, nil, deferAutomaticPaymentReview(ctx, tx, input.PaymentRecordID, validationErr)
+		}
+		return nil, nil, validationErr
+	}
+	if input.ExpectedStatus == "aceptado" {
+		if validationErr := validateAutomaticPaymentReceipt(payment, time.Now()); validationErr != nil {
+			return nil, nil, deferAutomaticPaymentReview(ctx, tx, input.PaymentRecordID, validationErr)
+		}
 	}
 
 	targetOrgID, activationCode, err := rechargeTargetOrganization(ctx, tx, input.ActivationCode, payment)
@@ -668,6 +680,46 @@ func activatePlatformCreditRecharge(ctx context.Context, pool *pgxpool.Pool, inp
 		return nil, nil, err
 	}
 	return wallet, txRecord, nil
+}
+
+func validatePaymentForRecharge(payment creditPaymentRecord) error {
+	if !finitePositive(payment.AmountPen) || payment.Currency != "PEN" || payment.Operation == "" {
+		return fmt.Errorf("el cobro requiere importe PEN y número de operación válidos")
+	}
+	return nil
+}
+
+func validateAutomaticPaymentReceipt(payment creditPaymentRecord, now time.Time) error {
+	if strings.TrimSpace(payment.Provider) == "" {
+		return fmt.Errorf("el comprobante automático requiere proveedor")
+	}
+	occurredAt, err := time.Parse(time.RFC3339, strings.TrimSpace(payment.OccurredAt))
+	if err != nil {
+		return fmt.Errorf("el comprobante automático requiere fecha y hora RFC3339 válidas")
+	}
+	if occurredAt.After(now.Add(automaticPaymentFutureSkew)) {
+		return fmt.Errorf("la fecha del comprobante está en el futuro")
+	}
+	if occurredAt.Before(now.Add(-automaticPaymentMaxAge)) {
+		return fmt.Errorf("el comprobante supera las 72 horas permitidas para acreditación automática")
+	}
+	return nil
+}
+
+func deferAutomaticPaymentReview(ctx context.Context, tx pgx.Tx, paymentRecordID string, validationErr error) error {
+	review := map[string]any{
+		"estado": "pendiente",
+		"notas":  "Revisión manual requerida: " + validationErr.Error(),
+	}
+	raw, _ := json.Marshal(review)
+	if _, err := tx.Exec(ctx, `UPDATE data_records SET data=data || $2::jsonb, updated_at=NOW()
+		WHERE id=$1::uuid`, paymentRecordID, raw); err != nil {
+		return fmt.Errorf("marcar cobro para revisión: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("confirmar revisión manual del cobro: %w", err)
+	}
+	return validationErr
 }
 
 func rechargeTargetOrganization(ctx context.Context, tx pgx.Tx, inputCode string, payment creditPaymentRecord) (string, string, error) {

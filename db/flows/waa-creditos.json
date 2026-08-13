@@ -245,6 +245,7 @@
       "id": "e_read_services_error",
       "source": "n_read_services",
       "sourceHandle": "error",
+      "tag": "DERIVAR",
       "target": "n_derivar"
     },
     {
@@ -474,7 +475,7 @@
       "id": "e_classify_payment_needs_review",
       "source": "n_classify_payment",
       "sourceHandle": "needs_review",
-      "target": "n_save_payment_review"
+      "target": "n_receipt_reviewable_router"
     },
     {
       "id": "e_save_review_ok",
@@ -498,7 +499,7 @@
       "id": "e_classify_valid_check",
       "source": "n_classify_payment",
       "sourceHandle": "valid",
-      "target": "n_payment_needs_review"
+      "target": "n_receipt_complete_router"
     },
     {
       "id": "e_has_code_save_payment",
@@ -565,6 +566,36 @@
       "source": "n_read_store_payment_methods",
       "sourceHandle": "error",
       "target": "n_derivar"
+    },
+    {
+      "id": "e_receipt_complete_continue",
+      "source": "n_receipt_complete_router",
+      "sourceHandle": "complete",
+      "target": "n_payment_needs_review"
+    },
+    {
+      "id": "e_receipt_complete_retry",
+      "source": "n_receipt_complete_router",
+      "sourceHandle": "default",
+      "target": "n_payment_retry"
+    },
+    {
+      "id": "e_receipt_reviewable_save",
+      "source": "n_receipt_reviewable_router",
+      "sourceHandle": "reviewable",
+      "target": "n_save_payment_review"
+    },
+    {
+      "id": "e_receipt_reviewable_retry",
+      "source": "n_receipt_reviewable_router",
+      "sourceHandle": "default",
+      "target": "n_payment_retry"
+    },
+    {
+      "id": "e_existing_receipt_incomplete",
+      "source": "n_existing_receipt_router",
+      "sourceHandle": "incomplete",
+      "target": "n_payment_retry"
     }
   ],
   "id": "flow_waa_creditos",
@@ -654,7 +685,7 @@
       "agentRole": "specialist",
       "contextMode": "none",
       "id": "n_classify_payment",
-      "instruction": "Analiza únicamente la imagen actual como posible comprobante de pago peruano enviado a Sistemuino / Bawto. No uses el historial para completar datos que no aparezcan en la captura.\n\nEstos son los únicos métodos de pago autorizados activos, leídos de la fuente de verdad justo antes de analizar la imagen:\n{authorized_payment_methods}\n\nReglas estrictas de clasificación:\n- Elige valid ÚNICAMENTE si la imagen muestra una operación exitosa, se distinguen con claridad importe, fecha/hora y número o código de operación, y el destinatario visible coincide con el destino o titular de uno de los métodos autorizados anteriores.\n- Elige needs_review si el comprobante parece exitoso pero el destinatario no coincide/no se ve, falta un dato clave o hay ambigüedad.\n- Elige unreadable si la captura está borrosa, cortada o no puede leerse.\n- Elige not_receipt si la imagen no es un comprobante de pago.\n\nExtrae únicamente datos visibles y no inventes. provider debe ser exactamente uno de estos valores canónicos en minúsculas: yape, plin, bcp, interbank u other. El proveedor es el canal del comprobante, no la red del destinatario. amount es el importe transferido sin comisión; currency usa ISO 4217; occurredAt usa RFC3339 con la zona de Perú (-05:00); operationCode conserva ceros iniciales; recipient es el destinatario visible; confidence va de 0 a 1.",
+      "instruction": "Analiza únicamente la imagen actual como posible comprobante de pago peruano enviado a Sistemuino / Bawto. No uses el historial para completar datos que no aparezcan en la captura.\n\nEstos son los únicos métodos de pago autorizados activos, leídos de la fuente de verdad justo antes de analizar la imagen:\n{authorized_payment_methods}\n\nReglas estrictas de clasificación:\n- Elige valid ÚNICAMENTE si la imagen muestra una operación exitosa, se distinguen con claridad importe, fecha/hora y número o código de operación, y el destinatario visible coincide con el destino o titular de uno de los métodos autorizados anteriores.\n- Elige needs_review si el comprobante parece exitoso pero el destinatario no coincide/no se ve, falta un dato clave o hay ambigüedad.\n- Elige unreadable si la captura está borrosa, cortada o no puede leerse.\n- Elige not_receipt si la imagen no es un comprobante de pago.\n\nExtrae únicamente datos visibles y no inventes. provider debe ser exactamente uno de estos valores canónicos en minúsculas: yape, plin, bcp, interbank u other. El proveedor es el canal del comprobante, no la red del destinatario. amount es el importe transferido sin comisión; currency usa ISO 4217; occurredAt usa RFC3339 con la zona de Perú (-05:00); operationCode conserva ceros iniciales; recipient es el destinatario visible; confidence va de 0 a 1.\n\nContrato obligatorio de valid: si eliges valid debes incluir provider, amount, currency, occurredAt, operationCode y recipient. Si no puedes devolver cualquiera de esos campos, elige needs_review; nunca marques valid con data incompleta.",
       "kind": "agent",
       "outputFields": [
         {
@@ -726,8 +757,8 @@
       "id": "n_save_payment",
       "kind": "tool",
       "pos": {
-        "x": 5383,
-        "y": 1069
+        "x": 5355.431239480072,
+        "y": 1075.8921901299823
       },
       "saveAs": "payment_record",
       "toolRef": "data_mutate"
@@ -755,12 +786,12 @@
       "id": "n_payment_review",
       "kind": "send",
       "pos": {
-        "x": 5800,
-        "y": 1400
+        "x": 5848.750831544583,
+        "y": 1413.928809012738
       }
     },
     {
-      "body": "No pude leer el comprobante con suficiente claridad. Envía otra foto o captura completa, nítida y sin recortes; deben verse fecha, importe y operación.",
+      "body": "No pude validar todos los datos obligatorios del comprobante. Envía otra foto o captura completa, nítida y sin recortes; deben verse fecha, importe, operación y destinatario. No se acreditó ningún saldo.",
       "id": "n_payment_retry",
       "kind": "send",
       "pos": {
@@ -790,8 +821,8 @@
       "id": "n_espera",
       "kind": "wait",
       "pos": {
-        "x": 5316.61071753732,
-        "y": 668.1407065060521
+        "x": 5330.61071753732,
+        "y": 649.1407065060521
       },
       "timeoutHours": 24
     },
@@ -972,9 +1003,13 @@
         "cobrar"
       ],
       "pos": {
-        "x": 3514.9896018774775,
-        "y": 1857.1428578243217
+        "x": 3177.717241523713,
+        "y": 1741.6014417832528
       },
+      "replyOn": [
+        "conversar",
+        "asesor"
+      ],
       "saveAs": "sale"
     },
     {
@@ -985,8 +1020,8 @@
       "id": "n_read_services",
       "kind": "tool",
       "pos": {
-        "x": 3259.8593040760793,
-        "y": 3036.819064359408
+        "x": 3236.532186307694,
+        "y": 2823.6501781809734
       },
       "saveAs": "service_catalog",
       "toolRef": "data_query"
@@ -1003,8 +1038,8 @@
         "conversar"
       ],
       "pos": {
-        "x": 3596.9164547090436,
-        "y": 2874.007694903473
+        "x": 3571.6450908991087,
+        "y": 2823.464967283603
       },
       "saveAs": "sale"
     },
@@ -1027,17 +1062,21 @@
         "cobrar"
       ],
       "pos": {
-        "x": 3532.1682336845165,
-        "y": 2247.9099596845704
+        "x": 3202.2677187502254,
+        "y": 2124.265199276861
       },
+      "replyOn": [
+        "conversar",
+        "asesor"
+      ],
       "saveAs": "sale"
     },
     {
       "id": "n_render_payment_methods",
       "kind": "tool",
       "pos": {
-        "x": 4004.830869107092,
-        "y": 1832.0721830051702
+        "x": 3967.88464760545,
+        "y": 1636.7850122107818
       },
       "saveAs": "payment_options",
       "toolRef": "payment_methods_render"
@@ -1053,8 +1092,8 @@
       "id": "n_payment_method_router",
       "kind": "router",
       "pos": {
-        "x": 4350.721074507151,
-        "y": 1792.3682539785152
+        "x": 4321.691900470148,
+        "y": 1610.2761622918558
       }
     },
     {
@@ -1062,8 +1101,8 @@
       "id": "n_send_payment_instructions",
       "kind": "send",
       "pos": {
-        "x": 4559.405188617008,
-        "y": 1769.149590726564
+        "x": 4522.458967115367,
+        "y": 1663.5889578647325
       }
     },
     {
@@ -1071,8 +1110,8 @@
       "id": "n_payment_method_unavailable",
       "kind": "send",
       "pos": {
-        "x": 4640.154376097126,
-        "y": 1930.6663215693845
+        "x": 4822.246467783786,
+        "y": 1748.574229882725
       }
     },
     {
@@ -1080,8 +1119,8 @@
       "id": "n_payment_method_handoff",
       "kind": "action",
       "pos": {
-        "x": 5363.519989790306,
-        "y": 1997.837874908679
+        "x": 5408.383258756584,
+        "y": 1786.7166091850156
       }
     },
     {
@@ -1352,34 +1391,39 @@
       "id": "n_save_payment_review",
       "kind": "tool",
       "pos": {
-        "x": 5383.0904150180395,
-        "y": 1400
+        "x": 5445.120126187879,
+        "y": 1377.0260329000591
       },
       "saveAs": "payment_record",
       "toolRef": "data_mutate"
     },
     {
-      "body": "¡Comprobante de {receipt.provider} por {receipt.currency} {receipt.amount} recibido exitosamente! Para asociarlo a tu organización y recargar tus créditos de inmediato, indícame tu código de activación de 10 caracteres (lo encuentras en tu Panel de Bawto → Facturación / Organización).",
+      "body": "Leí un comprobante de {receipt.provider} por {receipt.currency} {receipt.amount}. Para validarlo y asociarlo a tu organización, indícame tu código de activación de 10 caracteres (Panel de Bawto → Facturación / Organización). La recarga solo se confirmará después de la validación del servidor.",
       "id": "n_ask_org_code",
       "kind": "send",
       "pos": {
-        "x": 5383,
-        "y": 586
+        "x": 4941.673766841212,
+        "y": 218.56182092587244
       }
     },
     {
       "cases": [
         {
-          "expression": "!empty(receipt.operationCode) && !empty(receipt.amount) && !empty(sale.organizationCode)",
+          "expression": "!empty(receipt.provider) \u0026\u0026 !empty(receipt.amount) \u0026\u0026 receipt.amount \u003e 0 \u0026\u0026 receipt.currency == PEN \u0026\u0026 !empty(receipt.occurredAt) \u0026\u0026 !empty(receipt.operationCode) \u0026\u0026 !empty(receipt.recipient) \u0026\u0026 !empty(sale.organizationCode)",
           "id": "ready",
-          "label": "Comprobante y código disponibles"
+          "label": "Comprobante completo y código disponibles"
+        },
+        {
+          "expression": "!empty(receipt.provider) || !empty(receipt.amount) || !empty(receipt.currency) || !empty(receipt.occurredAt) || !empty(receipt.operationCode) || !empty(receipt.recipient)",
+          "id": "incomplete",
+          "label": "Comprobante previo incompleto"
         }
       ],
       "id": "n_existing_receipt_router",
       "kind": "router",
       "pos": {
-        "x": 3650,
-        "y": 750
+        "x": 3620.970825962996,
+        "y": 1768.6601071166742
       }
     },
     {
@@ -1421,6 +1465,36 @@
       },
       "saveAs": "store_authorized_payment_methods",
       "toolRef": "data_query"
+    },
+    {
+      "cases": [
+        {
+          "expression": "!empty(receipt.provider) \u0026\u0026 !empty(receipt.amount) \u0026\u0026 receipt.amount \u003e 0 \u0026\u0026 receipt.currency == PEN \u0026\u0026 !empty(receipt.occurredAt) \u0026\u0026 !empty(receipt.operationCode) \u0026\u0026 !empty(receipt.recipient)",
+          "id": "complete",
+          "label": "Datos obligatorios completos"
+        }
+      ],
+      "id": "n_receipt_complete_router",
+      "kind": "router",
+      "pos": {
+        "x": 4800,
+        "y": 420
+      }
+    },
+    {
+      "cases": [
+        {
+          "expression": "!empty(receipt.provider) \u0026\u0026 !empty(receipt.amount) \u0026\u0026 receipt.amount \u003e 0 \u0026\u0026 receipt.currency == PEN \u0026\u0026 !empty(receipt.occurredAt) \u0026\u0026 !empty(receipt.operationCode)",
+          "id": "reviewable",
+          "label": "Datos suficientes para revisión"
+        }
+      ],
+      "id": "n_receipt_reviewable_router",
+      "kind": "router",
+      "pos": {
+        "x": 5000,
+        "y": 1120
+      }
     }
   ],
   "trigger": {
