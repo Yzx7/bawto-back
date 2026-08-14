@@ -89,7 +89,6 @@ func TestValidateAutomaticPaymentReceipt(t *testing.T) {
 		{"sin fecha", func(p *creditPaymentRecord) { p.OccurredAt = "" }, "requiere fecha"},
 		{"antiguo", func(p *creditPaymentRecord) { p.OccurredAt = now.Add(-73 * time.Hour).Format(time.RFC3339) }, "72 horas"},
 		{"futuro", func(p *creditPaymentRecord) { p.OccurredAt = now.Add(11 * time.Minute).Format(time.RFC3339) }, "en el futuro"},
-		{"sin éxito visible", func(p *creditPaymentRecord) { p.ResultText = "Procesando" }, "resultado exitoso"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -102,15 +101,20 @@ func TestValidateAutomaticPaymentReceipt(t *testing.T) {
 	}
 }
 
-func TestPaymentReceiptSuccessfulUsesVisibleStatus(t *testing.T) {
-	for _, visible := range []string{"¡Yapeaste!", "Operación exitosa", "PAGO EXITOSO", "Transferencia completada"} {
-		if !paymentReceiptSuccessful(visible) {
-			t.Errorf("debía reconocer %q", visible)
-		}
+// El texto visible del comprobante es un dato más: se transcribe y se guarda,
+// pero no decide nada dentro del servidor. Un comprobante cuyo copy no reconoce
+// ninguna lista fija —el caso que rompía la acreditación— debe pasar la
+// validación server-side; quién juzga el éxito es el agente del grafo.
+func TestValidateAutomaticPaymentReceiptNoJuzgaElTextoVisible(t *testing.T) {
+	now := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.FixedZone("PET", -5*60*60))
+	payment := creditPaymentRecord{
+		Provider: "yape", AmountPen: 125, Currency: "PEN", Operation: "10484343",
+		OccurredAt: now.Add(-time.Hour).Format(time.RFC3339),
 	}
-	for _, visible := range []string{"", "Procesando", "Operación rechazada", "Pendiente"} {
-		if paymentReceiptSuccessful(visible) {
-			t.Errorf("no debía reconocer %q", visible)
+	for _, visible := range []string{"", "¡Yapeaste!", "Plineaste", "copy que nadie previo"} {
+		payment.ResultText = visible
+		if err := validateAutomaticPaymentReceipt(payment, now); err != nil {
+			t.Errorf("el texto %q no debe decidir la validación server-side: %v", visible, err)
 		}
 	}
 }

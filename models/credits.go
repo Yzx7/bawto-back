@@ -704,38 +704,13 @@ func validateAutomaticPaymentReceipt(payment creditPaymentRecord, now time.Time)
 	if occurredAt.Before(now.Add(-automaticPaymentMaxAge)) {
 		return fmt.Errorf("el comprobante supera las 72 horas permitidas para acreditación automática")
 	}
-	if !paymentReceiptSuccessful(payment.ResultText) {
-		return fmt.Errorf("el comprobante no muestra un resultado exitoso reconocido")
-	}
+	// Aquí no se juzga si el texto del comprobante expresa éxito. Comparar el
+	// copy de cada app contra una lista fija de frases obliga a compilar y
+	// desplegar cada vez que un proveedor cambia una palabra, y falla en
+	// silencio mientras tanto. Ese juicio lo emite un agente en el grafo
+	// (n_judge_result), cuya rama decide el camino; el servidor solo comprueba
+	// lo que puede verificar sin IA: proveedor, fecha y ventana temporal.
 	return nil
-}
-
-func paymentReceiptSuccessful(resultText string) bool {
-	normalized := normalizeReceiptText(resultText)
-	for _, marker := range []string{
-		"yapeaste", "operacion exitosa", "operacion completada", "pago exitoso",
-		"pago completado", "transferencia exitosa", "transferencia completada",
-		"transaccion exitosa", "transaccion completada",
-	} {
-		if strings.Contains(normalized, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizeReceiptText(value string) string {
-	value = strings.NewReplacer(
-		"á", "a", "é", "e", "í", "i", "ó", "o", "ú", "u", "ü", "u",
-		"Á", "a", "É", "e", "Í", "i", "Ó", "o", "Ú", "u", "Ü", "u",
-	).Replace(value)
-	value = strings.Map(func(char rune) rune {
-		if unicode.IsLetter(char) || unicode.IsDigit(char) {
-			return unicode.ToLower(char)
-		}
-		return ' '
-	}, value)
-	return strings.Join(strings.Fields(value), " ")
 }
 
 func deferAutomaticPaymentReview(ctx context.Context, tx pgx.Tx, paymentRecordID string, validationErr error) error {

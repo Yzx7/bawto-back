@@ -517,7 +517,7 @@
       "id": "e_receipt_complete_continue",
       "source": "n_receipt_complete_router",
       "sourceHandle": "complete",
-      "target": "n_payment_needs_review"
+      "target": "n_judge_result"
     },
     {
       "id": "e_receipt_complete_retry",
@@ -552,7 +552,31 @@
     {
       "id": "e_copy_retry_continue",
       "source": "n_copy_receipt_retry",
+      "target": "n_judge_result"
+    },
+    {
+      "id": "e_judge_success",
+      "source": "n_judge_result",
+      "sourceHandle": "exitoso",
       "target": "n_payment_needs_review"
+    },
+    {
+      "id": "e_judge_failed",
+      "source": "n_judge_result",
+      "sourceHandle": "no_exitoso",
+      "target": "n_payment_not_successful"
+    },
+    {
+      "id": "e_judge_unclear",
+      "source": "n_judge_result",
+      "sourceHandle": "dudoso",
+      "target": "n_payment_not_successful"
+    },
+    {
+      "id": "e_not_successful_wait",
+      "source": "n_payment_not_successful",
+      "sourceHandle": "out",
+      "target": "n_espera"
     }
   ],
   "id": "flow_waa_creditos",
@@ -1455,6 +1479,32 @@
       "pos": {
         "x": 5350,
         "y": 780
+      }
+    },
+    {
+      "agentRole": "specialist",
+      "contextMode": "none",
+      "id": "n_judge_result",
+      "instruction": "Un comprobante de pago peruano mostraba este texto de estado, transcrito literalmente de la imagen:\n\n\"{receipt.statusText}\"\n\nDecide únicamente si ese texto afirma que la operación se completó. Juzga el significado, no palabras concretas: cada aplicación bancaria usa su propia redacción y aparecen expresiones nuevas continuamente.\n\n- exitoso: el texto afirma que el pago, la transferencia o la operación se realizó y quedó terminada.\n- no_exitoso: el texto indica fallo, rechazo, anulación, reversión, o que la operación sigue en curso, en proceso, programada o pendiente.\n- dudoso: el texto está vacío, ilegible o no permite afirmar ninguna de las dos cosas.\n\nNo evalúes importe, fecha, destinatario ni autenticidad: de eso se encarga el servidor. Ante la duda elige dudoso; nunca exitoso.",
+      "kind": "agent",
+      "outputs": [
+        "exitoso",
+        "no_exitoso",
+        "dudoso"
+      ],
+      "pos": {
+        "x": 4622.795180532378,
+        "y": 521.1424749178523
+      },
+      "silent": true
+    },
+    {
+      "body": "El comprobante que enviaste no muestra una operación completada. Revisa que el pago se haya realizado y envíame la captura del comprobante final. No se acreditó ningún saldo.",
+      "id": "n_payment_not_successful",
+      "kind": "send",
+      "pos": {
+        "x": 4622.795180532378,
+        "y": 941.1424749178523
       }
     }
   ],

@@ -145,12 +145,15 @@ func TestWAACreditosFlowSeparaEscaneoVisualDeValidacion(t *testing.T) {
 		}
 	}
 	assertEdge("n_classify_payment.scanned", "n_receipt_complete_router")
-	assertEdge("n_receipt_complete_router.complete", "n_payment_needs_review")
+	assertEdge("n_receipt_complete_router.complete", "n_judge_result")
 	assertEdge("n_receipt_complete_router.default", "n_classify_payment_retry")
 	assertEdge("n_classify_payment_retry.scanned", "n_receipt_retry_complete_router")
 	assertEdge("n_receipt_retry_complete_router.complete", "n_copy_receipt_retry")
 	assertEdge("n_receipt_retry_complete_router.default", "n_payment_retry")
-	assertEdge("n_copy_receipt_retry.", "n_payment_needs_review")
+	assertEdge("n_copy_receipt_retry.", "n_judge_result")
+	assertEdge("n_judge_result.exitoso", "n_payment_needs_review")
+	assertEdge("n_judge_result.no_exitoso", "n_payment_not_successful")
+	assertEdge("n_judge_result.dudoso", "n_payment_not_successful")
 	assertEdge("n_payment_needs_review.true", "n_save_payment")
 	assertEdge("n_payment_needs_review.false", "n_ask_org_code")
 	assertEdge("n_ask_org_code.out", "n_espera")
@@ -166,6 +169,45 @@ func TestWAACreditosFlowSeparaEscaneoVisualDeValidacion(t *testing.T) {
 	if copyRetry.Params["receipt.amount"] != "{receipt_retry.amount}" ||
 		copyRetry.Params["receipt.statusText"] != "{receipt_retry.statusText}" {
 		t.Errorf("n_copy_receipt_retry no copia la segunda transcripción: %+v", copyRetry.Params)
+	}
+}
+
+// Quién decide si el comprobante expresa éxito es un agente del grafo, no una
+// lista de frases compilada en Go. La instrucción tiene que pedir un juicio
+// semántico: en cuanto enumera los textos concretos de cada app vuelve a ser un
+// allowlist, con la diferencia de que ahora está escondido en un prompt.
+func TestWAACreditosJuzgaElResultadoConUnAgente(t *testing.T) {
+	flow := loadWAACreditosFlow(t)
+	var judge *Node
+	for i := range flow.Nodes {
+		if flow.Nodes[i].ID == "n_judge_result" {
+			judge = &flow.Nodes[i]
+		}
+	}
+	if judge == nil {
+		t.Fatal("falta n_judge_result")
+	}
+	if judge.Kind != "agent" {
+		t.Errorf("el juicio debe emitirlo un agente, no %q", judge.Kind)
+	}
+	if judge.ToolRef != "" {
+		t.Errorf("el juez no necesita herramientas: %q", judge.ToolRef)
+	}
+	if !judge.Silent {
+		t.Errorf("el juez no habla con el cliente; solo decide la rama")
+	}
+	want := []string{"exitoso", "no_exitoso", "dudoso"}
+	if strings.Join(judge.Outputs, ",") != strings.Join(want, ",") {
+		t.Errorf("ramas del juez = %v, se esperaba %v", judge.Outputs, want)
+	}
+	if !strings.Contains(judge.Instruction, "{receipt.statusText}") {
+		t.Errorf("el juez debe recibir el texto transcrito: %q", judge.Instruction)
+	}
+	lower := strings.ToLower(judge.Instruction)
+	for _, copy := range []string{"yapeaste", "operación exitosa", "pago exitoso", "plin"} {
+		if strings.Contains(lower, copy) {
+			t.Errorf("la instrucción enumera el copy %q: es un allowlist disfrazado", copy)
+		}
 	}
 }
 
@@ -189,6 +231,8 @@ func TestWAACreditosReescaneaAntesDePedirOtraImagen(t *testing.T) {
 					"occurredAt": "2026-08-13T02:23:00-05:00", "operationCode": "10484343",
 					"recipient": "Gerson Rod*", "statusText": "¡Yapeaste!",
 				}}, nil
+			case "n_judge_result":
+				return AgentResult{Branch: "exitoso"}, nil
 			default:
 				t.Fatalf("agente inesperado: %s", request.NodeID)
 				return AgentResult{}, nil
@@ -202,7 +246,7 @@ func TestWAACreditosReescaneaAntesDePedirOtraImagen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("avance con segunda lectura completa: %v", err)
 	}
-	if strings.Join(agentCalls, ",") != "n_classify_payment,n_classify_payment_retry" {
+	if strings.Join(agentCalls, ",") != "n_classify_payment,n_classify_payment_retry,n_judge_result" {
 		t.Fatalf("secuencia de escaneo inesperada: %v", agentCalls)
 	}
 	if result.State == nil || result.State.NodeID != "n_espera" || len(result.Sends) != 1 {
@@ -213,6 +257,50 @@ func TestWAACreditosReescaneaAntesDePedirOtraImagen(t *testing.T) {
 	}
 	if strings.Contains(result.Sends[0], "{receipt.amount}") || strings.Contains(result.Sends[0], "créditos acreditados") {
 		t.Fatalf("respuesta insegura: %q", result.Sends[0])
+	}
+}
+
+// Una captura perfectamente legible de una operación que no se completó supera
+// los routers deterministas: tiene proveedor, importe, fecha, operación y
+// destinatario. Solo el juicio del agente la separa de un pago real, y sin él
+// se acreditaría saldo por una transferencia que nunca ocurrió.
+func TestWAACreditosNoAcreditaUnaOperacionNoCompletada(t *testing.T) {
+	flow := loadWAACreditosFlow(t)
+	agentCalls := []string{}
+	result, err := Advance(flow, nil, "", Deps{
+		InputType: "image",
+		WaID:      "wamid-operacion-en-proceso",
+		AgentStructured: func(request AgentRequest) (AgentResult, error) {
+			agentCalls = append(agentCalls, request.NodeID)
+			if request.NodeID == "n_judge_result" {
+				return AgentResult{Branch: "no_exitoso"}, nil
+			}
+			return AgentResult{Branch: "scanned", Data: map[string]any{
+				"provider": "bcp", "amount": "240.00", "currency": "PEN",
+				"occurredAt": "2026-08-13T02:23:00-05:00", "operationCode": "01391991",
+				"recipient": "Gerson Rod*", "statusText": "Transferencia en proceso",
+			}}, nil
+		},
+		Tool: func(ref string, _ map[string]string, _ map[string]string) (string, error) {
+			t.Fatalf("una operación no completada no debe ejecutar %s", ref)
+			return "", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("avance con operación en proceso: %v", err)
+	}
+	if strings.Join(agentCalls, ",") != "n_classify_payment,n_judge_result" {
+		t.Fatalf("el juez debe evaluar la primera lectura completa: %v", agentCalls)
+	}
+	if result.State == nil || result.State.NodeID != "n_espera" || len(result.Sends) != 1 {
+		t.Fatalf("resultado inesperado: %+v", result)
+	}
+	if !strings.Contains(result.Sends[0], "no muestra una operación completada") ||
+		!strings.Contains(result.Sends[0], "No se acreditó ningún saldo") {
+		t.Fatalf("respuesta inesperada: %q", result.Sends[0])
+	}
+	if strings.Contains(result.Sends[0], "código de activación") {
+		t.Fatalf("no debe pedir el código de una operación que no se completó: %q", result.Sends[0])
 	}
 }
 
