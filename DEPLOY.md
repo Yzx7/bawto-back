@@ -5,23 +5,43 @@ frontend y topología verificados el 2026-08-07 desplegando de verdad: el
 procedimiento del frontend estaba sin documentar y hubo que reconstruirlo
 leyendo los scripts del server.
 
+**Último despliegue del backend: `199ad9f` el 2026-08-14**, SHA256
+`172b6b459c2533af362098c092e4f0db46cf933cd72e5e3ac3c7360dda61b244`, verificado
+en disco y en `/proc/<pid>/exe`. El anterior quedó en
+`/opt/bawto/bawto-backend.pre-199ad9f` (`49eace35…`), así que revertir es un
+`mv` más un `systemctl restart`.
+
 ## Topología
 
 ```
 Internet
    │ https://bawto.sistemuino.com
    ▼
-nginx @ yuriser (209.74.83.236)
+nginx @ yuriser-contabo (80.190.72.130, SSH puerto 22)
    ├─ /webhook/whatsapp (exacto) → bawto_backend
-   │      ├─ primario: 10.11.12.2:3009 (PC por WireGuard, APP_ENV=dev)
+   │      ├─ primario: 10.11.12.2:3009  ← VPN VIEJA, ver aviso abajo
    │      └─ backup:   127.0.0.1:3009 (server, APP_ENV=prod)
    │
    └─ resto de rutas → Next.js 127.0.0.1:3010 (Docker)
           ├─ Better Auth + JWKS
           └─ /api/* → backend local 127.0.0.1:3009
 
-Postgres 16 vive en el mismo server y escucha en 127.0.0.1 y 10.11.12.1.
+Postgres 16 vive en el mismo server y escucha en 127.0.0.1 y 10.12.12.1.
 ```
+
+> **Servidor migrado (2026-08-14).** El actual es **80.190.72.130**, VPN
+> **10.12.12.1**, y la PC entra como **10.12.12.2**; SSH es el **puerto 22**, no
+> el 22022. El anterior era `209.74.83.236` con VPN `10.11.12.x`.
+>
+> **El failover del webhook está roto y nadie lo nota.** El `upstream
+> bawto_backend` de `/etc/nginx/sites-available/bawto.conf` sigue apuntando a
+> `10.11.12.2:3009`, una IP que ya no existe. La PC nunca es primario: cada POST
+> de Meta espera los 3 s del `proxy_connect_timeout` y cae al backup. Se ve con
+> `curl -s -o /dev/null -w '%{time_total}\n'` sobre el webhook — 3,5 s en vez de
+> ~0,3 s— y ese síntoma es idéntico al de la PC apagada, así que no distingue un
+> caso del otro. El arreglo es cambiar esa línea a `10.12.12.2:3009` y recargar
+> nginx; hasta entonces, desplegar solo el server basta porque **solo el server
+> atiende**.
 
 - El panel y sus rutas autenticadas siempre usan el backend local del server.
 - Solo el webhook exacto conserva el failover PC → server.
@@ -32,7 +52,7 @@ Postgres 16 vive en el mismo server y escucha en 127.0.0.1 y 10.11.12.1.
 - Ambas instancias usan **la misma base** (`sacs_chatbots`), así que el estado
   de chats/flujos es consistente al conmutar.
 
-## Piezas en el server (`ssh root@209.74.83.236 -p 22022`)
+## Piezas en el server (`ssh root@10.12.12.1` · pública `80.190.72.130`)
 
 | Pieza | Ruta | Notas |
 |---|---|---|
@@ -64,8 +84,8 @@ Desde la PC (PowerShell, en `backend/`):
 $env:GOOS='linux'; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'
 go build -trimpath -ldflags '-s -w' -o "$env:TEMP\bawto-backend" .
 Remove-Item Env:GOOS,Env:GOARCH,Env:CGO_ENABLED
-scp -P 22022 "$env:TEMP\bawto-backend" root@209.74.83.236:/opt/bawto/bawto-backend.new
-ssh -p 22022 root@209.74.83.236 "systemctl stop bawto-backend && mv /opt/bawto/bawto-backend.new /opt/bawto/bawto-backend && chmod +x /opt/bawto/bawto-backend && chown www-data:www-data /opt/bawto/bawto-backend && systemctl start bawto-backend && sleep 2 && curl -s http://127.0.0.1:3009/"
+scp -P 22 "$env:TEMP\bawto-backend" root@10.12.12.1:/opt/bawto/bawto-backend.new
+ssh -p 22 root@10.12.12.1 "systemctl stop bawto-backend && cp -p /opt/bawto/bawto-backend /opt/bawto/bawto-backend.pre-<commit> && mv /opt/bawto/bawto-backend.new /opt/bawto/bawto-backend && chmod +x /opt/bawto/bawto-backend && chown www-data:www-data /opt/bawto/bawto-backend && systemctl start bawto-backend && sleep 3 && curl -s http://127.0.0.1:3009/"
 ```
 
 (Se sube como `.new` y se mueve con el servicio parado porque Linux no deja
@@ -244,7 +264,7 @@ real es el flag. Revertir el esquema exigiría restaurar el respaldo.
 |---|---|---|
 | `APP_ENV` | `prod` | `dev` |
 | `SERVER_PORT` | `127.0.0.1:3009` (solo loopback; nginx es el frontdoor) | `:3009` |
-| `DATABASE_URL` | host `127.0.0.1` (Postgres local) | host `10.11.12.1` (vía WireGuard) |
+| `DATABASE_URL` | host `127.0.0.1` (Postgres local) | host `10.12.12.1` (vía WireGuard) |
 | `JWKS_URL` | `http://127.0.0.1:3010/api/auth/jwks` | frontend dev en `localhost:3000` |
 | `CORS_ORIGINS` | `https://bawto.sistemuino.com` | origen local de desarrollo |
 
@@ -306,7 +326,7 @@ medias. Es la misma regla que para el binario del backend.
 ```bash
 REL=$(date +%Y%m%d)-1        # sube el -n si ya publicaste hoy
 git archive --format=tar.gz -o /tmp/source-$REL.tar.gz HEAD
-scp -P 22022 /tmp/source-$REL.tar.gz root@209.74.83.236:/opt/bawto-frontend/
+scp -P 22 /tmp/source-$REL.tar.gz root@10.12.12.1:/opt/bawto-frontend/
 ```
 
 En el server, el script nuevo sale del anterior cambiando una línea; no hay que
