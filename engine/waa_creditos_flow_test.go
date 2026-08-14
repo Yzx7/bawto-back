@@ -304,6 +304,46 @@ func TestWAACreditosNoAcreditaUnaOperacionNoCompletada(t *testing.T) {
 	}
 }
 
+// «No pude» y «no debo» no pueden compartir mensaje. Que el servidor se niegue
+// a acreditar —comprobante antiguo, destinatario no autorizado, duplicado— no es
+// un fallo técnico: el comprobante se leyó y se guardó bien. Decirle al cliente
+// que no se pudo procesar le invita a reenviar la misma captura, que nunca va a
+// funcionar porque el motivo no está en la imagen.
+func TestWAACreditosDistingueRechazoDeFalloTecnico(t *testing.T) {
+	flow := loadWAACreditosFlow(t)
+	edges := map[string]string{}
+	for _, edge := range flow.Edges {
+		edges[edge.Source+"."+edge.SourceHandle] = edge.Target
+	}
+	if got := edges["n_activate_subscription.error"]; got != "n_recharge_deferred" {
+		t.Errorf("el rechazo del servidor debe ir a n_recharge_deferred, va a %q", got)
+	}
+	if got := edges["n_save_payment.error"]; got != "n_payment_error" {
+		t.Errorf("un fallo al guardar sí es técnico y debe ir a n_payment_error, va a %q", got)
+	}
+
+	var review *Node
+	for i := range flow.Nodes {
+		if flow.Nodes[i].ID == "n_recharge_deferred" {
+			review = &flow.Nodes[i]
+		}
+	}
+	if review == nil {
+		t.Fatal("falta n_recharge_deferred")
+	}
+	// El motor expone la causa como <saveAs>.error; sin ella el mensaje vuelve a
+	// ser una fórmula genérica que no dice por qué no se acreditó.
+	if !strings.Contains(review.Body, "{credit_recharge.error}") {
+		t.Errorf("n_recharge_deferred debe trasladar el motivo real: %q", review.Body)
+	}
+	if strings.Contains(review.Body, "no pude procesarla") {
+		t.Errorf("n_recharge_deferred no debe sugerir un fallo de lectura: %q", review.Body)
+	}
+	if !strings.Contains(review.Body, "no hace falta que envíes otra captura") {
+		t.Errorf("n_recharge_deferred debe evitar que el cliente reenvíe: %q", review.Body)
+	}
+}
+
 func TestWAACreditosDosEscaneosIncompletosPidenOtraImagen(t *testing.T) {
 	flow := loadWAACreditosFlow(t)
 	agentCalls := []string{}

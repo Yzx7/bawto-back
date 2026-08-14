@@ -165,7 +165,7 @@
       "id": "e_subscription_error",
       "source": "n_activate_subscription",
       "sourceHandle": "error",
-      "target": "n_payment_error"
+      "target": "n_recharge_deferred"
     },
     {
       "id": "e_orchestrator_bawto",
@@ -575,6 +575,12 @@
     {
       "id": "e_not_successful_wait",
       "source": "n_payment_not_successful",
+      "sourceHandle": "out",
+      "target": "n_espera"
+    },
+    {
+      "id": "e_recharge_deferred_wait",
+      "source": "n_recharge_deferred",
       "sourceHandle": "out",
       "target": "n_espera"
     }
@@ -1505,6 +1511,15 @@
       "pos": {
         "x": 4622.795180532378,
         "y": 941.1424749178523
+      }
+    },
+    {
+      "body": "Registré tu comprobante, pero no puedo acreditar los créditos de forma automática: {credit_recharge.error}.\n\nLo dejé guardado y en revisión para que nuestro equipo lo verifique manualmente; te confirmamos apenas esté resuelto. Todavía no se acreditó ningún saldo, y no hace falta que envíes otra captura.",
+      "id": "n_recharge_deferred",
+      "kind": "send",
+      "pos": {
+        "x": 6575.093566136287,
+        "y": 1337.7706409875493
       }
     }
   ],
