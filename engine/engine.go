@@ -516,6 +516,11 @@ func flattenToolValue(vars map[string]string, prefix string, value any, depth in
 		}
 	case string:
 		vars[prefix] = typed
+	// json.Number llega desde la tool call del agente, que se decodifica con
+	// UseNumber(); float64 llega desde el JSON de una herramienta. Omitir el
+	// primero descartaba en silencio todo campo "number" del agente.
+	case json.Number:
+		vars[prefix] = typed.String()
 	case float64, bool:
 		vars[prefix] = fmt.Sprint(typed)
 	case nil:

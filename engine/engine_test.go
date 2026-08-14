@@ -93,6 +93,55 @@ func TestAdvanceAgentProjectsDeclaredStructuredOutput(t *testing.T) {
 	}
 }
 
+// El parser real decodifica la tool call con decoder.UseNumber(), así que un
+// campo "number" llega como json.Number y no como float64. Cuando la proyección
+// solo contemplaba float64, el importe se descartaba en silencio: el agente
+// visual devolvía branch=valid con amount, el router de completitud no
+// encontraba la variable y el bot rechazaba comprobantes buenos con "No pude
+// validar todos los datos obligatorios".
+func TestAdvanceAgentProjectsJSONNumberFields(t *testing.T) {
+	flow := &Flow{
+		Trigger: Trigger{Type: "message", Match: "any"},
+		Nodes: []Node{
+			{
+				ID: "vision", Kind: "agent", AgentRole: "specialist", Instruction: "Extrae el comprobante", Outputs: []string{"valid"},
+				SaveAs: "receipt", OutputFields: []AgentOutputField{
+					{Key: "provider", Type: "string"},
+					{Key: "amount", Type: "number"},
+					{Key: "confidence", Type: "number"},
+				},
+			},
+			{ID: "ok", Kind: "send", Body: "{receipt.provider} S/{receipt.amount} ({receipt.confidence})"},
+		},
+		Edges: []Edge{
+			{Source: "trigger", Target: "vision"},
+			{Source: "vision", SourceHandle: "valid", Target: "ok"},
+		},
+	}
+
+	result, err := Advance(flow, nil, "captura", Deps{
+		InputType: "image",
+		AgentStructured: func(AgentRequest) (AgentResult, error) {
+			return AgentResult{
+				Branch: "valid",
+				Data: map[string]any{
+					"provider":   "yape",
+					"amount":     json.Number("125"),
+					"confidence": json.Number("0.95"),
+				},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Se compara el texto ya interpolado: un marcador literal delata que la
+	// variable nunca existió, que es exactamente lo que llegaba al cliente.
+	if len(result.Sends) != 1 || result.Sends[0] != "yape S/125 (0.95)" {
+		t.Fatalf("campos numéricos perdidos: %#v", result.Sends)
+	}
+}
+
 func TestWaitRequiresExpectedInputAndPreservesMedia(t *testing.T) {
 	flow := &Flow{Trigger: Trigger{Type: "message"}, Nodes: []Node{
 		{ID: "wait", Kind: "wait", Expect: "image", SaveAs: "receipt", TimeoutHours: 2},
