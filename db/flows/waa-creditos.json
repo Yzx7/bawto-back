@@ -634,8 +634,8 @@
       "id": "n_payment_wait",
       "kind": "wait",
       "pos": {
-        "x": 3163.3616126812285,
-        "y": 1181.755223456402
+        "x": 2888.267634679653,
+        "y": 1401.1339654070255
       },
       "timeoutHours": 24
     },
@@ -650,8 +650,8 @@
       "id": "n_payment_input_router",
       "kind": "router",
       "pos": {
-        "x": 3524.901230444942,
-        "y": 1107.3988763674697
+        "x": 3211.5030276583375,
+        "y": 1291.9555957862478
       }
     },
     {
@@ -659,8 +659,8 @@
       "id": "n_payment_need_image",
       "kind": "send",
       "pos": {
-        "x": 4872.808007782918,
-        "y": 1361.4852980728692
+        "x": 3741.0922754979565,
+        "y": 1385.8607138451605
       }
     },
     {
@@ -713,8 +713,8 @@
         "scanned"
       ],
       "pos": {
-        "x": 4092.731405775243,
-        "y": 493.0618889023657
+        "x": 3470.225023929855,
+        "y": 590.2746944859845
       },
       "saveAs": "receipt",
       "silent": true
@@ -750,8 +750,8 @@
       "id": "n_payment_needs_review",
       "kind": "condition",
       "pos": {
-        "x": 4782.367587285476,
-        "y": 565.2263380597191
+        "x": 4824.807651147767,
+        "y": 613.7292681880517
       }
     },
     {
@@ -768,8 +768,8 @@
       "id": "n_payment_retry",
       "kind": "send",
       "pos": {
-        "x": 4787.557002853094,
-        "y": 924.1917513432161
+        "x": 4907.754955942021,
+        "y": 1499.2058922388217
       }
     },
     {
@@ -785,8 +785,8 @@
       "id": "n_espera",
       "kind": "wait",
       "pos": {
-        "x": 5330.61071753732,
-        "y": 649.1407065060521
+        "x": 5345.767883202424,
+        "y": 679.4550378362601
       },
       "timeoutHours": 24
     },
@@ -841,7 +841,7 @@
     {
       "cases": [
         {
-          "expression": "perfil.found == true \u0026\u0026 !empty(perfil.first.data.segmento_key)",
+          "expression": "perfil.found == true && !empty(perfil.first.data.segmento_key)",
           "id": "segmentado",
           "label": "Tiene perfil con segmento"
         }
@@ -877,12 +877,12 @@
     {
       "cases": [
         {
-          "expression": "segmento.found == true \u0026\u0026 segmento.first.data.activo == true \u0026\u0026 segmento.first.data.ruta == contexto_especializado",
+          "expression": "segmento.found == true && segmento.first.data.activo == true && segmento.first.data.ruta == contexto_especializado",
           "id": "contexto",
           "label": "Contexto especializado"
         },
         {
-          "expression": "segmento.found == true \u0026\u0026 segmento.first.data.activo == true \u0026\u0026 segmento.first.data.ruta == asesor",
+          "expression": "segmento.found == true && segmento.first.data.activo == true && segmento.first.data.ruta == asesor",
           "id": "asesor",
           "label": "Derivar a una persona"
         }
@@ -921,7 +921,7 @@
     {
       "cases": [
         {
-          "expression": "segmento.found == true \u0026\u0026 segmento.first.data.activo == true",
+          "expression": "segmento.found == true && segmento.first.data.activo == true",
           "id": "caso_1",
           "label": "CTX obtained"
         }
@@ -1039,7 +1039,7 @@
       "id": "n_render_payment_methods",
       "kind": "tool",
       "pos": {
-        "x": 3967.88464760545,
+        "x": 3908.6872093013135,
         "y": 1636.7850122107818
       },
       "saveAs": "payment_options",
@@ -1048,7 +1048,7 @@
     {
       "cases": [
         {
-          "expression": "payment_options.found == true \u0026\u0026 !empty(payment_options.message)",
+          "expression": "payment_options.found == true && !empty(payment_options.message)",
           "id": "configured",
           "label": "Métodos activos"
         }
@@ -1056,8 +1056,8 @@
       "id": "n_payment_method_router",
       "kind": "router",
       "pos": {
-        "x": 4321.691900470148,
-        "y": 1610.2761622918558
+        "x": 4275.743966270266,
+        "y": 1619.4657491318321
       }
     },
     {
@@ -1065,7 +1065,7 @@
       "id": "n_send_payment_instructions",
       "kind": "send",
       "pos": {
-        "x": 4522.458967115367,
+        "x": 4492.592809885445,
         "y": 1663.5889578647325
       }
     },
@@ -1074,8 +1074,8 @@
       "id": "n_payment_method_unavailable",
       "kind": "send",
       "pos": {
-        "x": 4941.002179753346,
-        "y": 1764.4083248119996
+        "x": 4929.515196203376,
+        "y": 1773.597911651976
       }
     },
     {
@@ -1083,8 +1083,8 @@
       "id": "n_payment_method_handoff",
       "kind": "action",
       "pos": {
-        "x": 5408.383258756584,
-        "y": 1786.7166091850156
+        "x": 5403.159955376807,
+        "y": 1793.6810136913846
       }
     },
     {
@@ -1139,7 +1139,7 @@
     {
       "cases": [
         {
-          "expression": "compra.productId \u0026\u0026 compra.cantidad \u0026\u0026 compra.correo",
+          "expression": "compra.productId && compra.cantidad && compra.correo",
           "id": "listo",
           "label": "Producto, cantidad y correo"
         }
@@ -1346,7 +1346,7 @@
     {
       "cases": [
         {
-          "expression": "!empty(receipt.provider) \u0026\u0026 !empty(receipt.amount) \u0026\u0026 receipt.amount \u003e 0 \u0026\u0026 !empty(receipt.currency) \u0026\u0026 !empty(receipt.occurredAt) \u0026\u0026 !empty(receipt.operationCode) \u0026\u0026 !empty(receipt.recipient) \u0026\u0026 !empty(receipt.statusText) \u0026\u0026 !empty(sale.organizationCode)",
+          "expression": "!empty(receipt.provider) && !empty(receipt.amount) && receipt.amount > 0 && !empty(receipt.currency) && !empty(receipt.occurredAt) && !empty(receipt.operationCode) && !empty(receipt.recipient) && !empty(receipt.statusText) && !empty(sale.organizationCode)",
           "id": "ready",
           "label": "Comprobante completo y código disponibles"
         },
@@ -1359,8 +1359,8 @@
       "id": "n_existing_receipt_router",
       "kind": "router",
       "pos": {
-        "x": 3620.970825962996,
-        "y": 1768.6601071166742
+        "x": 3631.4174327225496,
+        "y": 1772.1423093698588
       }
     },
     {
@@ -1386,7 +1386,7 @@
     {
       "cases": [
         {
-          "expression": "!empty(receipt.provider) \u0026\u0026 !empty(receipt.amount) \u0026\u0026 receipt.amount \u003e 0 \u0026\u0026 !empty(receipt.currency) \u0026\u0026 !empty(receipt.occurredAt) \u0026\u0026 !empty(receipt.operationCode) \u0026\u0026 !empty(receipt.recipient) \u0026\u0026 !empty(receipt.statusText)",
+          "expression": "!empty(receipt.provider) && !empty(receipt.amount) && receipt.amount > 0 && !empty(receipt.currency) && !empty(receipt.occurredAt) && !empty(receipt.operationCode) && !empty(receipt.recipient) && !empty(receipt.statusText)",
           "id": "complete",
           "label": "Lectura completa"
         }
@@ -1394,8 +1394,8 @@
       "id": "n_receipt_complete_router",
       "kind": "router",
       "pos": {
-        "x": 4463.222773779281,
-        "y": 521.1424749178523
+        "x": 3899.1060087633923,
+        "y": 542.0356884369592
       }
     },
     {
@@ -1448,8 +1448,8 @@
         "scanned"
       ],
       "pos": {
-        "x": 4720,
-        "y": 720
+        "x": 4183.740853009586,
+        "y": 1176.168495167169
       },
       "saveAs": "receipt_retry",
       "silent": true
@@ -1457,7 +1457,7 @@
     {
       "cases": [
         {
-          "expression": "!empty(receipt_retry.provider) \u0026\u0026 !empty(receipt_retry.amount) \u0026\u0026 receipt_retry.amount \u003e 0 \u0026\u0026 !empty(receipt_retry.currency) \u0026\u0026 !empty(receipt_retry.occurredAt) \u0026\u0026 !empty(receipt_retry.operationCode) \u0026\u0026 !empty(receipt_retry.recipient) \u0026\u0026 !empty(receipt_retry.statusText)",
+          "expression": "!empty(receipt_retry.provider) && !empty(receipt_retry.amount) && receipt_retry.amount > 0 && !empty(receipt_retry.currency) && !empty(receipt_retry.occurredAt) && !empty(receipt_retry.operationCode) && !empty(receipt_retry.recipient) && !empty(receipt_retry.statusText)",
           "id": "complete",
           "label": "Segunda lectura completa"
         }
@@ -1465,8 +1465,8 @@
       "id": "n_receipt_retry_complete_router",
       "kind": "router",
       "pos": {
-        "x": 5050,
-        "y": 780
+        "x": 4520.705257515957,
+        "y": 1176.9710568630326
       }
     },
     {
@@ -1483,8 +1483,8 @@
         "receipt.statusText": "{receipt_retry.statusText}"
       },
       "pos": {
-        "x": 5350,
-        "y": 780
+        "x": 3786.491188320161,
+        "y": 863.5728540764279
       }
     },
     {
@@ -1499,8 +1499,8 @@
         "dudoso"
       ],
       "pos": {
-        "x": 4622.795180532378,
-        "y": 521.1424749178523
+        "x": 4285.021561973483,
+        "y": 524.6246771710368
       },
       "silent": true
     },
@@ -1509,8 +1509,8 @@
       "id": "n_payment_not_successful",
       "kind": "send",
       "pos": {
-        "x": 4622.795180532378,
-        "y": 941.1424749178523
+        "x": 4718.302049865861,
+        "y": 943.3285539517674
       }
     },
     {
