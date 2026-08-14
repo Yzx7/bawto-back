@@ -155,11 +155,22 @@ del failover comparten la misma base y una de ellas es la PC de desarrollo. Si
 el arranque migrara, encender la PC con código a medio hacer aplicaría DDL a
 producción sin que nadie lo pidiera.
 
+Son **flags, no subcomandos**: `-status` consulta y **sin argumentos** aplica.
+`up` y `status` sueltos no existen, y el binario responde imprimiendo su ayuda,
+que se parece lo bastante a una ejecución correcta como para dar por aplicada
+una migración que sigue pendiente.
+
 ```bash
 # En el server, con el .env de producción cargado:
-cd /opt/bawto && ./bawto-backend-migrate status   # qué falta, sin tocar nada
-cd /opt/bawto && ./bawto-backend-migrate up       # aplica lo pendiente
+cd /opt/bawto && set -a && . ./.env && set +a
+./bawto-backend-migrate -status   # qué falta, sin tocar nada
+./bawto-backend-migrate           # aplica lo pendiente
 ```
+
+El `migrate` del server **no se actualiza solo** al desplegar el backend: son
+dos binarios. Uno viejo no conoce las migraciones nuevas y las omite de
+`-status` en silencio, sin marcarlas pendientes. Antes de fiarte de un `-status`
+limpio, comprueba que su fecha sea posterior al commit que trajo la migración.
 
 Desde la PC se compila igual que el binario principal, cambiando el paquete:
 
