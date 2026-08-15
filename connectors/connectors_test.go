@@ -1,6 +1,9 @@
 package connectors
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestValidateTargetAceptaElHostDelDriver(t *testing.T) {
 	if err := ValidateTarget(DriverMeudim, "https://api.meud.im"); err != nil {
@@ -46,6 +49,46 @@ func TestValidateTargetRechazaDestinosPeligrosos(t *testing.T) {
 // Meudim distingue por prefijo las claves de navegador y las de servidor. La
 // conexión de Bawto es servidor a servidor, por lo que no debe aceptar una
 // publicable aunque hoy algunos endpoints admitan ambas.
+// DriverDatasetAPI no tiene host en código: lo entrega el equipo del hackatón
+// por variable de entorno. Sin ella, el fallo debe ser seguro (ninguna
+// conexión se guarda), no "cualquier host vale".
+func TestValidateTargetDatasetAPISinVariableDeEntornoRechazaTodo(t *testing.T) {
+	t.Setenv(datasetAPIAllowedHostsEnv, "")
+	if err := ValidateTarget(DriverDatasetAPI, "https://cualquier-cosa.example.com"); err == nil {
+		t.Fatal("sin DATASET_API_ALLOWED_HOSTS no debía aceptarse ningún host")
+	}
+	// El driver existe (a diferencia de uno inventado): el error debe hablar
+	// del host, no de un driver desconocido.
+	err := ValidateTarget(DriverDatasetAPI, "https://cualquier-cosa.example.com")
+	if err == nil {
+		t.Fatal("se esperaba rechazo")
+	}
+	if got := err.Error(); !strings.Contains(got, "host") {
+		t.Fatalf("se esperaba un error sobre el host, llegó: %q", got)
+	}
+}
+
+// Declarado el host por variable de entorno, ValidateTarget lo acepta y sigue
+// rechazando cualquier otro — la misma barrera que Meudim, con la fuente de
+// la lista movida a runtime porque el host no se conoce en tiempo de
+// compilación.
+func TestValidateTargetDatasetAPIConVariableDeEntorno(t *testing.T) {
+	t.Setenv(datasetAPIAllowedHostsEnv, "api.equipo-hackaton.example.com, otro.example.com")
+	if err := ValidateTarget(DriverDatasetAPI, "https://api.equipo-hackaton.example.com"); err != nil {
+		t.Fatalf("el host declarado por variable de entorno fue rechazado: %v", err)
+	}
+	if err := ValidateTarget(DriverDatasetAPI, "https://otro.example.com"); err != nil {
+		t.Fatalf("el segundo host declarado fue rechazado: %v", err)
+	}
+	if err := ValidateTarget(DriverDatasetAPI, "https://sin-declarar.example.com"); err == nil {
+		t.Fatal("un host no declarado no debía aceptarse")
+	}
+	// La misma protección SSRF de siempre: exigir https y rechazar loopback.
+	if err := ValidateTarget(DriverDatasetAPI, "http://api.equipo-hackaton.example.com"); err == nil {
+		t.Fatal("sin TLS no debía aceptarse")
+	}
+}
+
 func TestValidateCredentialExigeLaClaveSecreta(t *testing.T) {
 	if err := ValidateCredential(DriverMeudim, "sk_live_abc"); err != nil {
 		t.Fatalf("una clave secreta fue rechazada: %v", err)

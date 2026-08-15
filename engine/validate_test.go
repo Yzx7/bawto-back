@@ -586,6 +586,129 @@ func TestValidateCatalogSearchSeparaDestinoDeValores(t *testing.T) {
 	}
 }
 
+// dataset_query reproduce la misma asimetría que data_query, esta vez sobre un
+// dataset externo: connection, resource, fields, sort y cada where.<n>.field/op
+// quedan fijos por el autor; solo where.<n>.value y query interpolan.
+func TestValidateDatasetQuerySeparaConfiguracionDeValores(t *testing.T) {
+	base := func(args map[string]string) *Flow {
+		return &Flow{ID: "f", Name: "F", Trigger: Trigger{Type: "message", Match: "any"}, Nodes: []Node{
+			{ID: "read", Kind: "tool", ToolRef: "dataset_query", Args: args},
+			{ID: "ok", Kind: "action", Action: "end"}, {ID: "error", Kind: "action", Action: "end"},
+		}, Edges: []Edge{
+			{ID: "start", Source: "trigger", Target: "read"},
+			{ID: "ok", Source: "read", SourceHandle: "ok", Target: "ok"},
+			{ID: "error", Source: "read", SourceHandle: "error", Target: "error"},
+		}}
+	}
+
+	valid := base(map[string]string{
+		"connection": "erp", "resource": "clientes", "fields": "nombre,saldo",
+		"where.1.field": "documento", "where.1.op": "eq", "where.1.value": "{input.text}",
+		"sort": "-saldo", "query": "{input.text}", "limit": "5",
+	})
+	if err := Validate(valid); err != nil {
+		t.Fatalf("dataset_query válido rechazado: %v", err)
+	}
+
+	// Un recurso anidado (`pedidos/abiertos`) es legítimo; sin condiciones
+	// también, igual que data_query.
+	if err := Validate(base(map[string]string{"connection": "erp", "resource": "pedidos/abiertos"})); err != nil {
+		t.Fatalf("dataset_query sin condiciones rechazado: %v", err)
+	}
+
+	for name, tc := range map[string]struct {
+		args map[string]string
+		want string
+	}{
+		"sin conexión": {
+			map[string]string{"resource": "clientes"}, "requiere una conexión",
+		},
+		"conexión dinámica": {
+			map[string]string{"connection": "{input.text}", "resource": "clientes"}, "conexión fija",
+		},
+		"sin recurso": {
+			map[string]string{"connection": "erp"}, "recurso fijo",
+		},
+		"recurso dinámico": {
+			map[string]string{"connection": "erp", "resource": "{input.text}"}, "recurso fijo",
+		},
+		"recurso con traversal": {
+			map[string]string{"connection": "erp", "resource": "../secreto"}, "letras, números, guiones",
+		},
+		"campo dinámico": {
+			map[string]string{"connection": "erp", "resource": "clientes",
+				"where.1.field": "{input.text}", "where.1.value": "x"}, "field fijo",
+		},
+		"operador dinámico": {
+			map[string]string{"connection": "erp", "resource": "clientes",
+				"where.1.field": "documento", "where.1.op": "{input.text}", "where.1.value": "x"}, "op fijo",
+		},
+		"operador inventado": {
+			map[string]string{"connection": "erp", "resource": "clientes",
+				"where.1.field": "documento", "where.1.op": "regex", "where.1.value": "x"}, "operador",
+		},
+		"campos dinámicos": {
+			map[string]string{"connection": "erp", "resource": "clientes", "fields": "{input.text}"},
+			"variables en fields",
+		},
+		"sort dinámico": {
+			map[string]string{"connection": "erp", "resource": "clientes", "sort": "{input.text}"},
+			"variables en sort",
+		},
+		"argumento desconocido": {
+			map[string]string{"connection": "erp", "resource": "clientes", "sql": "DROP TABLE x"},
+			"no admite el argumento",
+		},
+		"condición sin campo": {
+			map[string]string{"connection": "erp", "resource": "clientes",
+				"where.1.op": "eq", "where.1.value": "x"}, "no declara campo",
+		},
+		"limit fuera de rango": {
+			map[string]string{"connection": "erp", "resource": "clientes", "limit": "500"}, "entre 1 y 50",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := Validate(base(tc.args))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("esperaba %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+// El agente recibe la misma restricción que en catalog_search: puede redactar
+// la búsqueda, nunca la conexión ni el recurso.
+func TestValidateDatasetQueryEnUnAgente(t *testing.T) {
+	base := func(config map[string]string) *Flow {
+		return &Flow{ID: "f", Name: "F", Trigger: Trigger{Type: "message", Match: "any"}, Nodes: []Node{
+			{ID: "a", Kind: "agent", Instruction: "consulta", Outputs: []string{"seguir"},
+				Tools: []NodeTool{{Ref: "dataset_query", Config: config}}},
+			{ID: "fin", Kind: "action", Action: "end"},
+		}, Edges: []Edge{
+			{ID: "start", Source: "trigger", Target: "a"},
+			{ID: "seguir", Source: "a", SourceHandle: "seguir", Target: "fin"},
+		}}
+	}
+	if err := Validate(base(map[string]string{"connection": "erp", "resource": "clientes", "limit": "5"})); err != nil {
+		t.Fatalf("agente con dataset rechazado: %v", err)
+	}
+	if err := Validate(base(map[string]string{"resource": "clientes"})); err == nil {
+		t.Fatal("se aceptó un agente con dataset sin conexión")
+	}
+	if err := Validate(base(map[string]string{"connection": "erp"})); err == nil {
+		t.Fatal("se aceptó un agente con dataset sin recurso")
+	}
+	if err := Validate(base(map[string]string{"connection": "{input.text}", "resource": "clientes"})); err == nil {
+		t.Fatal("se aceptó una conexión elegida por una variable")
+	}
+	if err := Validate(base(map[string]string{"connection": "erp", "resource": "clientes", "limit": "500"})); err == nil {
+		t.Fatal("se aceptó un tope por encima del máximo")
+	}
+	if err := Validate(base(map[string]string{"connection": "erp", "resource": "../secreto"})); err == nil {
+		t.Fatal("se aceptó un recurso con traversal")
+	}
+}
+
 func TestValidateCatalogProductExigeUnSoloIdentificador(t *testing.T) {
 	base := func(args map[string]string) *Flow {
 		return &Flow{ID: "f", Name: "F", Trigger: Trigger{Type: "message", Match: "any"}, Nodes: []Node{

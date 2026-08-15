@@ -437,6 +437,10 @@ func validateNode(n *Node, triggerType string) error {
 			if err := validateCatalogProductArgs(n.Args); err != nil {
 				return err
 			}
+		case "dataset_query":
+			if err := validateDatasetQueryArgs(n.Args); err != nil {
+				return err
+			}
 		case "order_create":
 			if err := validateOrderCreateArgs(n.Args); err != nil {
 				return err
@@ -696,6 +700,77 @@ func validateCatalogProductArgs(args map[string]string) error {
 		return fmt.Errorf("catalog_product requiere productId o slug, pero no ambos")
 	}
 	return validateURLTemplate(args["urlTemplate"])
+}
+
+// resourceKeyRe delimita qué puede escribirse en `resource`: el ejecutor lo
+// concatena directamente en la ruta de la petición HTTP
+// (`{baseURL}/{resource}`), así que no puede llevar `..` ni un carácter que
+// cambie de host o cuele parámetros fuera de la query string que arma el
+// cliente.
+var resourceKeyRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+(?:/[a-zA-Z0-9_-]+)*$`)
+
+// validateDatasetQueryArgs es el mismo constructor de reglas que
+// validateDataQueryArgs, aplicado a un dataset externo servido por HTTP (§3 de
+// PLAN-HACKATON-MARCA-BLANCA-Y-MCP.md). La asimetría es idéntica: conexión,
+// recurso, campos, orden y cada `where.<n>.field`/`op` los fija el autor; solo
+// `where.<n>.value` y `query` interpolan variables, porque son los únicos que
+// expresan «qué busca el cliente», nunca «a qué API ni a qué recurso».
+func validateDatasetQueryArgs(args map[string]string) error {
+	if err := requireFixedConnection(args, "dataset_query"); err != nil {
+		return err
+	}
+	resource := strings.TrimSpace(args["resource"])
+	if resource == "" || strings.Contains(resource, "{") {
+		return fmt.Errorf("dataset_query requiere un recurso fijo elegido por el autor")
+	}
+	if !resourceKeyRe.MatchString(resource) {
+		return fmt.Errorf("dataset_query requiere un recurso con letras, números, guiones y `/`, sin `..`")
+	}
+	for _, key := range []string{"fields", "sort"} {
+		if strings.Contains(args[key], "{") {
+			return fmt.Errorf("dataset_query no admite variables en %s", key)
+		}
+	}
+	if raw := strings.TrimSpace(args["limit"]); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > 50 {
+			return fmt.Errorf("dataset_query limit debe ser un número entre 1 y 50")
+		}
+	}
+
+	allowed := map[string]bool{
+		"connection": true, "resource": true, "fields": true, "sort": true,
+		"query": true, "limit": true,
+	}
+	rules := map[string]bool{}
+	for key := range args {
+		if allowed[key] {
+			continue
+		}
+		match := dataQueryRuleRe.FindStringSubmatch(key)
+		if match == nil {
+			return fmt.Errorf("dataset_query no admite el argumento %q", key)
+		}
+		if match[2] == "field" {
+			rules[match[1]] = true
+		}
+	}
+	for key, value := range args {
+		match := dataQueryRuleRe.FindStringSubmatch(key)
+		if match == nil || match[2] == "value" {
+			continue
+		}
+		if strings.TrimSpace(value) == "" || strings.Contains(value, "{") {
+			return fmt.Errorf("dataset_query requiere un %s fijo en la condición %s", match[2], match[1])
+		}
+		if match[2] == "op" && !validDataQueryOp(value) {
+			return fmt.Errorf("dataset_query no admite el operador %q", value)
+		}
+		if !rules[match[1]] {
+			return fmt.Errorf("la condición %s de dataset_query no declara campo", match[1])
+		}
+	}
+	return nil
 }
 
 // requireFixedConnection impide que el destino de la llamada dependa de una
@@ -998,6 +1073,25 @@ func validateAgentTools(nodeTools []NodeTool) error {
 			if raw := strings.TrimSpace(nodeTool.Config["categoryId"]); raw != "" {
 				if id, err := strconv.Atoi(raw); err != nil || id <= 0 {
 					return fmt.Errorf("catalog_search requiere una categoría numérica")
+				}
+			}
+		}
+		if nodeTool.Ref == "dataset_query" {
+			// La configuración del agente tampoco interpola: el modelo redacta
+			// query, filtros y orden; nunca a qué conexión ni a qué recurso se
+			// pregunta.
+			for key, value := range nodeTool.Config {
+				if strings.Contains(value, "{") {
+					return fmt.Errorf("la herramienta dataset_query requiere un %s fijo, sin variables", key)
+				}
+			}
+			if resource := strings.TrimSpace(nodeTool.Config["resource"]); resource != "" && !resourceKeyRe.MatchString(resource) {
+				return fmt.Errorf("dataset_query requiere un recurso con letras, números, guiones y `/`, sin `..`")
+			}
+			if raw := strings.TrimSpace(nodeTool.Config["limit"]); raw != "" {
+				limit, err := strconv.Atoi(raw)
+				if err != nil || limit < 1 || limit > 50 {
+					return fmt.Errorf("dataset_query limit debe ser un número entre 1 y 50")
 				}
 			}
 		}

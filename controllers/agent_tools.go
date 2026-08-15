@@ -69,6 +69,8 @@ func (con *Controller) agentTooling(ctx context.Context, bot *models.BotChannel,
 			return con.execAgentCatalogSearch(ctx, bot, budget, config[name], input)
 		case "catalog_product":
 			return con.execAgentCatalogProduct(ctx, bot, budget, config[name], input)
+		case "dataset_query":
+			return con.execAgentDatasetQuery(ctx, bot, budget, config[name], input)
 		default:
 			return "", fmt.Errorf("herramienta %q sin ejecutor", name)
 		}

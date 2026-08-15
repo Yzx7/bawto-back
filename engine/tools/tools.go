@@ -294,6 +294,101 @@ var registry = map[string]Spec{
 		ForGraph: true,
 	},
 
+	// dataset_query es el gemelo de data_query para un dataset externo servido
+	// por HTTP (§3 de PLAN-HACKATON-MARCA-BLANCA-Y-MCP.md): mismo constructor de
+	// reglas, misma forma de salida (`found`/`count`/`first`/lista completa),
+	// para que un Router escrito contra una tabla local sirva igual contra un
+	// dataset ajeno sin reescribir el grafo. La diferencia es de origen, no de
+	// contrato: aquí el destino sale de una `connection` a una API en vez de un
+	// objeto de datos de la organización, y por eso también existe la rama
+	// `error` propia de una llamada de red — la tienda o el dataset caído no es
+	// lo mismo que «no hay coincidencias».
+	"dataset_query": {
+		Name:  "dataset_query",
+		Label: "Leer un dataset externo",
+		Help: "Consulta un dataset servido por HTTP con la conexión, el recurso, los campos y el tope " +
+			"fijados en el bloque. Devuelve `found`, `count`, `first` y la lista completa, igual que Leer una tabla.",
+		Description: "Consulta un dataset externo de la organización, en directo. Úsala antes de afirmar " +
+			"datos que vienen de ese sistema: es la fuente de verdad y evita inventar. Si no devuelve " +
+			"resultados, dilo en vez de suponer.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{
+					"type": "string",
+					"description": "Palabras a buscar, en español. Usa términos del dominio, " +
+						"no la frase completa del cliente.",
+				},
+				"filters": map[string]any{
+					"type": "array",
+					"description": "Condiciones exactas sobre campos concretos. Omítelo si no " +
+						"conoces el nombre del campo: la búsqueda por texto ya cubre el caso normal.",
+					"maxItems": 4,
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"field": map[string]any{"type": "string", "description": "Clave del campo."},
+							"op": map[string]any{
+								"type":        "string",
+								"enum":        []string{"eq", "contains", "in"},
+								"description": "`in` compara contra una lista separada por comas.",
+							},
+							"value": map[string]any{"type": "string"},
+						},
+						"required":             []string{"field", "op", "value"},
+						"additionalProperties": false,
+					},
+				},
+				"sort": map[string]any{
+					"type": "string",
+					"description": "Campo de orden, tal como lo espera el dataset. Vacío deja el " +
+						"orden por defecto.",
+				},
+			},
+			"additionalProperties": false,
+		},
+		Accepts:  []PayloadType{PayloadDataQuery},
+		Produces: PayloadDataRecords,
+		Config: []ConfigKey{
+			{
+				Key:      "connection",
+				Label:    "Conexión",
+				Help:     "Clave técnica de la conexión externa de la organización. El modelo no puede cambiarla.",
+				Required: true,
+				Kind:     "connection",
+			},
+			{
+				Key:      "resource",
+				Label:    "Recurso",
+				Help:     "Colección o endpoint dentro de esa API, por ejemplo `clientes` o `pedidos/abiertos`.",
+				Required: true,
+				Kind:     "text",
+			},
+			{
+				Key:   "fields",
+				Label: "Campos que puede ver",
+				Help:  "Claves separadas por coma. Vacío devuelve todos los campos que entregue el dataset.",
+				Kind:  "text",
+			},
+			{
+				Key:   "filterFields",
+				Label: "Campos por los que puede filtrar",
+				Help: "Claves separadas por coma. Vacío deja al modelo solo la búsqueda por texto; " +
+					"nunca puede filtrar por un campo que no esté aquí.",
+				Kind: "text",
+			},
+			{
+				Key:   "limit",
+				Label: "Máximo de registros",
+				Help:  "Tope de resultados que vuelven. Por defecto 8 para el agente y 10 para el grafo.",
+				Kind:  "text",
+			},
+		},
+		Effect:   EffectRead,
+		ForAgent: true,
+		ForGraph: true,
+	},
+
 	"data_mutate": {
 		Name:  "data_mutate",
 		Label: "Guardar en una tabla",

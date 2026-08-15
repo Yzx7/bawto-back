@@ -13,6 +13,7 @@ package connectors
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"slices"
 	"sort"
 	"strings"
@@ -21,18 +22,65 @@ import (
 // DriverMeudim es el backend de e-commerce headless (api.meud.im).
 const DriverMeudim = "meudim"
 
-// allowedHosts es la lista permitida por driver. Un driver nuevo entra aquí con
-// sus hosts; no basta con implementar su cliente.
+// DriverDatasetAPI es un dataset genérico servido por HTTP: la tool
+// `dataset_query` del §3 de PLAN-HACKATON-MARCA-BLANCA-Y-MCP.md. A diferencia
+// de Meudim, su host no se conoce en tiempo de compilación —lo entrega el
+// equipo del hackatón al desplegar su endpoint—, así que sus hosts no viven en
+// `allowedHosts` sino en `datasetAPIAllowedHosts`, leídos de una variable de
+// entorno. Ver esa función para el porqué.
+const DriverDatasetAPI = "dataset_api"
+
+// datasetAPIAllowedHostsEnv fija los hosts permitidos para DriverDatasetAPI,
+// separados por coma. Vacía deja la lista vacía: ninguna conexión se guarda
+// hasta declarar el host aquí, que es el fallo seguro mientras el endpoint del
+// equipo no existe. Sigue sin ser el flujo ni el panel quien lo elige.
+const datasetAPIAllowedHostsEnv = "DATASET_API_ALLOWED_HOSTS"
+
+// allowedHosts es la lista permitida por driver, para los que se conocen en
+// código. Un driver nuevo entra aquí con sus hosts; no basta con implementar
+// su cliente. DriverDatasetAPI queda fuera a propósito (ver datasetAPIAllowedHosts).
 var allowedHosts = map[string][]string{
 	DriverMeudim: {"api.meud.im"},
 }
 
+// datasetAPIAllowedHosts lee la variable de entorno en cada llamada y no una
+// sola vez al importar el paquete: los `var` de nivel de paquete corren antes
+// de que `main` cargue el `.env` con godotenv, así que cachear el valor en la
+// inicialización lo habría dejado vacío para siempre en un arranque normal.
+func datasetAPIAllowedHosts() []string {
+	raw := strings.TrimSpace(os.Getenv(datasetAPIAllowedHostsEnv))
+	if raw == "" {
+		return nil
+	}
+	var hosts []string
+	for _, part := range strings.Split(raw, ",") {
+		if host := strings.ToLower(strings.TrimSpace(part)); host != "" {
+			hosts = append(hosts, host)
+		}
+	}
+	return hosts
+}
+
+// hostsForDriver resuelve los hosts permitidos de un driver, cualquiera sea su
+// fuente. `known` distingue "el driver existe pero no tiene host configurado
+// todavía" de "el driver no existe": la primera es un problema de despliegue
+// que ValidateTarget explica con el host recibido; la segunda es la lista de
+// drivers disponibles.
+func hostsForDriver(driver string) (hosts []string, known bool) {
+	if driver == DriverDatasetAPI {
+		return datasetAPIAllowedHosts(), true
+	}
+	hosts, known = allowedHosts[driver]
+	return hosts, known
+}
+
 // Drivers devuelve los drivers conocidos en orden estable, para el panel.
 func Drivers() []string {
-	out := make([]string, 0, len(allowedHosts))
+	out := make([]string, 0, len(allowedHosts)+1)
 	for driver := range allowedHosts {
 		out = append(out, driver)
 	}
+	out = append(out, DriverDatasetAPI)
 	sort.Strings(out)
 	return out
 }
@@ -46,7 +94,7 @@ func Drivers() []string {
 // correcto para esa diferencia.
 func ValidateTarget(driver, baseURL string) error {
 	driver = strings.TrimSpace(driver)
-	hosts, known := allowedHosts[driver]
+	hosts, known := hostsForDriver(driver)
 	if !known {
 		return fmt.Errorf("driver %q no permitido; disponibles: %s", driver, strings.Join(Drivers(), ", "))
 	}
