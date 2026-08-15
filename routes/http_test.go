@@ -2,6 +2,7 @@ package routes
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
@@ -71,9 +72,71 @@ func TestRutasDeLaInterfazOperativaRegistradas(t *testing.T) {
 	}
 }
 
+// El MCP de autoría es un servicio más del backend, con su propia
+// autenticación por token HMAC. Se comprueba contra la tabla por la misma razón
+// que el resto y por una añadida: una petición sin token responde 401 exista la
+// ruta o no, así que un test por HTTP daría verde con el endpoint sin montar.
+//
+// Va montado aunque no haya base —entonces responde 503—: si la ruta
+// desapareciera, el síntoma sería «404, el endpoint no existe» y mandaría a
+// buscar el fallo al código en vez de al despliegue. `registeredPaths` usa
+// `&env.Env{}`, o sea sin Config y sin Postgres, así que esta prueba solo pasa
+// si el montaje no depende de que estén.
+func TestRutasDelServicioMCPRegistradas(t *testing.T) {
+	paths := registeredPaths(t)
+	if !paths[http.MethodPost+" /mcp/flows"] {
+		t.Error("el transporte del MCP no está montado: POST /mcp/flows")
+	}
+	// El canal servidor→cliente no se ofrece, pero la ruta existe para poder
+	// responder 405 en vez de dejar al cliente esperando un stream.
+	for _, ruta := range []string{
+		http.MethodGet + " /mcp/flows",
+		http.MethodDelete + " /mcp/flows",
+	} {
+		if !paths[ruta] {
+			t.Errorf("ruta no registrada: %s", ruta)
+		}
+	}
+}
+
+// El MCP escribe borradores y jamás publica. Si alguien montara aquí una ruta de
+// publicación, el acto humano y explícito que exige CLAUDE.md §13.7 pasaría a
+// estar al alcance de un token de máquina.
+func TestElServicioMCPNoExponePublicar(t *testing.T) {
+	for ruta := range registeredPaths(t) {
+		if strings.HasPrefix(ruta[strings.Index(ruta, " ")+1:], "/mcp/") &&
+			strings.Contains(ruta, "publish") {
+			t.Errorf("el MCP expone una ruta de publicación: %s", ruta)
+		}
+	}
+}
+
 // Una key de flujo llamada "validate-cron" es legal (`^[a-z][a-z0-9_-]{0,62}$`),
 // así que la validación de cron no puede colgar de `/flows/`: se comería el
 // flujo con esa key. Si alguien la mueve ahí, este test lo dice.
+// Las keys del MCP cuelgan de `/orgs/:orgId`, que ya tiene muchas rutas
+// paramétricas, y comparten prefijo con nada por ahora — pero `/mcp-keys/:keyId`
+// sí podría chocar con una ruta futura. Se comprueba contra la tabla porque el
+// grupo lleva VerifyToken: sin token responde 401 exista la ruta o no.
+func TestRutasDeKeysMCPDelPanelRegistradas(t *testing.T) {
+	paths := registeredPaths(t)
+	esperadas := []string{
+		http.MethodGet + " /orgs/:orgId/mcp-keys",
+		http.MethodPost + " /orgs/:orgId/mcp-keys",
+		http.MethodDelete + " /orgs/:orgId/mcp-keys/:keyId",
+	}
+	for _, ruta := range esperadas {
+		if !paths[ruta] {
+			t.Errorf("ruta no registrada: %s", ruta)
+		}
+	}
+	// No existe forma de volver a leer el secreto de una key: si alguien montara
+	// un GET por id, la promesa de «se muestra una vez» dejaría de ser cierta.
+	if paths[http.MethodGet+" /orgs/:orgId/mcp-keys/:keyId"] {
+		t.Error("una key no se puede volver a consultar: solo se muestra al crearla")
+	}
+}
+
 func TestValidateCronNoCuelgaDeFlows(t *testing.T) {
 	paths := registeredPaths(t)
 	if paths[http.MethodPost+" /bots/:botId/flows/validate-cron"] {

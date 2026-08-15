@@ -5,6 +5,7 @@ import (
 
 	"github.com/Yzx7/sacs-chatbots/controllers"
 	"github.com/Yzx7/sacs-chatbots/env"
+	"github.com/Yzx7/sacs-chatbots/mcp"
 	authmw "github.com/Yzx7/sacs-chatbots/middlewares/auth"
 	"github.com/Yzx7/sacs-chatbots/types"
 )
@@ -67,6 +68,11 @@ func RegisterHTTP(app *fiber.App, e *env.Env) {
 	org.Get("/:orgId/contact-query-fields", con.ListOrgContactQueryFields)
 	org.Post("/:orgId/data-records/:recordId/contacts/:contactId", con.LinkOrgDataRecordContact)
 	org.Delete("/:orgId/data-records/:recordId/contacts/:contactId", con.UnlinkOrgDataRecordContact)
+	// Keys del servicio MCP de autoría. Emitirlas y revocarlas es owner/admin;
+	// listarlas basta con ser miembro, porque la lista no lleva ningún secreto.
+	org.Get("/:orgId/mcp-keys", con.ListOrgMCPKeys)
+	org.Post("/:orgId/mcp-keys", con.CreateOrgMCPKey)
+	org.Delete("/:orgId/mcp-keys/:keyId", con.RevokeOrgMCPKey)
 	org.Get("/:orgId/data-objects/:objectId/views", con.ListOrgDataViews)
 	org.Post("/:orgId/data-objects/:objectId/views", con.CreateOrgDataView)
 	org.Put("/:orgId/data-objects/:objectId/views/:viewId", con.UpdateOrgDataView)
@@ -161,4 +167,16 @@ func RegisterHTTP(app *fiber.App, e *env.Env) {
 	webhook := app.Group("/webhook")
 	webhook.Get("/whatsapp", con.WhatsAppVerify)
 	webhook.Post("/whatsapp", con.WhatsAppWebhook)
+
+	// ---- MCP de autoría de flujos: un servicio más del backend ----
+	//
+	// Trae su propia autenticación, como el webhook y por la misma razón: quien
+	// llama no es el navegador del dueño con su JWT de sesión, sino el cliente de
+	// IA de alguien del equipo con un token HMAC de larga duración. La
+	// organización y los flujos que alcanza salen de su fila en `mcp_keys` y se
+	// resuelven **en cada petición**, nunca de estado compartido: un mismo
+	// proceso atiende a varias personas a la vez, y revocar una key desde el
+	// panel tiene que notarse en la llamada siguiente.
+	mcpService := mcp.NewService(e.Postgres, e.Logger)
+	mcpService.Register(app)
 }

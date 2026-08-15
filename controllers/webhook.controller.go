@@ -776,6 +776,8 @@ func (con *Controller) runFlowOrEcho(ctx context.Context, bot *models.BotChannel
 			return con.execCatalogSearch(ctx, bot, args)
 		case "catalog_product":
 			return con.execCatalogProduct(ctx, bot, args)
+		case "dataset_query":
+			return con.execDatasetQuery(ctx, bot, args)
 		case "order_create":
 			return con.execOrderCreate(ctx, bot, m.WaID, args)
 		case "payment_intent_create":
