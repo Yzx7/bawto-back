@@ -52,9 +52,10 @@ func toolDefinitions() []toolDefinition {
 		},
 		{
 			Name: "flow_spec",
-			Description: "Aprende cómo se construye un flujo: tipos de nodo con sus campos y puertos, catálogo " +
-				"de herramientas del runtime, playbooks y las reglas duras del motor. Incluye catalogHash: si " +
-				"cacheas estas reglas, compáralo antes de volver a fiarte de ellas.",
+			Description: "Aprende cómo se construye un flujo: tipos de nodo con sus campos y puertos, la forma " +
+				"exacta de cada campo estructurado (fieldShapes), catálogo de herramientas del runtime, " +
+				"playbooks y las reglas duras del motor. Incluye catalogHash: si cacheas estas reglas, " +
+				"compáralo antes de volver a fiarte de ellas.",
 			InputSchema: json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -262,11 +263,16 @@ func (s *session) flowSpec(_ context.Context, arguments json.RawMessage) (any, e
 	switch section {
 	case "all":
 		payload["nodeKinds"] = authoring.NodeCatalog()
+		payload["fieldShapes"] = nodeFieldShapes()
 		payload["runtimeTools"] = authoring.RuntimeToolCatalog()
 		payload["playbooks"] = authoring.ListPlaybooks()
 		payload["rules"] = authoringRules
 	case "nodes":
 		payload["nodeKinds"] = authoring.NodeCatalog()
+		// El catálogo dice que `tools` es un object_list pero no qué lleva el
+		// objeto, así que hasta ahora la única forma de averiguarlo era provocar
+		// el error. fieldShapes lo dice antes.
+		payload["fieldShapes"] = nodeFieldShapes()
 	case "tools":
 		payload["runtimeTools"] = authoring.RuntimeToolCatalog()
 	case "playbooks":
@@ -349,6 +355,24 @@ func (s *session) flowValidate(ctx context.Context, arguments json.RawMessage) (
 func buildReport(candidate []byte, resources authoring.AuthoringResourceSnapshot, checked bool) validationReport {
 	diagnostics := authoring.ValidateForAuthoring(candidate, resources).Diagnostics
 	report := validationReport{OK: true, EngineValid: true, ResourcesChecked: checked, Diagnostics: diagnostics}
+	for index, diagnostic := range diagnostics {
+		// Un error de forma llega aquí ya convertido en texto por authoring, con
+		// el mensaje crudo del unmarshal dentro. Se reconstruye solo en el camino
+		// de fallo —re-decodificar cuesta, y validar es la operación más
+		// llamada—, y así el modelo recibe la forma esperada en vez de nombres de
+		// tipos de Go.
+		//
+		// El código se conserva: sigue siendo un grafo que el motor rechaza, y es
+		// lo que `EngineValid` cuenta más abajo. Lo que cambia es la explicación.
+		if diagnostic.Code == "engine_invalid" {
+			if fault := shapeFault(authoring.ValidateCandidate(candidate)); fault.Code == "invalid_field_shape" {
+				diagnostics[index].Message = fault.Message
+				if path, ok := fault.Data.(map[string]any)["field"].(string); ok {
+					diagnostics[index].Path = path
+				}
+			}
+		}
+	}
 	for _, diagnostic := range diagnostics {
 		// engine_invalid es el código con el que ValidateForAuthoring envuelve el
 		// veredicto de engine.Validate; leerlo de ahí evita analizar el documento
@@ -412,24 +436,38 @@ func (s *session) flowPut(ctx context.Context, arguments json.RawMessage) (any, 
 	// error. Lo que no se admite es un documento cuyos nodos o aristas no tengan
 	// forma: eso no es un paso intermedio, es basura persistida.
 	if err := authoring.ValidateIntermediateCandidate(candidate); err != nil {
-		return nil, faultf("invalid_document", "el documento no tiene forma de flujo: %v", err)
+		return nil, shapeFault(err)
+	}
+
+	_, previous, err := engine.CanonicalChecksum(flow.Draft)
+	if err != nil {
+		return nil, err
+	}
+	// El checksum se comprueba **aquí** y no solo dentro del modelo.
+	//
+	// `updateFlowDraftTx` resuelve antes el no-op por contenido: si el documento
+	// es idéntico al borrador vivo devuelve el snapshot actual sin mirar
+	// expectedChecksum. Para el panel es lo correcto —su autosave reenvía el
+	// mismo documento continuamente y un conflicto ahí sería espurio—, pero aquí
+	// significaba que un checksum inventado colaba mientras no hubiera cambio
+	// real, y solo fallaba cuando por fin lo había.
+	//
+	// El cliente de este servicio es un modelo de lenguaje: si aprende que a
+	// veces puede mandar cualquier cosa y funciona, deja de tratar el campo como
+	// obligatorio, y para cuando el checksum importe de verdad ya habrá aprendido
+	// que el contrato es blando. Lo que forma su comportamiento es la
+	// consistencia, no la descripción del campo.
+	if expected != previous {
+		return nil, staleChecksumFault(expected, previous, flow.UpdatedAt)
 	}
 
 	snapshot, err := s.store.UpdateDraft(ctx, input.BotID, input.FlowID, candidate, expected, s.actor())
 	if err != nil {
+		// La carrera que queda: alguien escribió entre la comprobación de arriba y
+		// el lock del modelo. El modelo es la autoridad y su veredicto gana.
 		var conflict *models.DraftConflictError
 		if errors.As(err, &conflict) {
-			return nil, &toolFault{
-				Code: "draft_conflict",
-				Message: "el borrador cambió en otra sesión: no reenvíes esta copia. Vuelve a leerlo con " +
-					"flow_get, fusiona tu cambio sobre el estado vivo —incluidas posiciones y conexiones " +
-					"que haya movido una persona— y reintenta con el checksum nuevo.",
-				Data: map[string]any{
-					"expectedChecksum": conflict.ExpectedChecksum,
-					"currentChecksum":  conflict.CurrentChecksum,
-					"currentUpdatedAt": conflict.CurrentUpdatedAt,
-				},
-			}
+			return nil, staleChecksumFault(conflict.ExpectedChecksum, conflict.CurrentChecksum, conflict.CurrentUpdatedAt)
 		}
 		return nil, err
 	}
@@ -437,16 +475,10 @@ func (s *session) flowPut(ctx context.Context, arguments json.RawMessage) (any, 
 		return nil, faultf("flow_not_found", "el flujo dejó de existir antes de escribir")
 	}
 
-	// changed compara contra lo que había, no contra expectedChecksum. Cuando el
-	// candidato es idéntico al borrador vivo, models devuelve el snapshot actual
-	// sin escribir —y lo hace **antes** de mirar expectedChecksum, para que
-	// reintentar una escritura cuyo response se perdió sea idempotente—. Medirlo
-	// contra el checksum que mandó el cliente diría «cambió» en ese reintento, y
-	// el modelo se creería autor de una edición que no existió.
-	_, previous, err := engine.CanonicalChecksum(flow.Draft)
-	if err != nil {
-		return nil, err
-	}
+	// changed compara contra lo que había, no contra expectedChecksum: reenviar
+	// el mismo documento con el checksum correcto es un no-op legítimo, y decir
+	// «cambió» ahí haría que el modelo se creyera autor de una edición que no
+	// existió.
 	resources, resourceErr := s.store.Resources(ctx, s.key.OrgID, input.BotID)
 	report := buildReport(snapshot.Draft, resources, resourceErr == nil)
 	note := "Guardado como borrador. El bot sigue ejecutando la versión publicada; " +

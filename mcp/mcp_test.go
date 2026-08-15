@@ -479,30 +479,165 @@ func TestFlowPutExigeChecksumYExplicaComoResolverElConflicto(t *testing.T) {
 	}
 }
 
-// Reenviar el mismo documento no es un conflicto: models resuelve el no-op por
-// contenido antes de mirar el checksum, para que un reintento cuyo response se
-// perdió sea idempotente. Lo que no puede pasar es que la respuesta lo cuente
-// como una edición: el modelo se creería autor de un cambio inexistente y
-// seguiría construyendo sobre esa creencia.
-func TestFlowPutConDocumentoIdenticoNoEscribeNiDiceQueCambio(t *testing.T) {
+// Un checksum inventado colaba mientras el documento no cambiara: models
+// resuelve el no-op por contenido antes de mirar expectedChecksum, así que el
+// campo solo se hacía valer cuando había una edición real.
+//
+// Para el panel ese orden es correcto —su autosave reenvía el mismo documento y
+// un conflicto ahí sería espurio—, pero el cliente de este servicio es un
+// modelo: si aprende que a veces cuela cualquier cosa, deja de tratar el campo
+// como obligatorio, y cuando el checksum importe de verdad ya habrá aprendido
+// que el contrato es blando.
+func TestFlowPutRechazaUnChecksumInventadoAunqueElDocumentoNoCambie(t *testing.T) {
 	srv, store := nuevoServidor()
+
 	payload, isError := llamar(t, srv, "flow_put",
-		`{"botId":"bot-propio","flowId":"flujo-1","flow":`+flujoValido+`,"expectedChecksum":"vencido"}`)
-	if isError {
-		t.Fatalf("reenviar el mismo documento no debería fallar: %v", payload)
+		`{"botId":"bot-propio","flowId":"flujo-1","flow":`+flujoValido+`,"expectedChecksum":"0000000000000000000000000000000000000000000000000000000000000000"}`)
+	if !isError || payload["code"] != "draft_conflict" {
+		t.Fatalf("un checksum inventado con documento idéntico debería dar draft_conflict: %v", payload)
 	}
-	if payload["changed"] != false {
-		t.Fatalf("una escritura sin cambio real se reportó como cambio: %v", payload)
+	datos, _ := payload["data"].(map[string]any)
+	if datos["currentChecksum"] == "" || datos["currentChecksum"] == nil {
+		t.Fatalf("el conflicto no dice cuál es el checksum vivo: %v", payload)
 	}
 	if store.escrituras != 0 {
-		t.Fatalf("se escribió un documento idéntico al vivo")
+		t.Fatalf("se escribió pese al checksum inventado")
+	}
+
+	// Con el checksum correcto, reenviar el mismo documento sigue siendo un no-op
+	// legítimo y no un conflicto: eso es lo que hace idempotente un reintento
+	// cuya respuesta se perdió.
+	lectura, _ := llamar(t, srv, "flow_get", `{"botId":"bot-propio","flowId":"flujo-1"}`)
+	flow, _ := lectura["flow"].(map[string]any)
+	checksum, _ := flow["draftChecksum"].(string)
+	repetido, isError := llamar(t, srv, "flow_put",
+		`{"botId":"bot-propio","flowId":"flujo-1","flow":`+flujoValido+`,"expectedChecksum":"`+checksum+`"}`)
+	if isError || repetido["changed"] != false || repetido["saved"] != true {
+		t.Fatalf("reenviar el mismo documento con el checksum vivo debería ser un no-op: %v", repetido)
+	}
+	if store.escrituras != 0 {
+		t.Fatalf("un no-op llegó a escribir")
 	}
 }
 
-// engineValid y ok responden preguntas distintas: publicable para el motor, y
-// sin ninguna observación de autoría. El borrador vivo de Sistemuino pasa lo
-// primero y falla lo segundo; fundirlas mandaría a una IA a reescribir flujos
-// que el panel publica sin protestar.
+// Un error de forma decía «json: cannot unmarshal string into Go struct field
+// Node.nodes.tools of type engine.NodeTool»: nombra el problema, no la solución,
+// y filtra tipos de Go a un cliente externo.
+func TestUnErrorDeFormaDiceLaFormaEsperadaYNoElMensajeDeGo(t *testing.T) {
+	srv, _ := nuevoServidor()
+	// `tools` como lista de strings en vez de lista de objetos.
+	malformado := strings.Replace(flujoValido,
+		`{"id": "n_saludo", "kind": "send", "body": "hola", "pos": {"x": 40, "y": 120}}`,
+		`{"id": "n_saludo", "kind": "agent", "instruction": "x", "outputs": ["ok"], "tools": ["data_query"], "pos": {"x": 40, "y": 120}}`, 1)
+
+	escritura, isError := llamar(t, srv, "flow_put",
+		`{"botId":"bot-propio","flowId":"flujo-1","flow":`+malformado+`,"expectedChecksum":"x"}`)
+	if !isError || escritura["code"] != "invalid_field_shape" {
+		t.Fatalf("se esperaba invalid_field_shape: %v", escritura)
+	}
+	mensaje, _ := escritura["message"].(string)
+	if strings.Contains(mensaje, "engine.NodeTool") || strings.Contains(mensaje, "cannot unmarshal") ||
+		strings.Contains(mensaje, "Go struct") {
+		t.Fatalf("el mensaje filtra internals de Go: %q", mensaje)
+	}
+	if !strings.Contains(mensaje, "tools") || !strings.Contains(mensaje, "lista de objetos") {
+		t.Fatalf("el mensaje no dice qué forma se espera: %q", mensaje)
+	}
+	datos, _ := escritura["data"].(map[string]any)
+	esperado, _ := datos["expected"].([]any)
+	if len(esperado) != 1 {
+		t.Fatalf("data.expected no trae el esqueleto de la lista: %v", datos)
+	}
+	forma, _ := esperado[0].(map[string]any)
+	if forma["ref"] != "string (obligatorio)" {
+		t.Fatalf("el esqueleto no marca `ref` como obligatorio: %v", forma)
+	}
+	if forma["config"] == nil {
+		t.Fatalf("el esqueleto omite `config`: %v", forma)
+	}
+
+	// flow_validate atraviesa otro camino —authoring convierte el error en texto—
+	// y tiene que explicarlo igual, o el ciclo de prueba y error se queda sin la
+	// pista justo donde más se usa.
+	validacion, _ := llamar(t, srv, "flow_validate", `{"flow": `+malformado+`}`)
+	if validacion["engineValid"] != false {
+		t.Fatalf("el motor debería rechazar el grafo: %v", validacion)
+	}
+	diagnosticos, _ := validacion["diagnostics"].([]any)
+	encontrado := false
+	for _, entrada := range diagnosticos {
+		diagnostico, _ := entrada.(map[string]any)
+		mensaje, _ := diagnostico["message"].(string)
+		if strings.Contains(mensaje, "cannot unmarshal") || strings.Contains(mensaje, "engine.") {
+			t.Fatalf("flow_validate filtra el mensaje de Go: %q", mensaje)
+		}
+		if diagnostico["path"] == "nodes.tools" && strings.Contains(mensaje, "lista de objetos") {
+			encontrado = true
+		}
+	}
+	if !encontrado {
+		t.Fatalf("flow_validate no señala el campo ni su forma: %v", diagnosticos)
+	}
+}
+
+// El mismo tratamiento vale para cualquier campo estructurado del nodo, no solo
+// para `tools`: la explicación se deriva de engine.Node por reflexión, así que
+// un campo nuevo del motor queda cubierto sin tocar nada.
+func TestLaFormaEsperadaCubreTodosLosCamposEstructurados(t *testing.T) {
+	srv, _ := nuevoServidor()
+	casos := []struct {
+		campo string
+		nodo  string
+	}{
+		{"nodes.outputFields", `{"id":"n_saludo","kind":"agent","instruction":"x","outputs":["ok"],"outputFields":["monto"]}`},
+		{"nodes.cases", `{"id":"n_saludo","kind":"router","cases":["algo"]}`},
+		{"nodes.args", `{"id":"n_saludo","kind":"tool","toolRef":"data_query","args":["x"]}`},
+		{"nodes.params", `{"id":"n_saludo","kind":"action","action":"set","params":"x"}`},
+	}
+	for _, caso := range casos {
+		documento := strings.Replace(flujoValido,
+			`{"id": "n_saludo", "kind": "send", "body": "hola", "pos": {"x": 40, "y": 120}}`, caso.nodo, 1)
+		payload, isError := llamar(t, srv, "flow_validate", `{"flow": `+documento+`}`)
+		if isError {
+			t.Fatalf("%s: flow_validate falló como herramienta: %v", caso.campo, payload)
+		}
+		diagnosticos, _ := payload["diagnostics"].([]any)
+		for _, entrada := range diagnosticos {
+			diagnostico, _ := entrada.(map[string]any)
+			mensaje, _ := diagnostico["message"].(string)
+			if strings.Contains(mensaje, "cannot unmarshal") || strings.Contains(mensaje, "Go struct") {
+				t.Fatalf("%s filtra el mensaje de Go: %q", caso.campo, mensaje)
+			}
+		}
+	}
+}
+
+// El esquema publicado sale de la misma struct que valida, así que no puede
+// desincronizarse del que rechaza el documento.
+func TestFlowSpecPublicaLaFormaDeLosCamposEstructurados(t *testing.T) {
+	srv, _ := nuevoServidor()
+	for _, seccion := range []string{`{}`, `{"section":"nodes"}`} {
+		payload, isError := llamar(t, srv, "flow_spec", seccion)
+		if isError {
+			t.Fatalf("flow_spec %s falló: %v", seccion, payload)
+		}
+		shapes, _ := payload["fieldShapes"].(map[string]any)
+		for _, campo := range []string{"tools", "outputFields", "cases", "args", "params"} {
+			if shapes[campo] == nil {
+				t.Fatalf("flow_spec %s no documenta la forma de %s: %v", seccion, campo, shapes)
+			}
+		}
+		lista, _ := shapes["tools"].([]any)
+		if len(lista) != 1 {
+			t.Fatalf("tools debería describirse como lista: %v", shapes["tools"])
+		}
+		forma, _ := lista[0].(map[string]any)
+		if forma["ref"] != "string (obligatorio)" || forma["config"] == nil {
+			t.Fatalf("la forma de tools no coincide con engine.NodeTool: %v", forma)
+		}
+	}
+}
+
 func TestFlowValidateDistingueMotorDeAutoria(t *testing.T) {
 	srv, _ := nuevoServidor()
 	// Dos bloques que guardan en la misma variable: el motor lo acepta, la
