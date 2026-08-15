@@ -19,7 +19,7 @@ Internet
    ▼
 nginx @ yuriser-contabo (80.190.72.130, SSH puerto 22)
    ├─ /webhook/whatsapp (exacto) → bawto_backend
-   │      ├─ primario: 10.11.12.2:3009  ← VPN VIEJA, ver aviso abajo
+   │      ├─ primario: 10.12.12.2:3009 (PC por WireGuard, APP_ENV=dev)
    │      └─ backup:   127.0.0.1:3009 (server, APP_ENV=prod)
    │
    └─ resto de rutas → Next.js 127.0.0.1:3010 (Docker)
@@ -33,15 +33,20 @@ Postgres 16 vive en el mismo server y escucha en 127.0.0.1 y 10.12.12.1.
 > **10.12.12.1**, y la PC entra como **10.12.12.2**; SSH es el **puerto 22**, no
 > el 22022. El anterior era `209.74.83.236` con VPN `10.11.12.x`.
 >
-> **El failover del webhook está roto y nadie lo nota.** El `upstream
-> bawto_backend` de `/etc/nginx/sites-available/bawto.conf` sigue apuntando a
-> `10.11.12.2:3009`, una IP que ya no existe. La PC nunca es primario: cada POST
-> de Meta espera los 3 s del `proxy_connect_timeout` y cae al backup. Se ve con
-> `curl -s -o /dev/null -w '%{time_total}\n'` sobre el webhook — 3,5 s en vez de
-> ~0,3 s— y ese síntoma es idéntico al de la PC apagada, así que no distingue un
-> caso del otro. El arreglo es cambiar esa línea a `10.12.12.2:3009` y recargar
-> nginx; hasta entonces, desplegar solo el server basta porque **solo el server
-> atiende**.
+> El `upstream bawto_backend` quedó apuntando a `10.11.12.2:3009` tras la
+> migración, así que durante días **la PC no pudo ser primario** y todo lo
+> atendió el backup. Corregido el 2026-08-14 a `10.12.12.2:3009` (respaldo
+> `bawto.conf.bak-20260814-*`), verificado con la PC encendida: el webhook bajó
+> de 3,4 s a **0,5 s** y las peticiones aparecen en `logs/whatsapp.log` de la PC.
+
+> **Los 3 s no distinguen «mal configurado» de «PC apagada».** Windows descarta
+> los paquetes al puerto cerrado en vez de rechazarlos, así que un upstream
+> correcto con la PC apagada tarda exactamente lo mismo que un upstream que
+> apunta a una IP inexistente. Medir el webhook solo demuestra algo **con el
+> backend local encendido**; si no, hay que mirar la config y `ip addr` del
+> túnel. La PC mantiene varias interfaces WireGuard a la vez (`wgYuri`
+> 10.11.12.2 y `wgYuri2` 10.12.12.2 conviven), de modo que la IP vieja sigue
+> existiendo localmente y tampoco delata el problema.
 
 - El panel y sus rutas autenticadas siempre usan el backend local del server.
 - Solo el webhook exacto conserva el failover PC → server.
