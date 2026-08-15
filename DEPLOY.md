@@ -5,11 +5,16 @@ frontend y topología verificados el 2026-08-07 desplegando de verdad: el
 procedimiento del frontend estaba sin documentar y hubo que reconstruirlo
 leyendo los scripts del server.
 
-**Último despliegue del backend: `199ad9f` el 2026-08-14**, SHA256
-`172b6b459c2533af362098c092e4f0db46cf933cd72e5e3ac3c7360dda61b244`, verificado
-en disco y en `/proc/<pid>/exe`. El anterior quedó en
-`/opt/bawto/bawto-backend.pre-199ad9f` (`49eace35…`), así que revertir es un
-`mv` más un `systemctl restart`.
+**Último despliegue: 2026-08-15.** Backend `739db09`, SHA256
+`0e2a892f843e0fe48227f90b5717d45376f42dc7144ed371374798ab6193587a`, verificado
+en disco y en `/proc/<pid>/exe`; el anterior quedó en
+`/opt/bawto/bawto-backend.pre-739db09`, así que revertir es un `mv` más un
+`systemctl restart`. Frontend `08d059b` en la imagen `bawto-frontend:20260815-3`.
+Migración **029 aplicada** (respaldo previo en
+`/var/lib/postgresql/backups/sacs_chatbots-pre-029-20260815-0154.dump`).
+
+Novedades de ese despliegue: el servicio MCP en `POST /mcp/flows`, la tool
+`dataset_query`, y la **segunda marca** `fludix.yurirodrix.top`.
 
 ## Topología
 
@@ -18,13 +23,20 @@ Internet
    │ https://bawto.sistemuino.com
    ▼
 nginx @ yuriser-contabo (80.190.72.130, SSH puerto 22)
-   ├─ /webhook/whatsapp (exacto) → bawto_backend
-   │      ├─ primario: 10.12.12.2:3009 (PC por WireGuard, APP_ENV=dev)
-   │      └─ backup:   127.0.0.1:3009 (server, APP_ENV=prod)
    │
-   └─ resto de rutas → Next.js 127.0.0.1:3010 (Docker)
-          ├─ Better Auth + JWKS
-          └─ /api/* → backend local 127.0.0.1:3009
+   ├─ bawto.sistemuino.com  (bawto.conf)
+   │    ├─ /webhook/whatsapp (exacto) → bawto_backend
+   │    │      ├─ primario: 10.12.12.2:3009 (PC por WireGuard, APP_ENV=dev)
+   │    │      └─ backup:   127.0.0.1:3009 (server, APP_ENV=prod)
+   │    ├─ /mcp/  → 127.0.0.1:3009 directo, SIN failover
+   │    └─ resto  → Next.js 127.0.0.1:3010 (Docker)
+   │                 ├─ Better Auth + JWKS
+   │                 └─ /api/* → backend local 127.0.0.1:3009
+   │
+   └─ fludix.yurirodrix.top  (fludix.conf) — segunda marca
+        ├─ /mcp/  → 127.0.0.1:3009
+        └─ resto  → el MISMO contenedor Next.js
+             (sin webhook: pertenece al dominio real)
 
 Postgres 16 vive en el mismo server y escucha en 127.0.0.1 y 10.12.12.1.
 ```
@@ -289,6 +301,72 @@ El resto (claves de cifrado, secretos de Meta, IA) es idéntico.
 > Nota: `SERVER_PORT` acepta forma `host:puerto` desde el fix de
 > `config/config.go` (commit `fa19769`); binarios anteriores solo aceptaban
 > `:puerto`.
+
+## Verificar el frontend: `next build` NO reproduce el contenedor
+
+Aprendido rompiendo producción el 2026-08-15. La portada devolvía **500 en las
+dos marcas** con un build que había pasado `tsc`, `eslint`, `next build` y
+pruebas con `next start` en dos dominios.
+
+Hacen falta **dos cosas a la vez** para que el fallo aparezca: el binario
+**standalone** —que es lo que corre en el contenedor, no `next start`— y la
+cabecera `X-Forwarded-Proto: https` que pone nginx. Con ambas, `nextUrl` mezcla
+el esquema `https` con el host interno `localhost:3010`; ese par no existe, así
+que un `NextResponse.rewrite` deja de ser interno, Next intenta salir a la red y
+muere con `EPROTO: wrong version number`.
+
+Antes de desplegar algo que dependa del proxy o del dominio:
+
+```bash
+cd frontend && pnpm exec next build
+cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/
+cd .next/standalone && PORT=3315 HOSTNAME=127.0.0.1 node server.js
+# y probar con la cabecera que pone nginx:
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H 'Host: fludix.yurirodrix.top' -H 'X-Forwarded-Proto: https' \
+  http://127.0.0.1:3315/
+```
+
+La portada se elige con `rewrites` de `next.config.ts`, no desde `proxy.ts`:
+actúan en el enrutado y no construyen ninguna URL absoluta, así que el problema
+no puede darse.
+
+## La sesión se resuelve por dominio
+
+`lib/auth.ts` pasa `baseURL` como **objeto** con `allowedHosts`, no como cadena.
+Es lo que activa la resolución por petición y hace que cada marca conserve su
+dominio al iniciar sesión; con una cadena, quien entra por Fludix acaba en
+Bawto.
+
+Dos trampas comprobadas: **quitar `baseURL` no basta**, porque Better Auth lee
+`BETTER_AUTH_URL` del entorno por su cuenta; y sin ninguna de las dos cae al
+host del socket (`localhost:3010`). El `fallback` existe para que un host que no
+resuelva acabe en el dominio real en vez de dejar a nadie sin entrar.
+
+**Un dominio nuevo necesita dos registros, no uno**: entrar en `allowedHosts` y
+darse de alta como URI de redirección autorizada en Google Cloud Console
+(`https://<dominio>/api/auth/callback/google`). Sin lo segundo, Google rechaza
+con `redirect_uri_mismatch`.
+
+Las cookies se emiten por dominio y `bawto.sistemuino.com` y
+`fludix.yurirodrix.top` no comparten sufijo: **cada marca tiene su sesión**.
+
+## Certificados: el plugin de certbot tiene que estar instalado
+
+`python3-certbot-nginx` **no estaba** el 2026-08-15, y los certificados
+existentes se habían emitido con `authenticator = nginx`. Es decir, las
+renovaciones venían fallando en silencio: `bibunmsm.lat` caducó el 2026-07-04 y
+`bawto.sistemuino.com` habría perdido HTTPS en su siguiente renovación,
+llevándose por delante el panel y el webhook.
+
+```bash
+certbot certificates | grep -E 'Certificate Name|Expiry'   # ninguno INVALID
+certbot plugins | grep nginx                               # tiene que aparecer
+```
+
+Un dominio nuevo se añade con
+`certbot --nginx -d <dominio> --redirect`, que escribe el bloque TLS en su
+`.conf` y recarga nginx.
 
 ## Caveats conocidos
 
