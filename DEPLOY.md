@@ -5,11 +5,13 @@ frontend y topología verificados el 2026-08-07 desplegando de verdad: el
 procedimiento del frontend estaba sin documentar y hubo que reconstruirlo
 leyendo los scripts del server.
 
-**Último despliegue: 2026-08-15.** Backend `739db09`, SHA256
-`0e2a892f843e0fe48227f90b5717d45376f42dc7144ed371374798ab6193587a`, verificado
+**Último despliegue: 2026-08-15.** Backend `6670e6f`, SHA256
+`3838aa23efdeb1888d7b689887a8522edb7eaed78106be020256099f137425ab`, verificado
 en disco y en `/proc/<pid>/exe`; el anterior quedó en
-`/opt/bawto/bawto-backend.pre-739db09`, así que revertir es un `mv` más un
-`systemctl restart`. Frontend `b8d7462` en la imagen `bawto-frontend:20260815-6`
+`/opt/bawto/bawto-backend.pre-6670e6f`, así que revertir es un `mv` más un
+`systemctl restart`. Trae el descarte del mensaje entrante sin `from`, que hasta
+ahora fabricaba un chat con `contact` vacío y perdía el mensaje sin dejar más
+rastro que un «wa ensure contact». Frontend `b8d7462` en la imagen `bawto-frontend:20260815-6`
 —el puerto del nodo de entrada del editor pasa a llamarse `out`, que es como ya
 lo nombraban el resto del editor y el catálogo del MCP: sin ese id, una arista
 escrita con `sourceHandle:"out"` no resolvía su handle y React Flow la
