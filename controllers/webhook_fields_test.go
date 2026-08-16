@@ -104,3 +104,65 @@ func TestCampoDesconocidoNoAfectaALosDemas(t *testing.T) {
 		t.Fatalf("advirtió del campo equivocado: %q", out)
 	}
 }
+
+// Meta entregó tres mensajes seguidos sin `from` el 2026-08-15 (bot Lered). El
+// código de entonces seguía adelante: `UpsertChat` creaba un chat con `contact`
+// vacío —y lo reutilizaba en cada mensaje siguiente por el índice
+// (bot_id, contact)—, `EnsureInboundContact` lo rechazaba con «teléfono
+// inválido» y el mensaje se perdía. En el panel quedaba una conversación con
+// nombre, sin mensajes y con la ventana de 24 h siempre cerrada.
+//
+// El pool es nil a propósito: si el mensaje volviera a llegar a la base, el
+// primer acceso reventaría en vez de pasar la prueba.
+func TestMensajeSinRemitenteNoLlegaALaBase(t *testing.T) {
+	e, buf := loggerBuffer()
+	con := New(e)
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("un mensaje sin remitente alcanzó la base: %v", r)
+		}
+	}()
+
+	con.processWhatsApp([]byte(`{"entry":[{"changes":[{"field":"messages","value":{
+		"messaging_product":"whatsapp",
+		"metadata":{"display_phone_number":"51999000111","phone_number_id":"1302561912931418"},
+		"contacts":[{"profile":{"name":"Angelo"},"wa_id":"51987654321"}],
+		"messages":[{"id":"wamid.SINREMITENTE","timestamp":"1755300000",
+			"type":"text","text":{"body":"quiero contratar el plan"}}]}}]}]}`))
+
+	out := buf.String()
+	if !strings.Contains(out, "mensaje entrante sin remitente") {
+		t.Fatalf("no se advirtió del mensaje sin remitente: %q", out)
+	}
+	// La forma del mensaje es lo que permite averiguar qué manda Meta.
+	if !strings.Contains(out, "campos=id,text,timestamp,type") {
+		t.Fatalf("la advertencia no nombra los campos del mensaje: %q", out)
+	}
+	if !strings.Contains(out, "wamid.SINREMITENTE") {
+		t.Fatalf("la advertencia no identifica el mensaje: %q", out)
+	}
+}
+
+// La advertencia no es excusa para volcar al log lo que escribió el cliente ni
+// quién es: vale la forma del mensaje, nunca su contenido.
+func TestAdvertenciaSinRemitenteNoFiltraContenido(t *testing.T) {
+	e, buf := loggerBuffer()
+	con := New(e)
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("un mensaje sin remitente alcanzó la base: %v", r)
+		}
+	}()
+
+	con.processWhatsApp([]byte(`{"entry":[{"changes":[{"field":"messages","value":{
+		"metadata":{"phone_number_id":"1302561912931418"},
+		"contacts":[{"profile":{"name":"Angelo"},"wa_id":"51987654321"}],
+		"messages":[{"id":"wamid.X","type":"text","text":{"body":"datos privados"}}]}}]}]}`))
+
+	out := buf.String()
+	for _, secreto := range []string{"datos privados", "Angelo", "51987654321"} {
+		if strings.Contains(out, secreto) {
+			t.Fatalf("el log filtró contenido del cliente (%q): %s", secreto, out)
+		}
+	}
+}

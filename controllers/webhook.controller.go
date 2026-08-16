@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -82,6 +83,22 @@ func (con *Controller) processWhatsApp(body []byte) {
 	}
 
 	for _, m := range msgs {
+		// Un mensaje sin remitente no se puede contestar ni atribuir a un
+		// contacto. Antes se seguía adelante igualmente: `UpsertChat` creaba —y
+		// después reutilizaba, por el índice (bot_id, contact)— un chat con
+		// `contact` vacío, que el panel lista como una conversación normal con
+		// la ventana de 24 h siempre cerrada y ni un solo mensaje dentro. El
+		// mensaje moría dos líneas más abajo en `EnsureInboundContact`, así que
+		// quien miraba ese chat veía al bot mudo sin ninguna pista del motivo.
+		// Se descarta antes de tocar la base y se deja traza de la *forma* del
+		// mensaje —nunca de su contenido, que no va a los logs— porque es lo
+		// único que permite averiguar por qué Meta lo mandó así.
+		if models.NormalizePhone(m.From) == "" {
+			con.whatsAppLogger().Warn("mensaje entrante sin remitente: se descarta",
+				"channel_id", m.ChannelID, "wa_id", m.WaID, "type", string(m.Type),
+				"campos", messageFieldNames(m.Raw))
+			continue
+		}
 		bot, err := models.GetBotByChannel(ctx, pool, whatsapp.Channel, m.ChannelID)
 		if err != nil || bot == nil {
 			continue
@@ -426,6 +443,22 @@ func (con *Controller) warnUnhandledFields(body []byte) {
 				"field", change.Field, "bytes", len(change.Value))
 		}
 	}
+}
+
+// messageFieldNames devuelve las claves de primer nivel del mensaje, ordenadas.
+// Identifica la forma de un payload inesperado sin volcar nada del cliente: los
+// valores llevan teléfono, nombre y texto, y esos no van al log.
+func messageFieldNames(raw json.RawMessage) string {
+	var fields map[string]json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &fields) != nil {
+		return ""
+	}
+	names := make([]string, 0, len(fields))
+	for name := range fields {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ",")
 }
 
 // handledWebhookFields son los campos que algún parser reclama. Añadir un
