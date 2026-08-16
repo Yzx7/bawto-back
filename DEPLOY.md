@@ -9,7 +9,13 @@ leyendo los scripts del server.
 `0e2a892f843e0fe48227f90b5717d45376f42dc7144ed371374798ab6193587a`, verificado
 en disco y en `/proc/<pid>/exe`; el anterior quedó en
 `/opt/bawto/bawto-backend.pre-739db09`, así que revertir es un `mv` más un
-`systemctl restart`. Frontend `08d059b` en la imagen `bawto-frontend:20260815-3`.
+`systemctl restart`. Frontend `b8d7462` en la imagen `bawto-frontend:20260815-6`
+—el puerto del nodo de entrada del editor pasa a llamarse `out`, que es como ya
+lo nombraban el resto del editor y el catálogo del MCP: sin ese id, una arista
+escrita con `sourceHandle:"out"` no resolvía su handle y React Flow la
+descartaba sin log, dejando la Entrada suelta en el lienzo aunque el flujo
+corriera bien—; la imagen anterior, `bawto-frontend:20260815-5`, sigue en el
+server para revertir.
 Migración **029 aplicada** (respaldo previo en
 `/var/lib/postgresql/backups/sacs_chatbots-pre-029-20260815-0154.dump`).
 
