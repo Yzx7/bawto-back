@@ -5,15 +5,16 @@ frontend y topología verificados el 2026-08-07 desplegando de verdad: el
 procedimiento del frontend estaba sin documentar y hubo que reconstruirlo
 leyendo los scripts del server.
 
-**Último despliegue: 2026-08-15.** Backend `a0d54d6`, SHA256
-`e40b1e8a5b5579c74d27728f21d8f3fae1a166dcef5ac5ca476d79962efcd711`, verificado
-en disco y en `/proc/<pid>/exe`; el anterior quedó en
-`/opt/bawto/bawto-backend.pre-bsuid`, así que revertir es un `mv` más un
-`systemctl restart`. Trae la **identidad por BSUID**: el contacto ya no se
-reconoce por su teléfono, porque Meta deja de mandarlo en cuanto el cliente
-adopta un nombre de usuario de WhatsApp. Migración **030 aplicada** (respaldo
-previo en
-`/var/lib/postgresql/backups/sacs_chatbots-pre-030-20260815.dump`).
+**Último despliegue: 2026-08-15.** Backend `57c0793`, SHA256
+`919dc6389f40b6c74a5f141e06070c68a5ece1f1d2cd42a48304fca874af221f`, verificado
+en disco y en `/proc/96173/exe`; el anterior quedó en
+`/opt/bawto/bawto-backend.pre-bsuid` (para `a0d54d6`). Trae la **identidad por
+BSUID** (migración **030 aplicada**, respaldo previo en
+`/var/lib/postgresql/backups/sacs_chatbots-pre-030-20260815.dump`) y el arreglo
+de la vista previa de audiencia (`models/flow_audience_preview.go`), que
+reventaba con `cannot scan NULL into *string` al encontrar un contacto con
+`phone_normalized` NULL y ahora cae al BSUID (`channel_user_id`) como identidad
+mostrable.
 
 > **La 030 y el binario van juntos.** Retira `chats.contact` y
 > `chats.contact_name`, así que un binario anterior falla contra el esquema
