@@ -361,8 +361,8 @@ func TestCortarConAudienciaEsQuirurgico(t *testing.T) {
 		}
 		var chatID string
 		if err := pool.QueryRow(ctx,
-			`INSERT INTO chats (bot_id, contact, current_layer) VALUES ($1::uuid,$2,$3::jsonb) RETURNING id::text`,
-			bot.ID, c.PhoneNormalized,
+			`INSERT INTO chats (bot_id, contact_id, current_layer) VALUES ($1::uuid,$2::uuid,$3::jsonb) RETURNING id::text`,
+			bot.ID, c.ID,
 			`{"flowId":"`+flowID+`","nodeId":"n_espera"}`).Scan(&chatID); err != nil {
 			t.Fatalf("insert chat %s: %v", phone, err)
 		}
@@ -436,8 +436,8 @@ func TestCortarSinAudienciaCortaLasDeEseFlujo(t *testing.T) {
 			t.Fatalf("SaveContactByOrg: %v", err)
 		}
 		if _, err := pool.Exec(ctx,
-			`INSERT INTO chats (bot_id, contact, current_layer) VALUES ($1::uuid,$2,$3::jsonb)`,
-			bot.ID, c.PhoneNormalized, `{"flowId":"`+caso.flowID+`","nodeId":"n"}`); err != nil {
+			`INSERT INTO chats (bot_id, contact_id, current_layer) VALUES ($1::uuid,$2::uuid,$3::jsonb)`,
+			bot.ID, c.ID, `{"flowId":"`+caso.flowID+`","nodeId":"n"}`); err != nil {
 			t.Fatalf("insert chat: %v", err)
 		}
 	}
@@ -531,5 +531,44 @@ func TestAsignarYRetirarAudiencia(t *testing.T) {
 	// Una condición inválida no se guarda a medias: el flujo se queda como estaba.
 	if _, err := SetFlowAudience(ctx, pool, bot.ID, flow.ID, json.RawMessage(`{"object":"perfiles_test"}`), "tester"); err == nil {
 		t.Fatal("sin linkCurrentContact no debe poder asignarse")
+	}
+}
+
+// Un contacto sin teléfono —el cliente que adoptó un nombre de usuario de
+// WhatsApp— no puede tumbar la vista previa de la audiencia. Rompió el panel el
+// 2026-08-15, en cuanto la migración 030 permitió `phone_normalized` nulo: la
+// pantalla entera respondía «cannot scan NULL into *string» aunque el contacto
+// sin número ni siquiera fuese el que el autor estaba buscando.
+func TestVistaPreviaAdmiteContactoSinTelefono(t *testing.T) {
+	pool, ctx := flowTestPool(t)
+	bot := botDePrueba(t, ctx, pool, "audsin_")
+
+	sinTelefono, err := EnsureInboundContact(ctx, pool, bot.ID, ChannelIdentity{
+		UserID: randID("PE.15074507378"), Name: "Angelo",
+	})
+	if err != nil {
+		t.Fatalf("EnsureInboundContact: %v", err)
+	}
+	if sinTelefono.PhoneNormalized != "" {
+		t.Fatalf("el contacto no debería tener teléfono: %q", sinTelefono.PhoneNormalized)
+	}
+
+	preview, err := PreviewAudience(ctx, pool, bot.OrgID, nil)
+	if err != nil {
+		t.Fatalf("PreviewAudience: %v", err)
+	}
+	var visto *AudienceContact
+	for i := range preview.Contacts {
+		if preview.Contacts[i].ID == sinTelefono.ID {
+			visto = &preview.Contacts[i]
+		}
+	}
+	if visto == nil {
+		t.Fatalf("el contacto sin teléfono no aparece en la vista previa (%d contactos)", len(preview.Contacts))
+	}
+	// Sin número, la identidad mostrable es el BSUID: una celda vacía no
+	// permitiría distinguir a dos clientes con el mismo nombre.
+	if visto.Phone != sinTelefono.ChannelUserID {
+		t.Fatalf("identidad mostrable equivocada: %q, esperaba %q", visto.Phone, sinTelefono.ChannelUserID)
 	}
 }

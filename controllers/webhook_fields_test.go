@@ -114,7 +114,7 @@ func TestCampoDesconocidoNoAfectaALosDemas(t *testing.T) {
 //
 // El pool es nil a propósito: si el mensaje volviera a llegar a la base, el
 // primer acceso reventaría en vez de pasar la prueba.
-func TestMensajeSinRemitenteNoLlegaALaBase(t *testing.T) {
+func TestMensajeSinIdentidadNoLlegaALaBase(t *testing.T) {
 	e, buf := loggerBuffer()
 	con := New(e)
 	defer func() {
@@ -131,8 +131,8 @@ func TestMensajeSinRemitenteNoLlegaALaBase(t *testing.T) {
 			"type":"text","text":{"body":"quiero contratar el plan"}}]}}]}]}`))
 
 	out := buf.String()
-	if !strings.Contains(out, "mensaje entrante sin remitente") {
-		t.Fatalf("no se advirtió del mensaje sin remitente: %q", out)
+	if !strings.Contains(out, "mensaje entrante sin identidad") {
+		t.Fatalf("no se advirtió del mensaje sin identidad: %q", out)
 	}
 	// La forma del mensaje es lo que permite averiguar qué manda Meta.
 	if !strings.Contains(out, "campos=id,text,timestamp,type") {
@@ -145,7 +145,7 @@ func TestMensajeSinRemitenteNoLlegaALaBase(t *testing.T) {
 
 // La advertencia no es excusa para volcar al log lo que escribió el cliente ni
 // quién es: vale la forma del mensaje, nunca su contenido.
-func TestAdvertenciaSinRemitenteNoFiltraContenido(t *testing.T) {
+func TestAdvertenciaSinIdentidadNoFiltraContenido(t *testing.T) {
 	e, buf := loggerBuffer()
 	con := New(e)
 	defer func() {

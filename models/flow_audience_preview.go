@@ -77,7 +77,14 @@ func PreviewAudience(ctx context.Context, p *pgxpool.Pool, orgID string, raw jso
 	// exige que toda expresión del ORDER BY esté en la proyección, y ahí está el
 	// texto, no el uuid. Con `c.id` responde 42P10 en ejecución, no al compilar.
 	rows, err := p.Query(ctx,
-		`SELECT DISTINCT c.id::text, c.phone_normalized, c.name, c.status, c.created_at `+base+
+		// La identidad mostrable cae al BSUID cuando no hay teléfono. Desde los
+		// nombres de usuario de WhatsApp `phone_normalized` puede ser NULL, y
+		// sin el COALESCE la vista previa entera revienta con «cannot scan NULL
+		// into *string» en cuanto un solo contacto de la audiencia oculta su
+		// número. Es la misma expresión que usa la bandeja.
+		`SELECT DISTINCT c.id::text,
+			COALESCE(NULLIF(c.phone_normalized,''), c.channel_user_id, '') AS phone,
+			c.name, c.status, c.created_at `+base+
 			` ORDER BY c.created_at DESC, c.id::text LIMIT `+strconv.Itoa(audiencePreviewMax), args...)
 	if err != nil {
 		return nil, err
