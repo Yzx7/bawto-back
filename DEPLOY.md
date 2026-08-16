@@ -5,24 +5,33 @@ frontend y topología verificados el 2026-08-07 desplegando de verdad: el
 procedimiento del frontend estaba sin documentar y hubo que reconstruirlo
 leyendo los scripts del server.
 
-**Último despliegue: 2026-08-15.** Backend `6670e6f`, SHA256
-`3838aa23efdeb1888d7b689887a8522edb7eaed78106be020256099f137425ab`, verificado
+**Último despliegue: 2026-08-15.** Backend `a0d54d6`, SHA256
+`e40b1e8a5b5579c74d27728f21d8f3fae1a166dcef5ac5ca476d79962efcd711`, verificado
 en disco y en `/proc/<pid>/exe`; el anterior quedó en
-`/opt/bawto/bawto-backend.pre-6670e6f`, así que revertir es un `mv` más un
-`systemctl restart`. Trae el descarte del mensaje entrante sin `from`, que hasta
-ahora fabricaba un chat con `contact` vacío y perdía el mensaje sin dejar más
-rastro que un «wa ensure contact». Frontend `b8d7462` en la imagen `bawto-frontend:20260815-6`
-—el puerto del nodo de entrada del editor pasa a llamarse `out`, que es como ya
-lo nombraban el resto del editor y el catálogo del MCP: sin ese id, una arista
-escrita con `sourceHandle:"out"` no resolvía su handle y React Flow la
-descartaba sin log, dejando la Entrada suelta en el lienzo aunque el flujo
-corriera bien—; la imagen anterior, `bawto-frontend:20260815-5`, sigue en el
-server para revertir.
-Migración **029 aplicada** (respaldo previo en
-`/var/lib/postgresql/backups/sacs_chatbots-pre-029-20260815-0154.dump`).
+`/opt/bawto/bawto-backend.pre-bsuid`, así que revertir es un `mv` más un
+`systemctl restart`. Trae la **identidad por BSUID**: el contacto ya no se
+reconoce por su teléfono, porque Meta deja de mandarlo en cuanto el cliente
+adopta un nombre de usuario de WhatsApp. Migración **030 aplicada** (respaldo
+previo en
+`/var/lib/postgresql/backups/sacs_chatbots-pre-030-20260815.dump`).
 
-Novedades de ese despliegue: el servicio MCP en `POST /mcp/flows`, la tool
-`dataset_query`, y la **segunda marca** `fludix.yurirodrix.top`.
+> **La 030 y el binario van juntos.** Retira `chats.contact` y
+> `chats.contact_name`, así que un binario anterior falla contra el esquema
+> nuevo y el nuevo falla contra el viejo. Se desplegó parando el servicio,
+> migrando y arrancando ya con el binario nuevo; revertir exige restaurar el
+> respaldo, no solo mover el binario.
+
+Frontend `b8d7462` en la imagen `bawto-frontend:20260815-6` —el puerto del nodo
+de entrada del editor pasa a llamarse `out`, que es como ya lo nombraban el
+resto del editor y el catálogo del MCP: sin ese id, una arista escrita con
+`sourceHandle:"out"` no resolvía su handle y React Flow la descartaba sin log,
+dejando la Entrada suelta en el lienzo aunque el flujo corriera bien—; la imagen
+anterior, `bawto-frontend:20260815-5`, sigue en el server para revertir.
+
+Novedades recientes: la identidad por BSUID (migración 030), el servicio MCP en
+`POST /mcp/flows`, la tool `dataset_query`, y la **segunda marca**
+`fludix.yurirodrix.top` (migración 029, respaldo
+`/var/lib/postgresql/backups/sacs_chatbots-pre-029-20260815-0154.dump`).
 
 ## Topología
 
