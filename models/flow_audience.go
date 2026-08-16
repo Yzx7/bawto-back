@@ -234,9 +234,10 @@ func resetChatsStatement(ctx context.Context, p *pgxpool.Pool, botID, flowID, or
 	bot := "$" + strconv.Itoa(len(args)-1)
 	flow := "$" + strconv.Itoa(len(args))
 
-	// `chats.contact` guarda el teléfono tal cual llegó del canal, así que se
-	// compara contra `phone_normalized`, que es la identidad del contacto.
-	enLaAudiencia := `chats.contact IN (SELECT c.phone_normalized ` + base + `)`
+	// El chat apunta al contacto, así que la pertenencia se compara por id y no
+	// por teléfono: desde los nombres de usuario de WhatsApp hay contactos sin
+	// teléfono, y comparar cadenas los dejaba a todos fuera de toda audiencia.
+	enLaAudiencia := `chats.contact_id IN (SELECT c.id ` + base + `)`
 
 	return `UPDATE chats SET current_layer = 'null'::jsonb, updated_at = NOW()
 		WHERE chats.bot_id = ` + bot + `::uuid

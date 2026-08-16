@@ -81,7 +81,9 @@ func main() {
 
 	if *botID != "" {
 		fmt.Println("== CHATS del bot ==")
-		crows, _ := pool.Query(ctx, `SELECT id::text, contact, COALESCE(contact_name,'-'), COALESCE(current_layer::text,'null') FROM chats WHERE bot_id=$1::uuid ORDER BY updated_at DESC`, *botID)
+		crows, _ := pool.Query(ctx, `SELECT c.id::text, COALESCE(NULLIF(ct.phone_normalized,''), ct.channel_user_id, ''), COALESCE(ct.name,'-'), COALESCE(c.current_layer::text,'null')
+		   FROM chats c JOIN contacts ct ON ct.id=c.contact_id
+		  WHERE c.bot_id=$1::uuid ORDER BY c.updated_at DESC`, *botID)
 		for crows.Next() {
 			var id, cid, cname, layer string
 			_ = crows.Scan(&id, &cid, &cname, &layer)

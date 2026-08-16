@@ -76,7 +76,11 @@ func TestEcoNoSilenciaAlBotDuranteSuPropioEnvio(t *testing.T) {
 	// sobrevive a la limpieza y hace que MessageExists diga «ya existe» desde el
 	// primer instante. El test pasaría siempre, incluso sin el lock.
 	waID := randHex("wamid.echopropio_")
-	chatID, err := models.UpsertChat(ctx, pool, bot.ID, contact, "")
+	ct, err := models.EnsureInboundContact(ctx, pool, bot.ID, models.ChannelIdentity{Phone: contact})
+	if err != nil {
+		t.Fatalf("EnsureInboundContact: %v", err)
+	}
+	chatID, err := models.UpsertChat(ctx, pool, bot.ID, ct.ID)
 	if err != nil {
 		t.Fatalf("UpsertChat: %v", err)
 	}
@@ -206,7 +210,11 @@ func TestEcoDeUnHumanoSilenciaAlBot(t *testing.T) {
 
 	con.handleEchoes(ctx, payload)
 
-	chatID, err := models.UpsertChat(ctx, pool, bot.ID, contact, "")
+	ct, err := models.EnsureInboundContact(ctx, pool, bot.ID, models.ChannelIdentity{Phone: contact})
+	if err != nil {
+		t.Fatalf("EnsureInboundContact: %v", err)
+	}
+	chatID, err := models.UpsertChat(ctx, pool, bot.ID, ct.ID)
 	if err != nil {
 		t.Fatalf("UpsertChat: %v", err)
 	}

@@ -51,10 +51,15 @@ type Message struct {
 
 // ChatMeta reúne lo necesario para autorizar y para decidir si se puede escribir.
 type ChatMeta struct {
-	ID            string     `db:"id" json:"id"`
-	BotID         string     `db:"bot_id" json:"botId"`
-	OrgID         string     `db:"org_id" json:"orgId"`
+	ID    string `db:"id" json:"id"`
+	BotID string `db:"bot_id" json:"botId"`
+	OrgID string `db:"org_id" json:"orgId"`
+	// Contact es la identidad mostrable; ContactPhone y ContactUserID son las
+	// dos formas reales de dirigirse a esa persona. Enviar necesita las dos
+	// separadas: un BSUID puesto en `to` no da error, manda a otro sitio.
 	Contact       string     `db:"contact" json:"contact"`
+	ContactPhone  string     `db:"contact_phone" json:"contactPhone"`
+	ContactUserID string     `db:"contact_user_id" json:"contactUserId"`
 	ContactName   *string    `db:"contact_name" json:"contactName,omitempty"`
 	Mode          string     `db:"mode" json:"mode"`
 	HandoffUntil  *time.Time `db:"handoff_until" json:"handoffUntil,omitempty"`
@@ -74,19 +79,25 @@ func ListChats(ctx context.Context, pool *pgxpool.Pool, botID, q string, before 
 		limit = 30
 	}
 	rows, err := pool.Query(ctx, `
-		SELECT c.id::text AS id, c.contact, c.contact_name, c.mode, c.handoff_until, c.updated_at,
+		SELECT c.id::text AS id,
+		       COALESCE(NULLIF(ct.phone_normalized,''), ct.channel_user_id, '') AS contact,
+		       ct.name AS contact_name, c.mode, c.handoff_until, c.updated_at,
 		       m.body AS last_body, m.type AS last_type, m.from_me AS last_from_me, m.created_at AS last_at,
 		       (SELECT MAX(created_at) FROM messages i WHERE i.chat_id = c.id AND NOT i.from_me) AS last_inbound_at,
 		       (SELECT COUNT(*) FROM messages u
 		         WHERE u.chat_id = c.id AND NOT u.from_me
 		           AND u.created_at > COALESCE(c.last_read_at, TIMESTAMPTZ 'epoch'))::int AS unread
 		  FROM chats c
+		  JOIN contacts ct ON ct.id = c.contact_id
 		  LEFT JOIN LATERAL (
 		        SELECT body, type, from_me, created_at FROM messages
 		         WHERE chat_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1
 		  ) m ON TRUE
 		 WHERE c.bot_id = $1::uuid
-		   AND ($2 = '' OR c.contact ILIKE '%'||$2||'%' OR COALESCE(c.contact_name,'') ILIKE '%'||$2||'%')
+		   AND ($2 = '' OR COALESCE(ct.phone_normalized,'') ILIKE '%'||$2||'%'
+		        OR COALESCE(ct.channel_user_id,'') ILIKE '%'||$2||'%'
+		        OR COALESCE(ct.username,'') ILIKE '%'||$2||'%'
+		        OR COALESCE(ct.name,'') ILIKE '%'||$2||'%')
 		   AND ($3::timestamptz IS NULL OR c.updated_at < $3)
 		 ORDER BY c.updated_at DESC
 		 LIMIT $4`, botID, q, before, limit)
@@ -128,9 +139,14 @@ func ListMessages(ctx context.Context, pool *pgxpool.Pool, chatID string, before
 func GetChatMeta(ctx context.Context, pool *pgxpool.Pool, chatID string) (*ChatMeta, error) {
 	rows, err := pool.Query(ctx, `
 		SELECT c.id::text AS id, c.bot_id::text AS bot_id, b.org_id::text AS org_id,
-		       c.contact, c.contact_name, c.mode, c.handoff_until,
+		       COALESCE(NULLIF(ct.phone_normalized,''), ct.channel_user_id, '') AS contact,
+		       COALESCE(ct.phone_normalized,'') AS contact_phone,
+		       COALESCE(ct.channel_user_id,'') AS contact_user_id,
+		       ct.name AS contact_name, c.mode, c.handoff_until,
 		       (SELECT MAX(created_at) FROM messages i WHERE i.chat_id = c.id AND NOT i.from_me) AS last_inbound_at
-		  FROM chats c JOIN bots b ON b.id = c.bot_id
+		  FROM chats c
+		  JOIN bots b ON b.id = c.bot_id
+		  JOIN contacts ct ON ct.id = c.contact_id
 		 WHERE c.id = $1::uuid`, chatID)
 	if err != nil {
 		return nil, err

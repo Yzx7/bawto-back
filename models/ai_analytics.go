@@ -523,8 +523,8 @@ func loadAIUsageBySteps(ctx context.Context, pool *pgxpool.Pool, out *AIUsageAna
 func loadAITopChats(ctx context.Context, pool *pgxpool.Pool, out *AIUsageAnalytics, orgID, botID, model string, from, to time.Time) error {
 	rows, err := pool.Query(ctx, `
 		SELECT e.chat_id::text,
-		       COALESCE(c.contact,''),
-		       COALESCE(c.contact_name,''),
+		       COALESCE(NULLIF(ct.phone_normalized,''), ct.channel_user_id, ''),
+		       COALESCE(ct.name,''),
 		       COUNT(*)::bigint,
 		       COALESCE(SUM(`+aiTotalTokensExpr+`),0)::bigint,
 		       COALESCE(AVG(`+aiTotalTokensExpr+`),0)::float8,
@@ -532,9 +532,10 @@ func loadAITopChats(ctx context.Context, pool *pgxpool.Pool, out *AIUsageAnalyti
 		       MAX(e.occurred_at)
 		  FROM ai_usage_events e
 		  LEFT JOIN chats c ON c.id=e.chat_id
+		  LEFT JOIN contacts ct ON ct.id=c.contact_id
 		 WHERE `+aiUsageFilter+`
 		   AND e.chat_id IS NOT NULL
-		 GROUP BY e.chat_id, c.contact, c.contact_name
+		 GROUP BY e.chat_id, ct.phone_normalized, ct.channel_user_id, ct.name
 		 ORDER BY 5 DESC
 		 LIMIT $6`, orgID, botID, from, to, model, topChatsLimit)
 	if err != nil {

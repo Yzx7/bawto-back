@@ -111,7 +111,8 @@ func (con *Controller) SendChatMessage(c *fiber.Ctx) error {
 	if err != nil {
 		return con.failErr(c, err)
 	}
-	waID, err := whatsapp.SendText(c.Context(), cfg, meta.Contact, b.Text)
+	destino := whatsapp.Recipient{Phone: meta.ContactPhone, UserID: meta.ContactUserID}
+	waID, err := whatsapp.SendText(c.Context(), cfg, destino, b.Text)
 	if err != nil {
 		con.whatsAppLogger().Error("envío manual", "chat", meta.ID, "err", err.Error())
 		return con.fail(c, fiber.StatusBadGateway, "WhatsApp rechazó el envío: "+err.Error())

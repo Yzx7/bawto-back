@@ -83,18 +83,12 @@ func (con *Controller) processWhatsApp(body []byte) {
 	}
 
 	for _, m := range msgs {
-		// Un mensaje sin remitente no se puede contestar ni atribuir a un
-		// contacto. Antes se seguía adelante igualmente: `UpsertChat` creaba —y
-		// después reutilizaba, por el índice (bot_id, contact)— un chat con
-		// `contact` vacío, que el panel lista como una conversación normal con
-		// la ventana de 24 h siempre cerrada y ni un solo mensaje dentro. El
-		// mensaje moría dos líneas más abajo en `EnsureInboundContact`, así que
-		// quien miraba ese chat veía al bot mudo sin ninguna pista del motivo.
-		// Se descarta antes de tocar la base y se deja traza de la *forma* del
-		// mensaje —nunca de su contenido, que no va a los logs— porque es lo
-		// único que permite averiguar por qué Meta lo mandó así.
-		if models.NormalizePhone(m.From) == "" {
-			con.whatsAppLogger().Warn("mensaje entrante sin remitente: se descarta",
+		// Un mensaje sin ninguna identidad no se puede contestar ni atribuir.
+		// No debería ocurrir —Meta garantiza `from_user_id` en todos los
+		// mensajes—, así que si ocurre es una forma de payload que no conocemos:
+		// se deja traza de sus claves, nunca de su contenido.
+		if models.NormalizePhone(m.From) == "" && m.FromUserID == "" {
+			con.whatsAppLogger().Warn("mensaje entrante sin identidad: se descarta",
 				"channel_id", m.ChannelID, "wa_id", m.WaID, "type", string(m.Type),
 				"campos", messageFieldNames(m.Raw))
 			continue
@@ -103,14 +97,18 @@ func (con *Controller) processWhatsApp(body []byte) {
 		if err != nil || bot == nil {
 			continue
 		}
-		chatID, err := models.UpsertChat(ctx, pool, bot.ID, m.From, m.ContactName)
-		if err != nil {
-			con.whatsAppLogger().Error("wa upsert chat", "err", err.Error())
-			continue
-		}
-		contact, err := models.EnsureInboundContact(ctx, pool, bot.ID, m.From, m.ContactName)
+		// El contacto va primero: es quien fija la identidad, y el chat cuelga
+		// de él. Al revés se volvería a poder crear un chat sin dueño.
+		contact, err := models.EnsureInboundContact(ctx, pool, bot.ID, models.ChannelIdentity{
+			Phone: m.From, UserID: m.FromUserID, Name: m.ContactName, Username: m.Username,
+		})
 		if err != nil {
 			con.whatsAppLogger().Error("wa ensure contact", "err", err.Error())
+			continue
+		}
+		chatID, err := models.UpsertChat(ctx, pool, bot.ID, contact.ID)
+		if err != nil {
+			con.whatsAppLogger().Error("wa upsert chat", "err", err.Error())
 			continue
 		}
 		metadata, _ := json.Marshal(fiber.Map{
@@ -253,7 +251,7 @@ func (con *Controller) processWhatsApp(body []byte) {
 		commitCtx, commitCancel := context.WithTimeout(context.Background(), 20*time.Second)
 		sentAll := true
 		for _, txt := range replies {
-			id, err := whatsapp.SendText(commitCtx, sendCfg, m.From, txt)
+			id, err := whatsapp.SendText(commitCtx, sendCfg, whatsapp.Recipient{Phone: m.From, UserID: m.FromUserID}, txt)
 			if err != nil {
 				if strings.Contains(err.Error(), "131037") {
 					con.whatsAppLogger().Error("wa send: Meta bloqueó el número hasta aprobar su nombre para mostrar", "err", err.Error(), "action", "WhatsApp Manager > Números de teléfono > Nombre para mostrar")
@@ -386,7 +384,9 @@ func (con *Controller) handleUserPreferences(ctx context.Context, body []byte) {
 		// Se crea el contacto si no existe: alguien puede pedir el alta de baja
 		// sin habernos escrito nunca por este bot, y perder ese "no" por no
 		// tenerlo fichado sería el peor de los fallos posibles aquí.
-		contact, err := models.EnsureInboundContact(ctx, pool, bot.ID, pref.WaID, "")
+		contact, err := models.EnsureInboundContact(ctx, pool, bot.ID, models.ChannelIdentity{
+			Phone: pref.WaID, UserID: pref.UserID,
+		})
 		if err != nil || contact == nil {
 			con.whatsAppLogger().Error("preferencia: no se pudo resolver el contacto",
 				"bot", bot.ID, "category", pref.Category, "err", errText(err))
@@ -537,7 +537,13 @@ func (con *Controller) handleEchoes(ctx context.Context, body []byte) {
 		}
 		// El chat se resuelve antes que nada porque hace falta su id para tomar
 		// el lock: la decisión de si el eco es humano no puede tomarse sin él.
-		chatID, err := models.UpsertChat(ctx, pool, bot.ID, e.To, "")
+		destinatario, err := models.EnsureInboundContact(ctx, pool, bot.ID, models.ChannelIdentity{
+			Phone: e.To, UserID: e.ToUserID,
+		})
+		if err != nil {
+			continue
+		}
+		chatID, err := models.UpsertChat(ctx, pool, bot.ID, destinatario.ID)
 		if err != nil {
 			continue
 		}

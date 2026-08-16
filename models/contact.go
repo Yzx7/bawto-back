@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -20,6 +21,8 @@ type Contact struct {
 	ID              string          `db:"id" json:"id"`
 	OrgID           string          `db:"org_id" json:"orgId"`
 	PhoneNormalized string          `db:"phone_normalized" json:"phoneNormalized"`
+	ChannelUserID   string          `db:"channel_user_id" json:"channelUserId"`
+	Username        string          `db:"username" json:"username"`
 	Name            *string         `db:"name" json:"name,omitempty"`
 	Data            json.RawMessage `db:"data" json:"data"`
 	Status          string          `db:"status" json:"status"`
@@ -41,7 +44,7 @@ type BillingRecord struct {
 	UpdatedAt time.Time       `db:"updated_at" json:"updatedAt"`
 }
 
-const contactCols = `id::text AS id, org_id::text AS org_id, phone_normalized, name, data, status, created_at, updated_at`
+const contactCols = `id::text AS id, org_id::text AS org_id, COALESCE(phone_normalized,'') AS phone_normalized, COALESCE(channel_user_id,'') AS channel_user_id, COALESCE(username,'') AS username, name, data, status, created_at, updated_at`
 
 // contactColsC es la misma lista calificada con el alias `c`. Toda consulta con
 // JOIN debe usar esta: `created_at` existe también en `data_record_contacts`, en
@@ -49,7 +52,7 @@ const contactCols = `id::text AS id, org_id::text AS org_id, phone_normalized, n
 // responde "column reference is ambiguous" en tiempo de ejecución, no al
 // compilar. Es el mismo tropiezo que ya costó `GetFlowVersion` y
 // `InvalidDateRecordsForView`.
-const contactColsC = `c.id::text AS id, c.org_id::text AS org_id, c.phone_normalized, c.name, c.data, c.status, c.created_at, c.updated_at`
+const contactColsC = `c.id::text AS id, c.org_id::text AS org_id, COALESCE(c.phone_normalized,'') AS phone_normalized, COALESCE(c.channel_user_id,'') AS channel_user_id, COALESCE(c.username,'') AS username, c.name, c.data, c.status, c.created_at, c.updated_at`
 const billingCols = `id::text AS id, contact_id::text AS contact_id, period, amount::text AS amount, currency, due_date, status, paid_at, evidence, created_at, updated_at`
 
 // NormalizePhone deja solo los dígitos. La API y los webhooks deben usarla.
@@ -62,22 +65,87 @@ func NormalizePhone(phone string) string {
 	}, phone)
 }
 
+// ChannelIdentity es cómo el canal identifica a una persona en un mensaje.
+// Meta garantiza `UserID` (el BSUID) en todos los mensajes entrantes; el
+// teléfono solo viaja si hubo interacción en los últimos 30 días o si el
+// contacto está en el contact book del portfolio. Por eso son dos campos y no
+// una cadena: cuál llega depende del día, no de quién escribe.
+type ChannelIdentity struct {
+	Phone    string
+	UserID   string
+	Name     string
+	Username string
+}
+
 // EnsureInboundContact registra la identidad observada por el canal sin borrar
 // atributos CRM que ya hubiera configurado la organización.
-func EnsureInboundContact(ctx context.Context, pool *pgxpool.Pool, botID, phone, name string) (*Contact, error) {
-	phone = NormalizePhone(phone)
-	if len(phone) < 6 || len(phone) > 20 {
+//
+// El orden de resolución es BSUID → teléfono, y no al revés: el BSUID es lo
+// único que Meta garantiza. Cuando el mensaje trae las dos identidades se
+// guarda el par, y ese emparejamiento es lo único que permite reconocer más
+// tarde a quien vuelva ya sin teléfono. Es nuestro contact book local.
+func EnsureInboundContact(ctx context.Context, pool *pgxpool.Pool, botID string, id ChannelIdentity) (*Contact, error) {
+	phone := NormalizePhone(id.Phone)
+	if phone != "" && (len(phone) < 6 || len(phone) > 20) {
 		return nil, fmt.Errorf("teléfono inválido")
 	}
-	rows, err := pool.Query(ctx, `INSERT INTO contacts(org_id,phone_normalized,name)
-		SELECT org_id,$2,NULLIF($3,'') FROM bots WHERE id=$1::uuid
-		ON CONFLICT(org_id,phone_normalized) DO UPDATE SET name=COALESCE(NULLIF(EXCLUDED.name,''),contacts.name),updated_at=NOW()
-		RETURNING `+contactCols, botID, phone, name)
-	if err != nil {
+	userID := strings.TrimSpace(id.UserID)
+	if phone == "" && userID == "" {
+		return nil, fmt.Errorf("mensaje sin identidad de contacto")
+	}
+	var orgID string
+	if err := pool.QueryRow(ctx, `SELECT org_id::text FROM bots WHERE id=$1::uuid`, botID).Scan(&orgID); err != nil {
 		return nil, err
 	}
-	v, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[Contact])
-	return &v, err
+
+	// Dos intentos: si entre la búsqueda y el alta otro mensaje del mismo
+	// contacto se adelanta, el índice único lo rechaza y la segunda vuelta ya
+	// lo encuentra. El webhook toma su advisory lock *después* de resolver el
+	// chat, así que aquí la carrera es real y no hipotética.
+	for intento := 0; intento < 2; intento++ {
+		rows, err := pool.Query(ctx, `
+			UPDATE contacts c SET
+				phone_normalized = COALESCE(NULLIF($2,''), c.phone_normalized),
+				channel_user_id  = COALESCE(NULLIF($3,''), c.channel_user_id),
+				username         = COALESCE(NULLIF($5,''), c.username),
+				name             = COALESCE(NULLIF($4,''), c.name),
+				updated_at       = NOW()
+			WHERE c.id = (
+				SELECT x.id FROM contacts x
+				WHERE x.org_id=$1::uuid
+				  AND (($3<>'' AND x.channel_user_id=$3) OR ($2<>'' AND x.phone_normalized=$2))
+				ORDER BY (x.channel_user_id IS NOT DISTINCT FROM NULLIF($3,'')) DESC
+				LIMIT 1
+			)
+			RETURNING `+contactColsC, orgID, phone, userID, id.Name, id.Username)
+		if err != nil {
+			return nil, err
+		}
+		v, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[Contact])
+		if err == nil {
+			return &v, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
+
+		rows, err = pool.Query(ctx, `
+			INSERT INTO contacts(org_id,phone_normalized,channel_user_id,username,name)
+			VALUES ($1::uuid, NULLIF($2,''), NULLIF($3,''), NULLIF($5,''), NULLIF($4,''))
+			RETURNING `+contactCols, orgID, phone, userID, id.Name, id.Username)
+		if err == nil {
+			v, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[Contact])
+			if err == nil {
+				return &v, nil
+			}
+			return nil, err
+		}
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("no se pudo resolver el contacto entrante")
 }
 
 // ValidateContactData aplica el contrato configurado para el bot. Las claves

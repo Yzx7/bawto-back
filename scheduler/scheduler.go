@@ -326,7 +326,7 @@ func deliver(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config, cipher
 	if contact == nil || contact.Status != "active" {
 		return deliveryResult{cancel: "contacto inactivo, bloqueado o eliminado"}
 	}
-	if reason, err := models.ReminderChatBlock(ctx, pool, run.BotID, contact.PhoneNormalized); err != nil {
+	if reason, err := models.ReminderChatBlock(ctx, pool, run.BotID, contact.ID); err != nil {
 		return deliveryResult{err: err}
 	} else if reason != "" {
 		return deliveryResult{postpone: reason}
@@ -399,18 +399,15 @@ func deliver(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config, cipher
 		case <-timer.C:
 		}
 	}
-	providerID, err := whatsapp.SendTemplate(ctx, sendCfg, contact.PhoneNormalized, template.Name, template.Language, template.Params)
+	destino := whatsapp.Recipient{Phone: contact.PhoneNormalized, UserID: contact.ChannelUserID}
+	providerID, err := whatsapp.SendTemplate(ctx, sendCfg, destino, template.Name, template.Language, template.Params)
 	if err != nil {
 		return deliveryResult{wabaID: *bot.WabaID, err: err}
 	}
 	if err := models.AttachFlowRunProviderMessage(ctx, pool, run.ID, providerID); err != nil {
 		return deliveryResult{providerID: providerID, wabaID: *bot.WabaID, err: &whatsapp.AmbiguousSendError{Err: err}}
 	}
-	contactName := ""
-	if contact.Name != nil {
-		contactName = *contact.Name
-	}
-	chatID, err := models.UpsertChat(ctx, pool, run.BotID, contact.PhoneNormalized, contactName)
+	chatID, err := models.UpsertChat(ctx, pool, run.BotID, contact.ID)
 	if err != nil {
 		return deliveryResult{providerID: providerID, wabaID: *bot.WabaID, err: &whatsapp.AmbiguousSendError{Err: err}}
 	}

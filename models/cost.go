@@ -299,7 +299,7 @@ func loadWhatsAppCost(ctx context.Context, pool *pgxpool.Pool, report *CostRepor
 		        COALESCE(m.billable,e.billable,FALSE) AS billable,
 		        e.occurred_at,
 		        CASE
-		            WHEN regexp_replace(COALESCE(NULLIF(e.recipient_id,''),c.contact),'[^0-9]','','g') LIKE '51%'
+		            WHEN regexp_replace(COALESCE(NULLIF(e.recipient_id,''),ct.phone_normalized,''),'[^0-9]','','g') LIKE '51%'
 		            THEN 'PE'
 		            ELSE 'UNKNOWN'
 		        END AS market

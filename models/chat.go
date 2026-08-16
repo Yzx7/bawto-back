@@ -12,15 +12,18 @@ import (
 )
 
 // UpsertChat crea (o actualiza) el chat de un contacto en un bot; devuelve su id.
-func UpsertChat(ctx context.Context, pool *pgxpool.Pool, botID, contact, contactName string) (string, error) {
+//
+// La clave es el contacto, no una cadena de teléfono: desde los nombres de
+// usuario de WhatsApp la misma persona puede llegar con teléfono un día y solo
+// con su BSUID al siguiente, y con la clave textual eso abría un chat nuevo
+// —o, peor, uno con identidad vacía compartido por todos los desconocidos—.
+func UpsertChat(ctx context.Context, pool *pgxpool.Pool, botID, contactID string) (string, error) {
 	var id string
 	err := pool.QueryRow(ctx,
-		`INSERT INTO chats (bot_id, contact, contact_name)
-		 VALUES ($1::uuid, $2, NULLIF($3,''))
-		 ON CONFLICT (bot_id, contact) DO UPDATE
-		   SET contact_name = COALESCE(NULLIF(EXCLUDED.contact_name, ''), chats.contact_name),
-		       updated_at   = NOW()
-		 RETURNING id::text`, botID, contact, contactName).Scan(&id)
+		`INSERT INTO chats (bot_id, contact_id)
+		 VALUES ($1::uuid, $2::uuid)
+		 ON CONFLICT (bot_id, contact_id) DO UPDATE SET updated_at = NOW()
+		 RETURNING id::text`, botID, contactID).Scan(&id)
 	return id, err
 }
 

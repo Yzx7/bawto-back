@@ -129,15 +129,12 @@ func (con *Controller) TestBotTemplate(c *fiber.Ctx) error {
 	if err != nil {
 		return con.fail(c, fiber.StatusFailedDependency, err.Error())
 	}
-	providerID, err := whatsapp.SendTemplate(c.Context(), sendCfg, contact.PhoneNormalized, name, language, input.Params)
+	destino := whatsapp.Recipient{Phone: contact.PhoneNormalized, UserID: contact.ChannelUserID}
+	providerID, err := whatsapp.SendTemplate(c.Context(), sendCfg, destino, name, language, input.Params)
 	if err != nil {
 		return con.fail(c, fiber.StatusBadGateway, "Meta rechazó el envío: "+err.Error())
 	}
-	contactName := ""
-	if contact.Name != nil {
-		contactName = *contact.Name
-	}
-	chatID, err := models.UpsertChat(c.Context(), con.Env.Postgres, bot.ID, contact.PhoneNormalized, contactName)
+	chatID, err := models.UpsertChat(c.Context(), con.Env.Postgres, bot.ID, contact.ID)
 	if err != nil {
 		return con.fail(c, fiber.StatusInternalServerError, "Meta aceptó el mensaje, pero no se pudo crear el chat")
 	}

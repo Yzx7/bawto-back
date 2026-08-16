@@ -296,12 +296,12 @@ func ReminderCapReached(ctx context.Context, p *pgxpool.Pool, flowID, recordID s
 	return n >= cap, err
 }
 
-func ReminderChatBlock(ctx context.Context, p *pgxpool.Pool, botID, phone string) (string, error) {
+func ReminderChatBlock(ctx context.Context, p *pgxpool.Pool, botID, contactID string) (string, error) {
 	var mode string
 	var until *time.Time
 	var state json.RawMessage
 	err := p.QueryRow(ctx, `SELECT mode,handoff_until,current_layer FROM chats
-		WHERE bot_id=$1::uuid AND contact=$2`, botID, NormalizePhone(phone)).Scan(&mode, &until, &state)
+		WHERE bot_id=$1::uuid AND contact_id=$2::uuid`, botID, contactID).Scan(&mode, &until, &state)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}
@@ -312,7 +312,7 @@ func ReminderChatBlock(ctx context.Context, p *pgxpool.Pool, botID, phone string
 		return "chat en atención manual", nil
 	}
 	if mode == "manual" && until != nil && until.Before(time.Now()) {
-		_, _ = p.Exec(ctx, `UPDATE chats SET mode='bot',handoff_until=NULL WHERE bot_id=$1::uuid AND contact=$2`, botID, NormalizePhone(phone))
+		_, _ = p.Exec(ctx, `UPDATE chats SET mode='bot',handoff_until=NULL WHERE bot_id=$1::uuid AND contact_id=$2::uuid`, botID, contactID)
 	}
 	var value any
 	if json.Unmarshal(state, &value) == nil && value != nil {

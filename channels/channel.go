@@ -53,7 +53,9 @@ type Location struct {
 type InboundEvent struct {
 	ChannelID           string      // identificador del canal (phone_number_id en WA)
 	WaID                string      // id del mensaje en el canal (idempotencia)
-	From                string      // identificador del usuario final
+	From                string      // teléfono del usuario final; Meta puede omitirlo
+	FromUserID          string      // identidad estable en el canal (BSUID en WA); siempre presente
+	Username            string      // nombre de usuario del canal, si lo tiene
 	ContactName         string      // nombre del perfil
 	EventType           EventType   // message | reaction | message_edit | message_revoke | system
 	Type                MessageType // tipo normalizado del contenido

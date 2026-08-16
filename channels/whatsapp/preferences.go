@@ -31,7 +31,8 @@ const PreferenceCategoryMarketing = "marketing_messages"
 // conservan el texto de Meta.
 type UserPreference struct {
 	ChannelID  string // phone_number_id del negocio que recibió el evento
-	WaID       string // teléfono del usuario
+	WaID       string // teléfono del usuario; puede faltar
+	UserID     string // BSUID del usuario (`user_id`)
 	Category   string
 	Value      string
 	Detail     string
@@ -61,6 +62,7 @@ type preferencePayload struct {
 				} `json:"metadata"`
 				UserPreferences []struct {
 					WaID      string          `json:"wa_id"`
+					UserID    string          `json:"user_id"`
 					Category  string          `json:"category"`
 					Value     string          `json:"value"`
 					Detail    string          `json:"detail"`
@@ -87,13 +89,18 @@ func ParseUserPreferences(body []byte) ([]UserPreference, error) {
 				continue
 			}
 			for _, pref := range change.Value.UserPreferences {
-				if strings.TrimSpace(pref.WaID) == "" || strings.TrimSpace(pref.Value) == "" {
+				// Un opt-out sin identidad no se puede aplicar. Desde los
+				// nombres de usuario basta con el BSUID: exigir teléfono
+				// tiraría a la basura justo el "no me escribas" de quien lo
+				// oculta.
+				if (strings.TrimSpace(pref.WaID) == "" && strings.TrimSpace(pref.UserID) == "") || strings.TrimSpace(pref.Value) == "" {
 					continue
 				}
 				occurredAt := preferenceTime(pref.Timestamp, entry.Time)
 				item := UserPreference{
 					ChannelID:  change.Value.Metadata.PhoneNumberID,
 					WaID:       pref.WaID,
+					UserID:     pref.UserID,
 					Category:   pref.Category,
 					Value:      pref.Value,
 					Detail:     pref.Detail,

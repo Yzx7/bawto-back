@@ -251,7 +251,7 @@ func TestSendText(t *testing.T) {
 
 	id, err := SendText(context.Background(), SendConfig{
 		APIBase: srv.URL, Version: "v21.0", PhoneNumberID: "PNID", Token: "TKN",
-	}, "51999", "hey")
+	}, Recipient{Phone: "51999"}, "hey")
 	if err != nil {
 		t.Fatalf("SendText: %v", err)
 	}
@@ -334,5 +334,79 @@ func TestDownloadMedia(t *testing.T) {
 	data, mimeType, err := DownloadMedia(context.Background(), SendConfig{APIBase: srv.URL, Version: "v21.0", Token: "TKN", HTTP: srv.Client()}, "media-1")
 	if err != nil || string(data) != "image-bytes" || mimeType != "image/jpeg" {
 		t.Fatalf("DownloadMedia: data=%q mime=%q err=%v", data, mimeType, err)
+	}
+}
+
+// Un cliente con nombre de usuario de WhatsApp llega sin `from`: Meta solo
+// garantiza `from_user_id`. Es el payload real que descartó tres mensajes del
+// bot Lered el 2026-08-15.
+func TestParseMensajeSinTelefonoUsaElBSUID(t *testing.T) {
+	msgs, err := Parse([]byte(`{"entry":[{"changes":[{"field":"messages","value":{
+		"metadata":{"phone_number_id":"PNID"},
+		"contacts":[{"profile":{"name":"Angelo"},"user_id":"PE.1507450737804608","username":"angelo"}],
+		"messages":[{"from_user_id":"PE.1507450737804608","id":"wamid.A","timestamp":"1",
+			"type":"text","text":{"body":"hola"}}]}}]}]}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("esperaba 1 mensaje, hubo %d", len(msgs))
+	}
+	m := msgs[0]
+	if m.From != "" {
+		t.Fatalf("no había teléfono y se inventó uno: %q", m.From)
+	}
+	if m.FromUserID != "PE.1507450737804608" {
+		t.Fatalf("BSUID mal leído: %q", m.FromUserID)
+	}
+	if m.Username != "angelo" || m.ContactName != "Angelo" {
+		t.Fatalf("usuario/nombre mal leídos: %q / %q", m.Username, m.ContactName)
+	}
+	if m.Text != "hola" {
+		t.Fatalf("texto mal leído: %q", m.Text)
+	}
+}
+
+// Cuando Meta manda las dos identidades hay que quedarse con las dos: es el
+// único momento en que se puede emparejar teléfono y BSUID.
+func TestParseConservaLasDosIdentidades(t *testing.T) {
+	msgs, err := Parse([]byte(`{"entry":[{"changes":[{"field":"messages","value":{
+		"metadata":{"phone_number_id":"PNID"},
+		"contacts":[{"profile":{"name":"Ana"},"wa_id":"51999000111","user_id":"PE.42"}],
+		"messages":[{"from":"51999000111","from_user_id":"PE.42","id":"wamid.B",
+			"type":"text","text":{"body":"hey"}}]}}]}]}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if msgs[0].From != "51999000111" || msgs[0].FromUserID != "PE.42" {
+		t.Fatalf("se perdió una identidad: %q / %q", msgs[0].From, msgs[0].FromUserID)
+	}
+}
+
+// `to` tiene precedencia sobre `recipient` en la Cloud API. Poner el BSUID en
+// `to` no da error: manda el mensaje a un número que no existe. Por eso cada
+// identidad tiene su campo y nunca se mezclan.
+func TestRecipientNuncaMandaElBSUIDComoTelefono(t *testing.T) {
+	payload := map[string]any{}
+	if err := (Recipient{UserID: "PE.42"}).apply(payload); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if _, hay := payload["to"]; hay {
+		t.Fatalf("el BSUID acabó en `to`: %v", payload)
+	}
+	if payload["recipient"] != "PE.42" {
+		t.Fatalf("falta `recipient`: %v", payload)
+	}
+
+	payload = map[string]any{}
+	if err := (Recipient{Phone: "51999000111", UserID: "PE.42"}).apply(payload); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if payload["to"] != "51999000111" || payload["recipient"] != "PE.42" {
+		t.Fatalf("con las dos identidades deben viajar las dos: %v", payload)
+	}
+
+	if err := (Recipient{}).apply(map[string]any{}); err == nil {
+		t.Fatal("un destinatario vacío debe fallar antes de gastar la petición")
 	}
 }

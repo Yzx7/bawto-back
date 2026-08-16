@@ -65,7 +65,7 @@ func TestPhase3StatusDurableYCorrelacionSegura(t *testing.T) {
 		t.Fatalf("sin message debe quedar pendiente: updates=%v err=%v", updates, err)
 	}
 
-	chatID, err := UpsertChat(ctx, pool, bot.ID, contact.PhoneNormalized, "Ana")
+	chatID, err := UpsertChat(ctx, pool, bot.ID, contact.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

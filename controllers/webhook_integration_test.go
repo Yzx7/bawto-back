@@ -101,7 +101,11 @@ func TestWhatsAppPipelineIntegration(t *testing.T) {
 	}
 
 	// El mensaje entrante se guardó una sola vez (idempotencia).
-	chatID, err := models.UpsertChat(ctx, pool, bot.ID, "51999888777", "")
+	ct, err := models.EnsureInboundContact(ctx, pool, bot.ID, models.ChannelIdentity{Phone: "51999888777"})
+	if err != nil {
+		t.Fatalf("EnsureInboundContact: %v", err)
+	}
+	chatID, err := models.UpsertChat(ctx, pool, bot.ID, ct.ID)
 	if err != nil {
 		t.Fatalf("UpsertChat: %v", err)
 	}

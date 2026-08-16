@@ -278,7 +278,7 @@ func previewRecord(
 				Reason: "límite de recordatorios alcanzado"}, nil, nil
 		}
 	}
-	reason, err := models.ReminderChatBlock(ctx, pool, botID, contact.PhoneNormalized)
+	reason, err := models.ReminderChatBlock(ctx, pool, botID, contact.ID)
 	if err != nil {
 		return nil, nil, err
 	}

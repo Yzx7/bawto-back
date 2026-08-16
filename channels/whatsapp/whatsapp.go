@@ -61,7 +61,11 @@ type webhookPayload struct {
 					Profile struct {
 						Name string `json:"name"`
 					} `json:"profile"`
-					WaID string `json:"wa_id"`
+					// `wa_id` puede faltar desde los nombres de usuario; `user_id`
+					// —el BSUID— no falta nunca. Ver identidad en Parse.
+					WaID     string `json:"wa_id"`
+					UserID   string `json:"user_id"`
+					Username string `json:"username"`
 				} `json:"contacts"`
 				Messages []webhookMessage `json:"messages"`
 			} `json:"value"`
@@ -90,10 +94,11 @@ func (m *webhookMessage) UnmarshalJSON(b []byte) error {
 }
 
 type webhookMessageFields struct {
-	From    string `json:"from"`
-	ID      string `json:"id"`
-	Type    string `json:"type"`
-	Context struct {
+	From       string `json:"from"`
+	FromUserID string `json:"from_user_id"`
+	ID         string `json:"id"`
+	Type       string `json:"type"`
+	Context    struct {
 		ID                  string `json:"id"`
 		Forwarded           bool   `json:"forwarded"`
 		FrequentlyForwarded bool   `json:"frequently_forwarded"`
@@ -175,15 +180,26 @@ func Parse(body []byte) ([]channels.InboundMessage, error) {
 	for _, e := range p.Entry {
 		for _, ch := range e.Changes {
 			v := ch.Value
-			name := ""
+			name, username, contactUserID := "", "", ""
 			if len(v.Contacts) > 0 {
 				name = v.Contacts[0].Profile.Name
+				username = v.Contacts[0].Username
+				contactUserID = v.Contacts[0].UserID
 			}
 			for _, m := range v.Messages {
+				// El BSUID viene por mensaje (`from_user_id`) y también en el
+				// bloque de contacto. Se prefiere el del mensaje: el bloque es
+				// uno solo para todo el `value` y no distingue remitentes.
+				userID := m.FromUserID
+				if userID == "" {
+					userID = contactUserID
+				}
 				im := channels.InboundMessage{
 					ChannelID:           v.Metadata.PhoneNumberID,
 					WaID:                m.ID,
 					From:                m.From,
+					FromUserID:          userID,
+					Username:            username,
 					ContactName:         name,
 					EventType:           channels.EventMessage,
 					QuotedWaID:          m.Context.ID,
@@ -387,7 +403,8 @@ func ParseStatuses(body []byte) ([]DeliveryStatus, error) {
 type Echo struct {
 	ChannelID string // phone_number_id del negocio
 	WaID      string // id del mensaje
-	To        string // contacto destino
+	To        string // teléfono destino; Meta puede omitirlo
+	ToUserID  string // BSUID destino (`to_user_id`)
 	Type      string
 	Text      string
 }
@@ -401,10 +418,11 @@ type echoPayload struct {
 					PhoneNumberID string `json:"phone_number_id"`
 				} `json:"metadata"`
 				MessageEchoes []struct {
-					To   string `json:"to"`
-					ID   string `json:"id"`
-					Type string `json:"type"`
-					Text struct {
+					To       string `json:"to"`
+					ToUserID string `json:"to_user_id"`
+					ID       string `json:"id"`
+					Type     string `json:"type"`
+					Text     struct {
 						Body string `json:"body"`
 					} `json:"text"`
 				} `json:"message_echoes"`
@@ -427,6 +445,7 @@ func ParseEchoes(body []byte) ([]Echo, error) {
 					ChannelID: ch.Value.Metadata.PhoneNumberID,
 					WaID:      m.ID,
 					To:        m.To,
+					ToUserID:  m.ToUserID,
 					Type:      m.Type,
 					Text:      m.Text.Body,
 				})
@@ -597,13 +616,40 @@ func GetPhoneInfo(ctx context.Context, cfg SendConfig) (*PhoneInfo, error) {
 	}, nil
 }
 
+// Recipient identifica al destinatario. La Cloud API acepta el teléfono en `to`
+// y el BSUID en `recipient`, y **si van los dos, `to` tiene precedencia**. De
+// ahí que sean campos distintos y no una sola cadena: meter un BSUID en `to` no
+// devuelve error, manda el mensaje a un número que no existe.
+type Recipient struct {
+	Phone  string // puede faltar desde que WhatsApp tiene nombres de usuario
+	UserID string // BSUID; Meta lo garantiza en todos los mensajes entrantes
+}
+
+// apply escribe la identidad en el payload. Un destinatario sin ninguna de las
+// dos formas es un error del llamador, no de Meta: se detiene aquí antes de
+// gastar una petición.
+func (r Recipient) apply(payload map[string]any) error {
+	if r.Phone == "" && r.UserID == "" {
+		return fmt.Errorf("whatsapp: destinatario sin teléfono ni identidad de canal")
+	}
+	if r.Phone != "" {
+		payload["to"] = r.Phone
+	}
+	if r.UserID != "" {
+		payload["recipient"] = r.UserID
+	}
+	return nil
+}
+
 // SendText envía un mensaje de texto por la Cloud API y devuelve el id del mensaje.
-func SendText(ctx context.Context, cfg SendConfig, to, body string) (string, error) {
+func SendText(ctx context.Context, cfg SendConfig, to Recipient, body string) (string, error) {
 	payload := map[string]any{
 		"messaging_product": "whatsapp",
-		"to":                to,
 		"type":              "text",
 		"text":              map[string]string{"body": body},
+	}
+	if err := to.apply(payload); err != nil {
+		return "", err
 	}
 	buf, _ := json.Marshal(payload)
 	url := fmt.Sprintf("%s/%s/%s/messages", strings.TrimRight(cfg.APIBase, "/"), cfg.Version, cfg.PhoneNumberID)
@@ -738,7 +784,7 @@ func sendStatusPayload(ctx context.Context, cfg SendConfig, payload map[string]a
 }
 
 // SendTemplate inicia una conversación proactiva con una plantilla aprobada.
-func SendTemplate(ctx context.Context, cfg SendConfig, to, name, language string, params []string) (string, error) {
+func SendTemplate(ctx context.Context, cfg SendConfig, to Recipient, name, language string, params []string) (string, error) {
 	parameters := make([]map[string]string, len(params))
 	for i, p := range params {
 		parameters[i] = map[string]string{"type": "text", "text": p}
@@ -747,7 +793,10 @@ func SendTemplate(ctx context.Context, cfg SendConfig, to, name, language string
 	if len(parameters) > 0 {
 		template["components"] = []any{map[string]any{"type": "body", "parameters": parameters}}
 	}
-	payload := map[string]any{"messaging_product": "whatsapp", "to": to, "type": "template", "template": template}
+	payload := map[string]any{"messaging_product": "whatsapp", "type": "template", "template": template}
+	if err := to.apply(payload); err != nil {
+		return "", err
+	}
 	return sendPayload(ctx, cfg, payload)
 }
 

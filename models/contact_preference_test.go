@@ -38,7 +38,7 @@ func TestPreferenciaDeMarketing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBot: %v", err)
 	}
-	contact, err := EnsureInboundContact(ctx, pool, bot.ID, "51999444555", "Ana")
+	contact, err := EnsureInboundContact(ctx, pool, bot.ID, ChannelIdentity{Phone: "51999444555", Name: "Ana"})
 	if err != nil || contact == nil {
 		t.Fatalf("EnsureInboundContact: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestPreferenciaDeOtraCategoriaNoBloquea(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBot: %v", err)
 	}
-	contact, err := EnsureInboundContact(ctx, pool, bot.ID, "51999666777", "")
+	contact, err := EnsureInboundContact(ctx, pool, bot.ID, ChannelIdentity{Phone: "51999666777", Name: ""})
 	if err != nil || contact == nil {
 		t.Fatalf("EnsureInboundContact: %v", err)
 	}
