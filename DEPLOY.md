@@ -386,6 +386,69 @@ Un dominio nuevo se añade con
 `certbot --nginx -d <dominio> --redirect`, que escribe el bloque TLS en su
 `.conf` y recarga nginx.
 
+## Rotar secretos (hecho el 2026-08-17)
+
+Se rotaron la **contraseña de PostgreSQL**, el **secreto de Better Auth** y el
+**Google Client Secret**. `TOKEN_ENC_KEY` no se toca: los tokens de canal están
+cifrados con ella y cambiarla sin redescifrar deja los bots sin poder enviar.
+
+El orden importa, y no es el intuitivo:
+
+1. **Respaldar** los cuatro `.env` (`backend/.env` y `frontend/.env.local` en la
+   PC; `/opt/bawto/.env` y `/opt/bawto-frontend/.env` en el server).
+2. **Escribir los cuatro `.env` con los valores nuevos primero**, con los
+   servicios aún corriendo. Siguen vivos con sus conexiones ya abiertas: un
+   `ALTER ROLE` solo afecta a conexiones **nuevas**. Hacerlo al revés alarga el
+   corte a todo el tiempo que se tarde en editar ficheros.
+3. **Rotar en PostgreSQL** y **borrar `jwks`** en la misma pasada.
+4. **Reiniciar**: `systemctl restart bawto-backend` y recrear el contenedor. El
+   contenedor usa `--env-file`, así que **no hace falta reconstruir la imagen**:
+   ni `BETTER_AUTH_SECRET` ni `GOOGLE_CLIENT_SECRET` son `NEXT_PUBLIC_*`.
+
+```bash
+docker rm -f bawto-frontend
+docker run -d --name bawto-frontend --network host \
+  --env-file /opt/bawto-frontend/.env --restart always --memory 512m \
+  bawto-frontend:<etiqueta-actual>
+```
+
+Cuatro cosas que cuesta descubrir a base de romperlas:
+
+- **Borrar la fila de `jwks` es obligatorio.** Better Auth guarda ahí la clave
+  privada cifrada con su secreto y la descifra al firmar
+  (`plugins/jwt/sign.mjs:34`). Con el secreto nuevo y la fila vieja, **todo
+  login** muere con `Failed to decrypt private key`. Vacía, se regenera sola al
+  primer `/api/auth/jwks`.
+- **No mandes la contraseña en claro a PostgreSQL.** Calcula el verificador
+  SCRAM-SHA-256 en el cliente y pásale eso al `ALTER ROLE`. Con `log_statement`
+  activo, un `ALTER ROLE ... PASSWORD '<texto>'` escribe la credencial nueva en
+  el log del servidor: la misma fuga que la rotación viene a cerrar. El rol no
+  necesita ser superusuario para cambiar su propia clave.
+- **Verifica que la clave VIEJA ya no conecta.** Que la nueva funcione no prueba
+  que la vieja dejara de hacerlo, y esa es la única pregunta que importa en una
+  rotación.
+- **Comprueba a qué servidor estás rotando con `inet_server_addr()`.** El
+  Postgres viejo (`10.11.12.1`) sigue vivo y responde con una copia
+  desactualizada sin fallar; tenía **la misma contraseña**. Elegir por el host
+  del `.env` no basta.
+
+Better Auth 1.6.23 admite rotación **sin cortar sesiones**: `secrets` versionado
+(envoltorio `$ba$<v>$`) más `legacySecret` para lo ya cifrado, en
+`context/secret-utils.mjs`. En dev se rotó en duro porque las sesiones no
+importaban; con clientes reales, ese es el camino.
+
+El backend no necesita nada especial: `middlewares/auth/auth.go:81` ya reintenta
+con refresh forzado del JWKS cuando la validación falla, que es exactamente el
+caso de una llave rotada.
+
+**Lo que la rotación NO arregla sola:** si se genera un *Client ID* nuevo de
+Google —y no solo un secreto—, el cliente nace **sin URIs de redirección**. Hay
+que darlas de alta las tres (`bawto.sistemuino.com`, `fludix.yurirodrix.top` y
+`localhost:3000`, todas con `/api/auth/callback/google`) o Google rechaza con
+`redirect_uri_mismatch`. Y como `lib/auth.ts` fija
+`emailAndPassword: { enabled: false }`, **no hay puerta trasera**: si Google
+queda mal, no entra nadie.
+
 ## Caveats conocidos
 
 1. **`fail_timeout=10s`** — tras un fallo del primario, nginx lo marca caído
