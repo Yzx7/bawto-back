@@ -64,6 +64,9 @@ func Validate(flow *Flow) error {
 		}
 	}
 
+	if err := validateEdgeIDs(flow.Edges); err != nil {
+		return err
+	}
 	out := map[string]map[string]int{}
 	for _, edge := range flow.Edges {
 		if edge.Source != "trigger" && nodes[edge.Source] == nil {
@@ -222,6 +225,9 @@ func ValidateStructural(flow *Flow) error {
 	}
 
 	out := map[string]map[string]int{}
+	if err := validateEdgeIDs(flow.Edges); err != nil {
+		return err
+	}
 	for _, edge := range flow.Edges {
 		if edge.Source != "trigger" && nodes[edge.Source] == nil {
 			return fmt.Errorf("arista %s parte de un nodo inexistente", edge.ID)
@@ -257,6 +263,28 @@ func ValidateStructural(flow *Flow) error {
 	}
 	if cycle := automaticCycleWithoutWait(flow.Nodes, flow.Edges, nodes); len(cycle) > 0 {
 		return fmt.Errorf("el flujo contiene un ciclo sin un nodo wait entre los nodos: %s", strings.Join(cycle, ", "))
+	}
+	return nil
+}
+
+// validateEdgeIDs rechaza ids de arista repetidos.
+//
+// Un id **ausente** no es un error: el motor no lo lee y NormalizeEdgeIDs lo
+// rellena al guardar, para que quien escribe el flujo no cargue con una
+// contabilidad que la máquina puede deducir. Un id **duplicado** sí, y por eso
+// no se resuelve solo: no hay forma de saber cuál de las dos aristas era la
+// buena, y React Flow dibuja una sola de ellas. Es casi siempre un copiar y
+// pegar a medio corregir.
+func validateEdgeIDs(edges []Edge) error {
+	seen := make(map[string]struct{}, len(edges))
+	for _, edge := range edges {
+		if edge.ID == "" {
+			continue
+		}
+		if _, exists := seen[edge.ID]; exists {
+			return fmt.Errorf("id de arista duplicado: %s", edge.ID)
+		}
+		seen[edge.ID] = struct{}{}
 	}
 	return nil
 }

@@ -174,9 +174,16 @@ func TestWhatsAppFlowEngineIntegration(t *testing.T) {
 
 	// El webhook ejecuta la versión publicada del flujo `message`, así que el
 	// montaje de la prueba pasa por el mismo camino que el editor.
-	flowJSON := json.RawMessage(`{"id":"f","name":"F","trigger":{"type":"message","match":"any"},"nodes":[{"id":"s1","kind":"send","body":"Hola {input}"},{"id":"w1","kind":"wait"},{"id":"s2","kind":"send","body":"fin"}],"edges":[{"id":"e1","source":"trigger","target":"s1"},{"id":"e2","source":"s1","target":"w1"},{"id":"e3","source":"w1","target":"s2"}]}`)
+	// `send` es un nodo lineal: engine.Validate le exige exactamente una salida,
+	// así que el grafo necesita un cierre explícito detrás del último mensaje.
+	flowJSON := json.RawMessage(`{"id":"f","name":"F","trigger":{"type":"message","match":"any"},"nodes":[{"id":"s1","kind":"send","body":"Hola {input}"},{"id":"w1","kind":"wait"},{"id":"s2","kind":"send","body":"fin"},{"id":"fend","kind":"action","action":"end"}],"edges":[{"id":"e1","source":"trigger","target":"s1"},{"id":"e2","source":"s1","target":"w1"},{"id":"e3","source":"w1","target":"s2"},{"id":"e4","source":"s2","target":"fend"}]}`)
+	// El borrador tiene que llegar en el CreateFlow: sin él el flujo nace con
+	// `{}` y PublishFlow recibe el checksum de un grafo que no se guardó nunca,
+	// así que responde «el borrador cambió en otra sesión» y la prueba culpa a
+	// una carrera inexistente.
 	flow, err := models.CreateFlow(ctx, pool, bot.ID, models.NewFlow{
 		Key: "flow_fe", Name: "F", TriggerType: "message", IsFallback: true, UserID: uid,
+		Draft: flowJSON,
 	})
 	if err != nil {
 		t.Fatalf("CreateFlow: %v", err)
@@ -260,6 +267,7 @@ func TestWebhookVariosFlujosMessageEligeYReanuda(t *testing.T) {
 		flow, err := models.CreateFlow(ctx, pool, bot.ID, models.NewFlow{
 			Key: flowKey, Name: name, TriggerType: "message",
 			Priority: priority, IsFallback: fallback, UserID: uid,
+			Draft: json.RawMessage(graph),
 		})
 		if err != nil {
 			t.Fatalf("CreateFlow %s: %v", flowKey, err)

@@ -218,6 +218,8 @@ var authoringRules = []string{
 	"El borrador es mutable y la versión publicada es inmutable: escribir un borrador no cambia lo que el bot atiende.",
 	"engine.Validate es la única autoridad sobre qué grafo se puede publicar; flow_validate ejecuta esa misma función.",
 	"Las salidas declaradas de un agente son obligatorias y son su decisión de control: cada rama necesita su arista.",
+	"Una arista que sale de un nodo con ramas lleva sourceHandle con el nombre exacto de la rama: es lo único que dice qué rama va a qué nodo, y el orden de las aristas no significa nada.",
+	"El id de una arista no lo escribes tú: si falta, el servidor lo calcula al guardar. Solo se rechaza si repites uno.",
 	"Un orquestador (agentRole=orchestrator) no puede tener herramientas; los especialistas sí.",
 	"Un flujo schedule no admite agentes, herramientas ni esperas: fuera de la ventana de 24 h solo se envía una plantilla aprobada.",
 	"En data_query y data_mutate solo el value interpola variables; objeto, campos y operadores no pueden llevar '{'.",

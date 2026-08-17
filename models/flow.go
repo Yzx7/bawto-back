@@ -424,6 +424,15 @@ func updateFlowDraftTx(
 	if err != nil {
 		return nil, err
 	}
+	// Antes de canonizar: el motor no lee edges[].id, pero React Flow lo exige
+	// para dibujar. Sin esto, un grafo escrito por MCP o por el Copilot valida,
+	// corre bien y aparece en el editor sin ninguna conexión. Se rellena aquí
+	// —el único punto por el que pasan todas las escrituras del borrador— y no
+	// en cada llamador.
+	draft, err = engine.NormalizeEdgeIDs(draft)
+	if err != nil {
+		return nil, err
+	}
 	canonical, candidateChecksum, err := engine.CanonicalChecksum(draft)
 	if err != nil {
 		return nil, err
