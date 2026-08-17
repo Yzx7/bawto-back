@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -27,7 +26,13 @@ func main() {
 	}
 	defer pool.Close()
 
-	flowID := "9a490b4f-231e-4611-a2fa-e5faf20009b5"
+	flowID := "c2b5a88e-fbfd-4e01-9004-3fa0fe7f8c00"
+	for i := 1; i < len(os.Args); i++ {
+		if os.Args[i] == "-flow-id" && i+1 < len(os.Args) {
+			flowID = os.Args[i+1]
+			i++
+		}
+	}
 
 	var sessions []struct {
 		ID        string    `json:"id"`
@@ -52,6 +57,15 @@ func main() {
 	}
 	rows.Close()
 
+	// Flow draft info
+	var fDraft []byte
+	err = pool.QueryRow(ctx, `SELECT draft FROM flows WHERE id = $1`, flowID).Scan(&fDraft)
+	if err != nil {
+		fmt.Printf("flow draft error: %v\n", err)
+	} else {
+		fmt.Printf("Flow draft bytes: %d\n", len(fDraft))
+	}
+
 	fmt.Printf("=== SESSIONS (%d) ===\n", len(sessions))
 	for _, s := range sessions {
 		fmt.Printf("Session: %s, Title: %s, Status: %s, Created: %s\n", s.ID, s.Title, s.Status, s.CreatedAt.Format(time.RFC3339))
@@ -66,30 +80,21 @@ func main() {
 			var compAt *time.Time
 			_ = tRows.Scan(&tid, &seq, &userMsg, &asstMsg, &status, &mode, &edRev, &pSum, &wSum, &errCode, &cAt, &compAt)
 			fmt.Printf("  Turn #%d (%s): status=%s mode=%v user=%q\n", seq, tid, status, mode, userMsg)
-			if asstMsg != nil {
-				fmt.Printf("    Assistant (%d chars): %s\n", len(*asstMsg), *asstMsg)
-			}
-			if errCode != nil {
-				fmt.Printf("    ErrorCode: %s\n", *errCode)
-			}
+			fmt.Printf("    edRev=%s, pSum=%s, wSum=%s\n", edRev, pSum, wSum)
 
 			// Proposals for this turn
-			pRows, _ := pool.Query(ctx, `SELECT id, status, editor_revision, persisted_base_checksum, working_base_checksum, candidate_checksum, applied_by, applied_at, dismissed_by, candidate, operations, diff, diagnostics FROM flow_copilot_proposals WHERE turn_id = $1`, tid)
+			pRows, _ := pool.Query(ctx, `SELECT id, status, editor_revision, persisted_base_checksum, working_base_checksum, candidate_checksum, requirements, assumptions, diagnostics FROM flow_copilot_proposals WHERE turn_id = $1`, tid)
 			for pRows.Next() {
 				var pid, pStatus, pEdRev, pBaseSum, wBaseSum, candSum string
-				var appliedBy, dismissedBy *string
-				var appliedAt *time.Time
-				var cand, ops, diff, diag []byte
-				_ = pRows.Scan(&pid, &pStatus, &pEdRev, &pBaseSum, &wBaseSum, &candSum, &appliedBy, &appliedAt, &dismissedBy, &cand, &ops, &diff, &diag)
-				fmt.Printf("    Proposal %s: status=%s, edRev=%s, appliedBy=%v, appliedAt=%v\n", pid, pStatus, pEdRev, appliedBy, appliedAt)
-				fmt.Printf("      Candidate bytes: %d, ops bytes: %d, diff bytes: %d, diagnostics: %s\n", len(cand), len(ops), len(diff), string(diag))
-				if len(cand) > 0 {
-					var raw json.RawMessage = cand
-					fmt.Printf("      Candidate JSON: %s\n", string(raw))
-				}
-				if len(ops) > 0 {
-					fmt.Printf("      Operations JSON: %s\n", string(ops))
-				}
+				var reqs, assump, diag []byte
+				_ = pRows.Scan(&pid, &pStatus, &pEdRev, &pBaseSum, &wBaseSum, &candSum, &reqs, &assump, &diag)
+				fmt.Printf("    Proposal %s: status=%s, edRev=%s\n", pid, pStatus, pEdRev)
+				fmt.Printf("      pBaseSum: %s\n", pBaseSum)
+				fmt.Printf("      wBaseSum: %s\n", wBaseSum)
+				fmt.Printf("      candSum:  %s\n", candSum)
+				fmt.Printf("      requirements: %s\n", string(reqs))
+				fmt.Printf("      assumptions:  %s\n", string(assump))
+				fmt.Printf("      diagnostics:  %s\n", string(diag))
 			}
 			pRows.Close()
 		}

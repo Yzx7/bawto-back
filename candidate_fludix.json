@@ -1,0 +1,120 @@
+{
+  "id": "angelo-test",
+  "name": "Angelo Test",
+  "edges": [
+    {
+      "id": "e_trigger_bienvenida",
+      "source": "trigger",
+      "target": "n_bienvenida",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_bienvenida_esperar",
+      "source": "n_bienvenida",
+      "target": "n_esperar",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_esperar_clasificar",
+      "source": "n_esperar",
+      "target": "n_clasificar",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_clasificar_explicacion",
+      "source": "n_clasificar",
+      "target": "n_esperar",
+      "sourceHandle": "explicacion",
+      "role": "loopback"
+    },
+    {
+      "id": "e_clasificar_soporte",
+      "source": "n_clasificar",
+      "target": "n_esperar",
+      "sourceHandle": "soporte",
+      "role": "loopback"
+    },
+    {
+      "id": "e_clasificar_otro",
+      "source": "n_clasificar",
+      "target": "n_esperar",
+      "sourceHandle": "otro",
+      "role": "loopback"
+    },
+    {
+      "id": "e_clasificar_agente",
+      "source": "n_clasificar",
+      "target": "n_handoff",
+      "sourceHandle": "agente"
+    },
+    {
+      "id": "e_handoff_fin",
+      "source": "n_handoff",
+      "target": "n_fin_handoff",
+      "sourceHandle": "out"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "n_bienvenida",
+      "pos": {
+        "x": -891.9470936100118,
+        "y": 368.2299336394833
+      },
+      "body": "¡Hola! 👋 Bienvenido al canal de atención inteligente de Fludix. ¿En qué te podemos ayudar hoy con tu línea o tu recibo de abril?",
+      "kind": "send"
+    },
+    {
+      "id": "n_esperar",
+      "pos": {
+        "x": -548.7011689637063,
+        "y": 453.2318444663925
+      },
+      "kind": "wait",
+      "saveAs": "consulta_cliente",
+      "accepts": [
+        "text"
+      ]
+    },
+    {
+      "id": "n_clasificar",
+      "pos": {
+        "x": -126.31249756030391,
+        "y": 360.4302867083791
+      },
+      "kind": "agent",
+      "silent": false,
+      "outputs": [
+        "explicacion",
+        "soporte",
+        "agente",
+        "otro"
+      ],
+      "agentRole": "specialist",
+      "contextMode": "recent",
+      "instruction": "Eres el asistente de atención inteligente de Fludix para telecomunicaciones.\nTu objetivo en esta demostración es explicar con total claridad, empatía y precisión matemática las variaciones en los recibos de los clientes, evitando confusiones y reclamos innecesarios.\n\nDatos canónicos de la cuenta del cliente (Abril 2026):\n- Recibo anterior (Marzo): S/ 132.40\n- Recibo actual (Abril): S/ 150.80\n- Diferencia total: +S/ 18.40\n- Desglose de la variación:\n  1. Prorrateo: S/ 4.27 (por los 3 días de uso del nuevo plan tras el cambio realizado el 25/03).\n  2. Reconexión: S/ 4.58 (cargo por reconexión del 19/03 tras suspensión morosa).\n  3. Fin de descuento: S/ 9.55 (vencimiento del descuento de fidelización del 30%, con vigencia ene-mar).\n- Comprobación: 132.40 + 4.27 + 4.58 + 9.55 = 150.80 (cargos únicos no recurrentes; el próximo mes no se repiten).\n\nReglas de respuesta:\n1. Si el usuario pregunta por qué subió su recibo, por qué vino más caro (S/ 150.80), o menciona los S/ 18 soles de aumento:\n   - Responde explicando con amabilidad el motivo exacto del incremento de S/ 18.40 (de S/ 132.40 a S/ 150.80), desglosando los 3 conceptos con sus fechas y montos exactos en soles.\n   - Aclara enfáticamente que son cargos únicos que NO se repetirán en el siguiente recibo.\n   - Pregunta si desea ver el detalle de auditoría, proceder al pago o hablar con un asesor.\n   - Elige la rama \"explicacion\".\n\n2. Si el usuario pide hablar con un asesor humano o transferir con una persona:\n   - Responde confirmando que lo conectas de inmediato con un asesor del equipo.\n   - Elige la rama \"agente\".\n\n3. Si el usuario tiene una duda de soporte técnico o problemas con su servicio:\n   - Ofrece soporte técnico y solicita los detalles del inconveniente.\n   - Elige la rama \"soporte\".\n\n4. Si el mensaje es un saludo o no corresponde a las opciones anteriores:\n   - Saluda cordialmente e indica que puedes consultar su recibo detallado en Fludix, dar soporte o comunicarlo con un asesor.\n   - Elige la rama \"otro\"."
+    },
+    {
+      "id": "n_handoff",
+      "pos": {
+        "x": 419.9714770053091,
+        "y": 971.6422247875036
+      },
+      "kind": "action",
+      "action": "handoff"
+    },
+    {
+      "id": "n_fin_handoff",
+      "pos": {
+        "x": 405.8638968857882,
+        "y": 1220.3952856241492
+      },
+      "kind": "action",
+      "action": "end"
+    }
+  ],
+  "trigger": {
+    "type": "message",
+    "match": "any"
+  }
+}

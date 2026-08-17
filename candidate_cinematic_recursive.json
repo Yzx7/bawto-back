@@ -1,0 +1,844 @@
+{
+  "id": "test001",
+  "name": "Fludix Core · Motor Multicanal con Bucles Recursivos",
+  "edges": [
+    {
+      "id": "e_trigger_router",
+      "source": "trigger",
+      "target": "n_entry_router",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_router_conversation",
+      "source": "n_entry_router",
+      "target": "n_read_profile",
+      "sourceHandle": "c_conversation"
+    },
+    {
+      "id": "e_router_image",
+      "source": "n_entry_router",
+      "target": "n_agente_visual",
+      "sourceHandle": "c_image"
+    },
+    {
+      "id": "e_router_default",
+      "source": "n_entry_router",
+      "target": "n_unsupported_msg",
+      "sourceHandle": "default"
+    },
+    {
+      "id": "e_loopback_espera",
+      "role": "loopback",
+      "source": "n_espera",
+      "target": "n_entry_router",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_unsupported_espera",
+      "source": "n_unsupported_msg",
+      "target": "n_espera",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_profile_ok",
+      "source": "n_read_profile",
+      "target": "n_profile_router",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_profile_err",
+      "source": "n_read_profile",
+      "target": "n_sin_context",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_profile_seg",
+      "source": "n_profile_router",
+      "target": "n_set_context",
+      "sourceHandle": "segmentado"
+    },
+    {
+      "id": "e_profile_def",
+      "source": "n_profile_router",
+      "target": "n_sin_context",
+      "sourceHandle": "default"
+    },
+    {
+      "id": "e_set_ctx_orq",
+      "source": "n_set_context",
+      "target": "n_orquestador",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_sin_ctx_orq",
+      "source": "n_sin_context",
+      "target": "n_orquestador",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_orq_aclarar",
+      "source": "n_orquestador",
+      "target": "n_espera",
+      "sourceHandle": "aclarar"
+    },
+    {
+      "id": "e_orq_factura",
+      "source": "n_orquestador",
+      "target": "n_api_recibos",
+      "sourceHandle": "facturacion"
+    },
+    {
+      "id": "e_orq_soporte",
+      "source": "n_orquestador",
+      "target": "n_especialista_soporte",
+      "sourceHandle": "soporte"
+    },
+    {
+      "id": "e_orq_catalogo",
+      "source": "n_orquestador",
+      "target": "n_buscar_catalogo",
+      "sourceHandle": "catalogo"
+    },
+    {
+      "id": "e_orq_asesor",
+      "source": "n_orquestador",
+      "target": "n_derivar",
+      "sourceHandle": "asesor"
+    },
+    {
+      "id": "e_api_recibos_ok",
+      "source": "n_api_recibos",
+      "target": "n_especialista_facturacion",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_api_recibos_err",
+      "source": "n_api_recibos",
+      "target": "n_especialista_facturacion",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_esp_fact_conversar",
+      "source": "n_especialista_facturacion",
+      "target": "n_espera",
+      "sourceHandle": "conversar"
+    },
+    {
+      "id": "e_esp_fact_asesor",
+      "source": "n_especialista_facturacion",
+      "target": "n_derivar",
+      "sourceHandle": "asesor"
+    },
+    {
+      "id": "e_esp_fact_explicado",
+      "source": "n_especialista_facturacion",
+      "target": "n_enviar_desglose",
+      "sourceHandle": "explicado"
+    },
+    {
+      "id": "e_desglose_wait",
+      "source": "n_enviar_desglose",
+      "target": "n_factura_wait",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_factura_wait_router",
+      "source": "n_factura_wait",
+      "target": "n_factura_router",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_factura_router_pagar",
+      "source": "n_factura_router",
+      "target": "n_registrar_intencion_pago",
+      "sourceHandle": "pagar"
+    },
+    {
+      "id": "e_factura_router_reclamar",
+      "source": "n_factura_router",
+      "target": "n_crear_ticket",
+      "sourceHandle": "reclamar"
+    },
+    {
+      "id": "e_factura_router_default",
+      "source": "n_factura_router",
+      "target": "n_espera",
+      "sourceHandle": "default"
+    },
+    {
+      "id": "e_intencion_pago_ok",
+      "source": "n_registrar_intencion_pago",
+      "target": "n_confirmar_pago",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_intencion_pago_err",
+      "source": "n_registrar_intencion_pago",
+      "target": "n_derivar",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_confirmar_pago_fin",
+      "source": "n_confirmar_pago",
+      "target": "n_fin",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_ticket_ok",
+      "source": "n_crear_ticket",
+      "target": "n_ticket_retry_msg",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_ticket_err",
+      "source": "n_crear_ticket",
+      "target": "n_ticket_retry_msg",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_loopback_ticket_factura",
+      "role": "loopback",
+      "source": "n_ticket_retry_msg",
+      "target": "n_factura_wait",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_esp_soporte_conversar",
+      "source": "n_especialista_soporte",
+      "target": "n_espera",
+      "sourceHandle": "conversar"
+    },
+    {
+      "id": "e_esp_soporte_escalar",
+      "source": "n_especialista_soporte",
+      "target": "n_derivar",
+      "sourceHandle": "escalar"
+    },
+    {
+      "id": "e_esp_soporte_resuelto",
+      "source": "n_especialista_soporte",
+      "target": "n_soporte_resuelto_msg",
+      "sourceHandle": "resuelto"
+    },
+    {
+      "id": "e_soporte_resuelto_fin",
+      "source": "n_soporte_resuelto_msg",
+      "target": "n_fin",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_buscar_cat_ok",
+      "source": "n_buscar_catalogo",
+      "target": "n_especialista_ventas",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_buscar_cat_err",
+      "source": "n_buscar_catalogo",
+      "target": "n_especialista_ventas",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_esp_ventas_conversar",
+      "source": "n_especialista_ventas",
+      "target": "n_espera",
+      "sourceHandle": "conversar"
+    },
+    {
+      "id": "e_esp_ventas_asesor",
+      "source": "n_especialista_ventas",
+      "target": "n_derivar",
+      "sourceHandle": "asesor"
+    },
+    {
+      "id": "e_esp_ventas_oferta",
+      "source": "n_especialista_ventas",
+      "target": "n_enviar_oferta",
+      "sourceHandle": "oferta"
+    },
+    {
+      "id": "e_oferta_wait",
+      "source": "n_enviar_oferta",
+      "target": "n_ventas_wait",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_ventas_wait_router",
+      "source": "n_ventas_wait",
+      "target": "n_ventas_router",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_ventas_router_comprar",
+      "source": "n_ventas_router",
+      "target": "n_crear_pedido",
+      "sourceHandle": "comprar"
+    },
+    {
+      "id": "e_ventas_router_reintentar",
+      "source": "n_ventas_router",
+      "target": "n_ventas_retry_msg",
+      "sourceHandle": "reintentar"
+    },
+    {
+      "id": "e_ventas_router_default",
+      "source": "n_ventas_router",
+      "target": "n_espera",
+      "sourceHandle": "default"
+    },
+    {
+      "id": "e_pedido_ok_fin",
+      "source": "n_crear_pedido",
+      "target": "n_fin",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_pedido_err_derivar",
+      "source": "n_crear_pedido",
+      "target": "n_derivar",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_loopback_ventas_retry",
+      "role": "loopback",
+      "source": "n_ventas_retry_msg",
+      "target": "n_ventas_wait",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_vis_valido",
+      "source": "n_agente_visual",
+      "target": "n_guardar_comprobante",
+      "sourceHandle": "valido"
+    },
+    {
+      "id": "e_vis_ilegible",
+      "source": "n_agente_visual",
+      "target": "n_msg_reintentar_foto",
+      "sourceHandle": "ilegible"
+    },
+    {
+      "id": "e_vis_otro",
+      "source": "n_agente_visual",
+      "target": "n_unsupported_msg",
+      "sourceHandle": "otro"
+    },
+    {
+      "id": "e_comprobante_ok",
+      "source": "n_guardar_comprobante",
+      "target": "n_msg_pago_ok",
+      "sourceHandle": "ok"
+    },
+    {
+      "id": "e_comprobante_err",
+      "source": "n_guardar_comprobante",
+      "target": "n_derivar",
+      "sourceHandle": "error"
+    },
+    {
+      "id": "e_pago_ok_fin",
+      "source": "n_msg_pago_ok",
+      "target": "n_fin",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_reintentar_foto_wait",
+      "source": "n_msg_reintentar_foto",
+      "target": "n_image_wait",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_image_wait_router",
+      "source": "n_image_wait",
+      "target": "n_image_router",
+      "sourceHandle": "out"
+    },
+    {
+      "id": "e_loopback_image_retry",
+      "role": "loopback",
+      "source": "n_image_router",
+      "target": "n_agente_visual",
+      "sourceHandle": "c_image"
+    },
+    {
+      "id": "e_image_router_def",
+      "source": "n_image_router",
+      "target": "n_espera",
+      "sourceHandle": "default"
+    },
+    {
+      "id": "e_derivar_fin",
+      "source": "n_derivar",
+      "target": "n_fin",
+      "sourceHandle": "out"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "n_entry_router",
+      "pos": {
+        "x": 580,
+        "y": 300
+      },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "c_conversation",
+          "label": "Texto o Interacción",
+          "expression": "input.contentType in (text, interactive)"
+        },
+        {
+          "id": "c_image",
+          "label": "Imagen",
+          "expression": "input.contentType == 'image'"
+        }
+      ]
+    },
+    {
+      "id": "n_espera",
+      "pos": {
+        "x": 580,
+        "y": -180
+      },
+      "kind": "wait",
+      "timeoutHours": 24,
+      "accepts": [
+        "text",
+        "interactive"
+      ]
+    },
+    {
+      "id": "n_unsupported_msg",
+      "pos": {
+        "x": 980,
+        "y": -60
+      },
+      "body": "Recibí tu archivo. Puedes consultar sobre tu recibo escribiéndome en texto o enviando una captura.",
+      "kind": "send"
+    },
+    {
+      "id": "n_read_profile",
+      "pos": {
+        "x": 980,
+        "y": 150
+      },
+      "kind": "tool",
+      "toolRef": "data_query",
+      "saveAs": "perfil",
+      "args": {
+        "object": "perfiles_contacto",
+        "fields": "nombre,segmento",
+        "linkCurrentContact": "true"
+      }
+    },
+    {
+      "id": "n_profile_router",
+      "pos": {
+        "x": 1380,
+        "y": 150
+      },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "segmentado",
+          "label": "Segmento VIP / Corporativo",
+          "expression": "perfil.data.segmento == 'vip' || perfil.data.segmento == 'corporativo'"
+        }
+      ]
+    },
+    {
+      "id": "n_set_context",
+      "pos": {
+        "x": 1760,
+        "y": 80
+      },
+      "kind": "action",
+      "action": "set"
+    },
+    {
+      "id": "n_sin_context",
+      "pos": {
+        "x": 1760,
+        "y": 220
+      },
+      "kind": "action",
+      "action": "set"
+    },
+    {
+      "id": "n_orquestador",
+      "pos": {
+        "x": 2160,
+        "y": 300
+      },
+      "kind": "agent",
+      "silent": false,
+      "agentRole": "orchestrator",
+      "contextMode": "recent",
+      "outputs": [
+        "aclarar",
+        "facturacion",
+        "soporte",
+        "catalogo",
+        "asesor"
+      ],
+      "replyOn": [
+        "aclarar"
+      ],
+      "instruction": "Orquestador de Fludix. Clasifica la intención del cliente en:\n- aclarar: falta información o el mensaje es ambiguo\n- facturacion: consulta sobre recibo, aumentos o cobros\n- soporte: avería o lentitud técnica\n- catalogo: compra de planes o fibra\n- asesor: atención con una persona"
+    },
+    {
+      "id": "n_api_recibos",
+      "pos": {
+        "x": 2600,
+        "y": 100
+      },
+      "kind": "tool",
+      "toolRef": "dataset_query",
+      "saveAs": "recibo_data",
+      "args": {
+        "connection": "telecom_billing_api",
+        "resource": "recibos/historico",
+        "fields": "id,periodo,monto_total,prorrateo,reconexion,descuento",
+        "limit": "5"
+      }
+    },
+    {
+      "id": "n_especialista_facturacion",
+      "pos": {
+        "x": 3000,
+        "y": 100
+      },
+      "kind": "agent",
+      "silent": false,
+      "agentRole": "specialist",
+      "contextMode": "recent",
+      "outputs": [
+        "conversar",
+        "explicado",
+        "asesor"
+      ],
+      "instruction": "Especialista en facturación y recibos Fludix. Concilia la variación frente a marzo:\n- Recibo actual S/ 150.80 (+S/ 18.40)\n- Desglosa los 3 conceptos no recurrentes: S/ 4.27 prorrateo, S/ 4.58 reconexión, S/ 9.55 fin descuento.\n- Si el usuario tiene dudas elige conversar; si concluye elige explicado; si pide humano elige asesor."
+    },
+    {
+      "id": "n_enviar_desglose",
+      "pos": {
+        "x": 3400,
+        "y": 100
+      },
+      "body": "📊 Tu recibo de abril por S/ 150.80 (+S/ 18.40) ha sido auditado con éxito:\n• Prorrateo: S/ 4.27\n• Reconexión: S/ 4.58\n• Fin descuento: S/ 9.55\n🔒 Cargos únicos no recurrentes. En mayo tu recibo vuelve a la normalidad.",
+      "kind": "send"
+    },
+    {
+      "id": "n_factura_wait",
+      "pos": {
+        "x": 3780,
+        "y": 100
+      },
+      "kind": "wait",
+      "timeoutHours": 24,
+      "saveAs": "respuesta_factura",
+      "accepts": [
+        "text",
+        "interactive"
+      ]
+    },
+    {
+      "id": "n_factura_router",
+      "pos": {
+        "x": 4160,
+        "y": 100
+      },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "pagar",
+          "label": "Pagar Recibo",
+          "expression": "contains(respuesta_factura.text, 'pagar') || contains(respuesta_factura.text, 'pago')"
+        },
+        {
+          "id": "reclamar",
+          "label": "Abrir Reclamo",
+          "expression": "contains(respuesta_factura.text, 'reclamo') || contains(respuesta_factura.text, 'queja')"
+        }
+      ]
+    },
+    {
+      "id": "n_registrar_intencion_pago",
+      "pos": {
+        "x": 4560,
+        "y": 20
+      },
+      "kind": "tool",
+      "toolRef": "data_mutate",
+      "args": {
+        "object": "cobros",
+        "operation": "create",
+        "idempotencyKey": "pay:{input.id}",
+        "field.monto": "150.80",
+        "field.estado": "pendiente"
+      }
+    },
+    {
+      "id": "n_confirmar_pago",
+      "pos": {
+        "x": 4940,
+        "y": 20
+      },
+      "body": "💳 Generando tu link de pago seguro para el recibo de S/ 150.80... Recibirás tu constancia al instante.",
+      "kind": "send"
+    },
+    {
+      "id": "n_crear_ticket",
+      "pos": {
+        "x": 4560,
+        "y": 200
+      },
+      "kind": "tool",
+      "toolRef": "data_mutate",
+      "args": {
+        "object": "tickets_atencion",
+        "operation": "create",
+        "idempotencyKey": "tkt:{input.id}",
+        "field.tipo": "reclamo",
+        "field.prioridad": "alta"
+      }
+    },
+    {
+      "id": "n_ticket_retry_msg",
+      "pos": {
+        "x": 4160,
+        "y": 280
+      },
+      "body": "📝 Hemos abierto tu ticket de revisión técnica. Mientras tanto, ¿deseas revisar algún concepto adicional o proceder al pago?",
+      "kind": "send"
+    },
+    {
+      "id": "n_especialista_soporte",
+      "pos": {
+        "x": 2600,
+        "y": 460
+      },
+      "kind": "agent",
+      "silent": false,
+      "agentRole": "specialist",
+      "contextMode": "recent",
+      "outputs": [
+        "conversar",
+        "escalar",
+        "resuelto"
+      ],
+      "instruction": "Especialista en soporte de conectividad y fibra óptica Fludix. Proporciona guías de diagnóstico."
+    },
+    {
+      "id": "n_soporte_resuelto_msg",
+      "pos": {
+        "x": 3000,
+        "y": 460
+      },
+      "body": "🛠️ ¡Excelente! El diagnóstico de tu ONT óptica indica sincronismo normal a 500 Mbps. ¿Te ayudamos con algo más?",
+      "kind": "send"
+    },
+    {
+      "id": "n_buscar_catalogo",
+      "pos": {
+        "x": 2600,
+        "y": 720
+      },
+      "kind": "tool",
+      "toolRef": "catalog_search",
+      "saveAs": "planes_disponibles",
+      "args": {
+        "connection": "catalogo_planes",
+        "query": "fibra simetrica 500mb",
+        "limit": "3"
+      }
+    },
+    {
+      "id": "n_especialista_ventas",
+      "pos": {
+        "x": 3000,
+        "y": 720
+      },
+      "kind": "agent",
+      "silent": false,
+      "agentRole": "specialist",
+      "contextMode": "recent",
+      "outputs": [
+        "conversar",
+        "oferta",
+        "asesor"
+      ],
+      "instruction": "Especialista comercial Fludix. Asesora sobre cobertura y planes de fibra óptica."
+    },
+    {
+      "id": "n_enviar_oferta",
+      "pos": {
+        "x": 3400,
+        "y": 720
+      },
+      "body": "⚡ Tenemos cobertura en tu zona con Plan Fibra 500 Mbps Simétrico + Paramount+ incluido. ¿Deseas solicitar instalación?",
+      "kind": "send"
+    },
+    {
+      "id": "n_ventas_wait",
+      "pos": {
+        "x": 3780,
+        "y": 720
+      },
+      "kind": "wait",
+      "timeoutHours": 24,
+      "saveAs": "respuesta_oferta",
+      "accepts": [
+        "text"
+      ]
+    },
+    {
+      "id": "n_ventas_router",
+      "pos": {
+        "x": 4160,
+        "y": 720
+      },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "comprar",
+          "label": "Comprar Plan",
+          "expression": "contains(respuesta_oferta.text, 'si') || contains(respuesta_oferta.text, 'quiero') || contains(respuesta_oferta.text, 'instalar')"
+        },
+        {
+          "id": "reintentar",
+          "label": "Ver Más Opciones",
+          "expression": "contains(respuesta_oferta.text, 'mas') || contains(respuesta_oferta.text, 'otro')"
+        }
+      ]
+    },
+    {
+      "id": "n_crear_pedido",
+      "pos": {
+        "x": 4560,
+        "y": 720
+      },
+      "kind": "tool",
+      "toolRef": "data_mutate",
+      "args": {
+        "object": "pedidos",
+        "operation": "create",
+        "idempotencyKey": "ord:{input.id}",
+        "field.plan": "fibra_500",
+        "field.estado": "solicitado"
+      }
+    },
+    {
+      "id": "n_ventas_retry_msg",
+      "pos": {
+        "x": 4160,
+        "y": 860
+      },
+      "body": "Contamos con planes de 300 Mbps, 500 Mbps y 1 Gbps. ¿Cuál velocidad se adapta mejor a tu hogar?",
+      "kind": "send"
+    },
+    {
+      "id": "n_agente_visual",
+      "pos": {
+        "x": 980,
+        "y": 640
+      },
+      "kind": "agent",
+      "agentRole": "specialist",
+      "accepts": [
+        "image"
+      ],
+      "outputs": [
+        "valido",
+        "ilegible",
+        "otro"
+      ],
+      "instruction": "Agente de visión artificial Fludix. Extrae datos de recibos y comprobantes de pago."
+    },
+    {
+      "id": "n_guardar_comprobante",
+      "pos": {
+        "x": 1380,
+        "y": 640
+      },
+      "kind": "tool",
+      "toolRef": "data_mutate",
+      "args": {
+        "object": "auditoria_escaneos",
+        "operation": "create",
+        "idempotencyKey": "scan:{input.id}",
+        "field.tipo": "comprobante",
+        "field.estado": "validado"
+      }
+    },
+    {
+      "id": "n_msg_pago_ok",
+      "pos": {
+        "x": 1760,
+        "y": 640
+      },
+      "body": "✅ Comprobante verificado. Se ha registrado en tu historial de pagos.",
+      "kind": "send"
+    },
+    {
+      "id": "n_msg_reintentar_foto",
+      "pos": {
+        "x": 1380,
+        "y": 800
+      },
+      "body": "📸 La imagen no es totalmente legible. Por favor envía una foto completa y nítida donde se aprecie el número de operación y monto.",
+      "kind": "send"
+    },
+    {
+      "id": "n_image_wait",
+      "pos": {
+        "x": 1760,
+        "y": 800
+      },
+      "kind": "wait",
+      "timeoutHours": 24,
+      "saveAs": "reintento_foto",
+      "accepts": [
+        "image",
+        "text"
+      ]
+    },
+    {
+      "id": "n_image_router",
+      "pos": {
+        "x": 2160,
+        "y": 800
+      },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "c_image",
+          "label": "Imagen Recibida",
+          "expression": "input.contentType == 'image'"
+        }
+      ]
+    },
+    {
+      "id": "n_derivar",
+      "pos": {
+        "x": 3000,
+        "y": -80
+      },
+      "kind": "action",
+      "action": "handoff"
+    },
+    {
+      "id": "n_fin",
+      "pos": {
+        "x": 5320,
+        "y": 400
+      },
+      "kind": "action",
+      "action": "end"
+    }
+  ],
+  "trigger": {
+    "type": "message",
+    "match": "any"
+  }
+}
