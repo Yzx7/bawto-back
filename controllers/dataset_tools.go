@@ -284,10 +284,7 @@ func (con *Controller) execAgentDatasetQuery(ctx context.Context, bot *models.Bo
 		return datasetFailureForModel(err), nil
 	}
 	if !result.Found {
-		// Se le dice explícitamente que no hay nada, igual que en data_query y
-		// catalog_search: un resultado en blanco invita a rellenar el hueco
-		// inventando.
-		return "Sin resultados en el dataset. No hay información registrada sobre eso.", nil
+		return datasetEmptyForModel, nil
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d resultado(s) en el dataset:\n", result.Count)
@@ -296,6 +293,15 @@ func (con *Controller) execAgentDatasetQuery(ctx context.Context, bot *models.Bo
 	}
 	return b.String(), nil
 }
+
+// datasetEmptyForModel es lo que lee el modelo cuando el dataset no devuelve
+// nada. Se le dice explícitamente, igual que en data_query y catalog_search: un
+// resultado en blanco invita a rellenar el hueco inventando.
+//
+// Es una constante y no un literal incrustado porque el chat de prueba entrega
+// este mismo texto al simular la herramienta; con dos copias, el modelo leería
+// una cosa en la prueba y otra en producción sin que nadie lo notara.
+const datasetEmptyForModel = "Sin resultados en el dataset. No hay información registrada sobre eso."
 
 // datasetFailureForModel convierte el fallo en una instrucción que el modelo
 // puede seguir, igual que catalogFailureForModel: un error revienta el nodo y

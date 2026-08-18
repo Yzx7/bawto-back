@@ -137,6 +137,30 @@ func TestRutasDeKeysMCPDelPanelRegistradas(t *testing.T) {
 	}
 }
 
+// El chat de prueba cuelga de `/flows/:flowId`, que ya tiene muchas rutas
+// paramétricas; si alguien registrara `/test/:algo` antes, dejaría de existir en
+// silencio. Se comprueba contra la tabla y no por HTTP porque el grupo `/bots`
+// lleva VerifyToken: sin token responde 401 exista la ruta o no.
+//
+// También se comprueba lo que **no** debe existir: el chat de prueba ejecuta el
+// borrador y jamás publica ni envía por WhatsApp. Una ruta de envío colgando de
+// aquí convertiría una prueba del autor en un mensaje a un cliente real.
+func TestRutaDelChatDePruebaRegistrada(t *testing.T) {
+	paths := registeredPaths(t)
+	if !paths[http.MethodPost+" /bots/:botId/flows/:flowId/test/turns"] {
+		t.Error("ruta no registrada: POST /bots/:botId/flows/:flowId/test/turns")
+	}
+	for ruta := range paths {
+		path := ruta[strings.Index(ruta, " ")+1:]
+		if !strings.Contains(path, "/test/") {
+			continue
+		}
+		if strings.Contains(path, "publish") || strings.Contains(path, "send") {
+			t.Errorf("el chat de prueba expone una ruta que publica o envía: %s", ruta)
+		}
+	}
+}
+
 func TestValidateCronNoCuelgaDeFlows(t *testing.T) {
 	paths := registeredPaths(t)
 	if paths[http.MethodPost+" /bots/:botId/flows/validate-cron"] {

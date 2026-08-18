@@ -154,11 +154,21 @@ func (con *Controller) execAgentDataQuery(ctx context.Context, bot *models.BotCh
 		}
 	}
 	if total == 0 {
-		// Se le dice explícitamente que no hay nada, en vez de devolver vacío: un
-		// resultado en blanco invita a rellenar el hueco inventando.
-		return fmt.Sprintf("Sin resultados en %s. No hay información registrada sobre eso.", strings.Join(objectKeys, ", ")), nil
+		return dataQueryEmptyForModel(objectKeys), nil
 	}
 	return b.String(), nil
+}
+
+// dataQueryEmptyForModel es lo que lee el modelo cuando la tabla no tiene nada.
+// Se le dice explícitamente que no hay nada, en vez de devolver vacío: un
+// resultado en blanco invita a rellenar el hueco inventando.
+//
+// Vive en una función y no incrustado arriba porque el chat de prueba entrega
+// este mismo texto al simular la herramienta. Si fueran dos literales, el modelo
+// leería una cosa en la prueba y otra en producción sin que nadie lo notara.
+func dataQueryEmptyForModel(objectKeys []string) string {
+	return fmt.Sprintf("Sin resultados en %s. No hay información registrada sobre eso.",
+		strings.Join(objectKeys, ", "))
 }
 
 // renderValues aplana el registro a `clave: valor` en orden estable. Se entrega

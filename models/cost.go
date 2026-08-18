@@ -74,7 +74,7 @@ func RecordAIUsageAndChargeCredits(ctx context.Context, pool *pgxpool.Pool, in A
 	if err := normalizeAIUsage(&in.Usage); err != nil {
 		return err
 	}
-	credits := CostUSDToCredits(aiUsageCostUSD(in.Usage))
+	credits := CostUSDToCredits(AIUsageCostUSD(in.Usage))
 	if credits <= 0 {
 		return RecordAIUsage(ctx, pool, in.Usage)
 	}
@@ -154,7 +154,11 @@ func insertAIUsage(ctx context.Context, execer aiUsageExecer, in AIUsageEventInp
 	return tag.RowsAffected() > 0, err
 }
 
-func aiUsageCostUSD(in AIUsageEventInput) float64 {
+// AIUsageCostUSD es el costo en dólares de una respuesta del proveedor. Es
+// pública porque el chat de prueba tiene que informar del gasto del turno con la
+// misma cuenta con la que se cobra: dos fórmulas separadas acabarían enseñando
+// una cifra distinta de la que se descuenta del monedero.
+func AIUsageCostUSD(in AIUsageEventInput) float64 {
 	return (float64(in.InputTokens)*in.InputUSDPerMillion +
 		float64(in.OutputTokens)*in.OutputUSDPerMillion +
 		float64(in.CacheReadInputTokens)*in.CacheReadUSDPerMillion +

@@ -511,9 +511,7 @@ func (con *Controller) execAgentCatalogSearch(ctx context.Context, bot *models.B
 		return catalogFailureForModel(err), nil
 	}
 	if !result.Found {
-		// Se le dice explícitamente que no hay nada. Un resultado en blanco invita
-		// a rellenar el hueco con lo que el modelo "recuerda" de un catálogo.
-		return "Sin resultados en el catálogo de la tienda. Ese producto no está a la venta; dilo así en vez de suponer.", nil
+		return catalogSearchEmptyForModel, nil
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d producto(s) en el catálogo:\n", result.Count)
@@ -545,10 +543,22 @@ func (con *Controller) execAgentCatalogProduct(ctx context.Context, bot *models.
 		return catalogFailureForModel(err), nil
 	}
 	if !result.Found {
-		return "Ese producto no existe en el catálogo. No lo describas: búscalo de nuevo o dile al cliente que no lo tenemos.", nil
+		return catalogProductMissingForModel, nil
 	}
 	return renderValues(result.First.Data), nil
 }
+
+// Textos que lee el modelo cuando la tienda no tiene lo que busca. Se le dice
+// explícitamente que no hay nada: un resultado en blanco invita a rellenar el
+// hueco con lo que el modelo "recuerda" de un catálogo.
+//
+// Son constantes y no literales incrustados porque el chat de prueba entrega
+// estos mismos textos al simular las herramientas; con dos copias, el modelo
+// leería una cosa en la prueba y otra en producción sin que nadie lo notara.
+const (
+	catalogSearchEmptyForModel    = "Sin resultados en el catálogo de la tienda. Ese producto no está a la venta; dilo así en vez de suponer."
+	catalogProductMissingForModel = "Ese producto no existe en el catálogo. No lo describas: búscalo de nuevo o dile al cliente que no lo tenemos."
+)
 
 // catalogFailureForModel convierte el fallo en una instrucción que el modelo
 // puede seguir.

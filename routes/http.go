@@ -126,6 +126,9 @@ func RegisterHTTP(app *fiber.App, e *env.Env) {
 	bots.Post("/:botId/flows/:flowId/copilot/proposals/:proposalId/dismiss", con.DismissBotFlowCopilotProposal)
 	bots.Post("/:botId/flows/:flowId/copilot/proposals/:proposalId/undo", con.UndoBotFlowCopilotProposal)
 	bots.Post("/:botId/flows/:flowId/copilot/sessions/:sessionId/close", con.CloseBotFlowCopilotSession)
+	// Chat de prueba del borrador. No publica, no envía por WhatsApp y no escribe
+	// nada: las herramientas se simulan y el estado viaja en el cuerpo.
+	bots.Post("/:botId/flows/:flowId/test/turns", con.CreateBotFlowTestTurn)
 	// Interfaz operativa (§10.2 y §10.3). El preview no escribe nada; el
 	// historial y sus acciones se acotan siempre por bot.
 	bots.Post("/:botId/flows/:flowId/schedule/preview", con.PreviewBotFlowSchedule)
