@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Yzx7/sacs-chatbots/authoring"
 	"github.com/Yzx7/sacs-chatbots/engine"
@@ -111,6 +112,7 @@ func runTurn(ctx context.Context, provider ModelProvider, config RunnerConfig, r
 	invalidTerminalCount := 0
 	for step := 1; step <= config.MaxSteps; step++ {
 		modelRequest.RequireTerminal = step == config.MaxSteps
+		modelRequest.Step = step
 		response, err := provider.Next(ctx, modelRequest)
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
@@ -129,12 +131,13 @@ func runTurn(ctx context.Context, provider ModelProvider, config RunnerConfig, r
 		response.Usage.Step = step
 		recordModelUsage(ctx, response.Usage)
 		accumulateUsage(&result.Usage, response.Usage)
+		// El razonamiento ya viajó al panel como deltas mientras el proveedor lo
+		// generaba. Aquí solo se acumula para persistirlo con el turno.
 		if response.Thought != "" {
 			if result.Thought != "" {
 				result.Thought += "\n\n"
 			}
 			result.Thought += response.Thought
-			emitThought(ctx, ThoughtEvent{Step: step, Content: response.Thought})
 		}
 		if len(response.Calls) == 0 {
 			if step == config.MaxSteps || invalidTerminalCount >= config.InvalidTerminalRetries {
@@ -167,13 +170,15 @@ func runTurn(ctx context.Context, provider ModelProvider, config RunnerConfig, r
 				return nil, fmt.Errorf("%w: submit_proposal debe ser la única llamada del paso", ErrInvalidTerminal)
 			}
 			call := response.Calls[0]
-			emitActivity(ctx, ActivityEvent{Step: step, Name: call.Name, Status: "started"})
+			emitActivity(ctx, ActivityEvent{Step: step, Name: call.Name, Phase: "started"})
+			startedAt := time.Now()
 			terminal, proposal, terminalErr := workspace.submit(call.Arguments)
-			status := "finished"
+			status := "ok"
 			if terminalErr != nil {
 				status = "error"
 			}
-			emitActivity(ctx, ActivityEvent{Step: step, Name: call.Name, Status: status})
+			emitActivity(ctx, ActivityEvent{Step: step, Name: call.Name, Phase: "finished",
+				Status: status, DurationMs: time.Since(startedAt).Milliseconds()})
 			result.Trace = append(result.Trace, ToolTrace{Step: step, Name: call.Name, Status: status, CallID: call.ID})
 			if terminalErr == nil {
 				result.Terminal = terminal
@@ -245,7 +250,8 @@ func runTurn(ctx context.Context, provider ModelProvider, config RunnerConfig, r
 				}
 				return result, nil
 			}
-			emitActivity(ctx, ActivityEvent{Step: step, Name: call.Name, Status: "started"})
+			emitActivity(ctx, ActivityEvent{Step: step, Name: call.Name, Phase: "started"})
+			startedAt := time.Now()
 			output, executeErr := workspace.execute(call)
 			status := "ok"
 			var functionResult FunctionResult
@@ -264,7 +270,8 @@ func runTurn(ctx context.Context, provider ModelProvider, config RunnerConfig, r
 					functionResult = errorFunctionResult(call.ID, call.Name, "tool_result_too_large", err.Error(), nil)
 				}
 			}
-			emitActivity(ctx, ActivityEvent{Step: step, Name: call.Name, Status: "finished"})
+			emitActivity(ctx, ActivityEvent{Step: step, Name: call.Name, Phase: "finished",
+				Status: status, DurationMs: time.Since(startedAt).Milliseconds()})
 			result.Trace = append(result.Trace, ToolTrace{Step: step, Name: call.Name, Status: status, CallID: call.ID})
 			toolResults = append(toolResults, functionResult)
 		}

@@ -15,11 +15,11 @@ import (
 	"github.com/Yzx7/sacs-chatbots/types"
 )
 
-func TestDecodeStrictCopilotBody(t *testing.T) {
+func TestDecodeStrictJSONBody(t *testing.T) {
 	var valid struct {
 		ExpectedDraftChecksum string `json:"expectedDraftChecksum"`
 	}
-	if err := decodeStrictCopilotBody([]byte(`{"expectedDraftChecksum":"abc"}`), &valid); err != nil || valid.ExpectedDraftChecksum != "abc" {
+	if err := decodeStrictJSONBody([]byte(`{"expectedDraftChecksum":"abc"}`), &valid); err != nil || valid.ExpectedDraftChecksum != "abc" {
 		t.Fatalf("body válido rechazado: value=%q err=%v", valid.ExpectedDraftChecksum, err)
 	}
 	for _, raw := range []string{
@@ -30,7 +30,7 @@ func TestDecodeStrictCopilotBody(t *testing.T) {
 		var target struct {
 			ExpectedDraftChecksum string `json:"expectedDraftChecksum"`
 		}
-		if err := decodeStrictCopilotBody([]byte(raw), &target); err == nil {
+		if err := decodeStrictJSONBody([]byte(raw), &target); err == nil {
 			t.Fatalf("body no fail-closed aceptado: %s", raw)
 		}
 	}

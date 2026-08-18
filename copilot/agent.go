@@ -17,13 +17,17 @@ type ModelProvider interface {
 }
 
 type ModelRequest struct {
-	SystemPrompt    string               `json:"systemPrompt"`
-	Scope           TurnScope            `json:"-"`
-	Initial         *InitialModelContext `json:"initial,omitempty"`
-	Continuation    any                  `json:"-"`
-	ToolResults     []FunctionResult     `json:"toolResults,omitempty"`
-	Tools           []FunctionDefinition `json:"tools"`
-	RequireTerminal bool                 `json:"requireTerminal"`
+	SystemPrompt string               `json:"systemPrompt"`
+	Scope        TurnScope            `json:"-"`
+	Initial      *InitialModelContext `json:"initial,omitempty"`
+	Continuation any                  `json:"-"`
+	ToolResults  []FunctionResult     `json:"toolResults,omitempty"`
+	Tools        []FunctionDefinition `json:"tools"`
+	// Step es el paso del presupuesto que ejecuta esta petición. El proveedor no
+	// lo usa para decidir nada: viaja para que los deltas que emite mientras
+	// streamea se puedan atribuir al paso correcto en el panel.
+	Step            int  `json:"step"`
+	RequireTerminal bool `json:"requireTerminal"`
 }
 
 type InitialModelContext struct {
@@ -146,18 +150,48 @@ type ToolTrace struct {
 }
 
 type ActivityEvent struct {
-	Step   int    `json:"step"`
-	Name   string `json:"name"`
-	Status string `json:"status"` // started | finished
+	Step int    `json:"step"`
+	Name string `json:"name"`
+	// Phase separa el ciclo de vida del resultado. Antes ambos compartían campo
+	// y el cierre siempre decía "finished", así que una tool que fallaba se
+	// pintaba en el panel igual que una que había ido bien.
+	Phase      string `json:"phase"`            // started | finished
+	Status     string `json:"status,omitempty"` // ok | error, solo en finished
+	DurationMs int64  `json:"durationMs,omitempty"`
 }
 
-type ThoughtEvent struct {
-	Step    int    `json:"step"`
-	Content string `json:"content"`
+// StreamDelta es el avance del modelo *dentro* de un paso, tal como lo entrega
+// el proveedor mientras genera. Es lo que permite que el panel pinte el
+// razonamiento token a token en vez de esperar a que el paso entero termine.
+//
+// Kind "tool" no lleva Content: anuncia que el proveedor abrió un bloque
+// tool_use y solo transporta el nombre. Los argumentos de una function call
+// nunca salen por aquí, igual que en ActivityEvent.
+type StreamDelta struct {
+	Step     int    `json:"step"`
+	Kind     string `json:"kind"` // thinking | text | tool
+	Content  string `json:"content,omitempty"`
+	ToolName string `json:"toolName,omitempty"`
 }
 
 type activitySinkContextKey struct{}
-type thoughtSinkContextKey struct{}
+type deltaSinkContextKey struct{}
+
+// WithDeltaSink instala el consumidor de deltas del proveedor. El provider lo
+// invoca desde dentro del bucle de streaming, así que el sink debe ser barato y
+// no bloquear: cualquier espera aquí frena la generación del modelo.
+func WithDeltaSink(ctx context.Context, sink func(StreamDelta)) context.Context {
+	if sink == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, deltaSinkContextKey{}, sink)
+}
+
+func emitDelta(ctx context.Context, delta StreamDelta) {
+	if sink, ok := ctx.Value(deltaSinkContextKey{}).(func(StreamDelta)); ok {
+		sink(delta)
+	}
+}
 
 // WithActivitySink streams allowlisted function names and lifecycle only.
 func WithActivitySink(ctx context.Context, sink func(ActivityEvent)) context.Context {
@@ -169,20 +203,6 @@ func WithActivitySink(ctx context.Context, sink func(ActivityEvent)) context.Con
 
 func emitActivity(ctx context.Context, event ActivityEvent) {
 	if sink, ok := ctx.Value(activitySinkContextKey{}).(func(ActivityEvent)); ok {
-		sink(event)
-	}
-}
-
-// WithThoughtSink streams thinking and reasoning blocks emitted by frontier models.
-func WithThoughtSink(ctx context.Context, sink func(ThoughtEvent)) context.Context {
-	if sink == nil {
-		return ctx
-	}
-	return context.WithValue(ctx, thoughtSinkContextKey{}, sink)
-}
-
-func emitThought(ctx context.Context, event ThoughtEvent) {
-	if sink, ok := ctx.Value(thoughtSinkContextKey{}).(func(ThoughtEvent)); ok {
 		sink(event)
 	}
 }

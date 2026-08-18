@@ -85,7 +85,7 @@ func (con *Controller) CreateBotFlowCopilotSession(c *fiber.Ctx) error {
 		EditorRevision         string          `json:"editorRevision"`
 		SelectedNodeID         string          `json:"selectedNodeId"`
 	}
-	if err := decodeStrictCopilotBody(c.Body(), &body); err != nil {
+	if err := decodeStrictJSONBody(c.Body(), &body); err != nil {
 		return con.fail(c, fiber.StatusBadRequest, "input inválido: "+err.Error())
 	}
 	if len(body.SelectedNodeID) > 200 {
@@ -158,7 +158,7 @@ func (con *Controller) CreateBotFlowCopilotTurn(c *fiber.Ctx) error {
 		ReviseProposalID          string          `json:"reviseProposalId"`
 		ExpectedCandidateChecksum string          `json:"expectedCandidateChecksum"`
 	}
-	if err := decodeStrictCopilotBody(c.Body(), &body); err != nil {
+	if err := decodeStrictJSONBody(c.Body(), &body); err != nil {
 		return con.fail(c, fiber.StatusBadRequest, "input inválido: "+err.Error())
 	}
 	if len(body.SelectedNodeID) > 200 {
@@ -281,7 +281,7 @@ func (con *Controller) ApplyBotFlowCopilotProposal(c *fiber.Ctx) error {
 		ExpectedEditorRevision string          `json:"expectedEditorRevision"`
 		CurrentWorkingDraft    json.RawMessage `json:"currentWorkingDraft"`
 	}
-	if err := decodeStrictCopilotBody(c.Body(), &body); err != nil {
+	if err := decodeStrictJSONBody(c.Body(), &body); err != nil {
 		return con.fail(c, fiber.StatusBadRequest, "input inválido: "+err.Error())
 	}
 	result, err := models.ApplyFlowCopilotProposal(c.Context(), con.Env.Postgres,
@@ -328,7 +328,7 @@ func (con *Controller) UndoBotFlowCopilotProposal(c *fiber.Ctx) error {
 	var body struct {
 		ExpectedDraftChecksum string `json:"expectedDraftChecksum"`
 	}
-	if err := decodeStrictCopilotBody(c.Body(), &body); err != nil {
+	if err := decodeStrictJSONBody(c.Body(), &body); err != nil {
 		return con.fail(c, fiber.StatusBadRequest, "input inválido: "+err.Error())
 	}
 	result, err := models.UndoFlowCopilotProposal(c.Context(), con.Env.Postgres,
@@ -375,7 +375,7 @@ func (con *Controller) failFlowCopilot(c *fiber.Ctx, op, botID string, err error
 	return con.failFlow(c, op, botID, err, "no se pudo completar la operación del Copilot")
 }
 
-func decodeStrictCopilotBody(body []byte, target any) error {
+func decodeStrictJSONBody(body []byte, target any) error {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
@@ -458,7 +458,7 @@ func (s copilotTurnStream) write(w *bufio.Writer) {
 
 	runCtx := copilot.WithActivitySink(ctx, s.activitySink(emit))
 	runCtx = copilot.WithUsageRecorder(runCtx, s.usageRecorder())
-	runCtx = copilot.WithThoughtSink(runCtx, s.thoughtSink(emit))
+	runCtx = copilot.WithDeltaSink(runCtx, s.deltaSink(emit))
 
 	result, runErr := s.runner.Agent.RunTurn(runCtx, s.request)
 	if runErr != nil {
@@ -500,34 +500,51 @@ func (s copilotTurnStream) write(w *bufio.Writer) {
 	_ = emit(map[string]any{"type": "turn.completed", "turnId": s.turn.ID, "turn": finalTurn, "costUsd": result.Usage.CostUSD})
 }
 
-func (s copilotTurnStream) thoughtSink(emit func(any) bool) func(copilot.ThoughtEvent) {
-	return func(event copilot.ThoughtEvent) {
-		content := strings.TrimSpace(event.Content)
-		if content == "" {
-			return
+// deltaSink retransmite el avance del modelo dentro de cada paso. Es lo que
+// permite ver el razonamiento formándose en vez de esperar al paso completo:
+// el primer thinking_delta de DeepSeek llega a los ~380 ms, mientras que el
+// paso entero tarda decenas de segundos.
+//
+// Corre en la misma goroutine que el escritor del cuerpo, así que no necesita
+// sincronización, pero tampoco puede bloquear: cada espera aquí frena al modelo.
+func (s copilotTurnStream) deltaSink(emit func(any) bool) func(copilot.StreamDelta) {
+	return func(delta copilot.StreamDelta) {
+		switch delta.Kind {
+		case "thinking":
+			_ = emit(map[string]any{
+				"type": "thought.delta", "turnId": s.turn.ID,
+				"step": delta.Step, "content": delta.Content,
+			})
+		case "text":
+			_ = emit(map[string]any{
+				"type": "assistant.delta", "turnId": s.turn.ID,
+				"step": delta.Step, "content": delta.Content,
+			})
+		case "tool":
+			// El bloque tool_use se abrió: se anuncia la intención antes de que
+			// el paso termine. La ejecución real la reporta activity.*.
+			_ = emit(map[string]any{
+				"type": "activity.pending", "turnId": s.turn.ID,
+				"step": delta.Step, "label": copilotActivityLabel(delta.ToolName),
+			})
 		}
-		_ = emit(map[string]any{
-			"type":    "thought.message",
-			"turnId":  s.turn.ID,
-			"step":    event.Step,
-			"content": content,
-		})
 	}
 }
 
-// activitySink traduce ActivityEvent{step,name,status} del loop a los eventos
-// activityId/label que espera el frontend. Solo viajan nombres permitidos y
-// ciclo de vida, nunca argumentos ni resultados.
+// activitySink traduce ActivityEvent del loop a los eventos activityId/label
+// que espera el frontend. Solo viajan nombres permitidos y ciclo de vida,
+// nunca argumentos ni resultados.
 func (s copilotTurnStream) activitySink(emit func(any) bool) func(copilot.ActivityEvent) {
 	activityIDs := make(map[string]string)
 	counter := 0
 	return func(event copilot.ActivityEvent) {
 		key := event.Name + "@" + strconv.Itoa(event.Step)
-		if event.Status == "started" {
+		if event.Phase == "started" {
 			counter++
 			id := "act-" + strconv.Itoa(counter)
 			activityIDs[key] = id
-			_ = emit(map[string]any{"type": "activity.started", "activityId": id, "label": copilotActivityLabel(event.Name)})
+			_ = emit(map[string]any{"type": "activity.started", "activityId": id,
+				"label": copilotActivityLabel(event.Name), "step": event.Step})
 			return
 		}
 		id, ok := activityIDs[key]
@@ -535,7 +552,8 @@ func (s copilotTurnStream) activitySink(emit func(any) bool) func(copilot.Activi
 			return
 		}
 		delete(activityIDs, key)
-		_ = emit(map[string]any{"type": "activity.finished", "activityId": id})
+		_ = emit(map[string]any{"type": "activity.finished", "activityId": id,
+			"status": event.Status, "durationMs": event.DurationMs})
 	}
 }
 

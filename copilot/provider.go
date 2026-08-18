@@ -99,6 +99,7 @@ func (p *AnthropicProvider) Next(ctx context.Context, req ModelRequest) (ModelRe
 		Messages:  conv.messages,
 		Tools:     toolParamsFor(req.Tools),
 	}
+	requestOptions := p.tenantOptions()
 	if req.RequireTerminal {
 		// El último paso del presupuesto se reserva para el terminal: se fuerza
 		// submit_proposal para que el turno no muera en una consulta más.
@@ -108,16 +109,66 @@ func (p *AnthropicProvider) Next(ctx context.Context, req ModelRequest) (ModelRe
 				DisableParallelToolUse: anthropic.Bool(true),
 			},
 		}
+		// Forzar UNA tool concreta es lo único incompatible con el razonamiento:
+		// DeepSeek responde 400 «Thinking mode does not support this tool_choice»
+		// y Anthropic solo admite `auto` con extended thinking. Se apaga aquí y
+		// solo aquí, porque este paso ya no diseña: únicamente redacta el
+		// terminal con el candidato que los pasos anteriores dejaron listo.
+		// Comprobado con cmd/copilotthinkprobe contra v4-flash y v4-pro.
+		requestOptions = append(requestOptions, thinkingDisabledOption())
 	} else {
 		// `any` garantiza que cada paso produzca al menos una function call y que
-		// el loop nunca reciba un mensaje sin tool_use que referenciar.
+		// el loop nunca reciba un mensaje sin tool_use que referenciar. `any` sí
+		// convive con el razonamiento; el que no es `tool{nombre}`.
 		params.ToolChoice = anthropic.ToolChoiceUnionParam{
 			OfAny: &anthropic.ToolChoiceAnyParam{DisableParallelToolUse: anthropic.Bool(true)},
 		}
 	}
 
-	resp, err := p.client.Messages.New(ctx, params, p.tenantOptions()...)
-	if err != nil {
+	// Se streamea siempre, incluso sin sink instalado: es el mismo resultado y
+	// evita que el panel dependa de un modo distinto del que se prueba.
+	stream := p.client.Messages.NewStreaming(ctx, params, requestOptions...)
+	var resp anthropic.Message
+	toolArguments := map[int64]*strings.Builder{}
+	// El input que venía en content_block_start, guardado antes de que
+	// Accumulate lo mezcle con los deltas. Es el respaldo cuando la
+	// concatenación de deltas no da JSON válido por sí sola.
+	startInputs := map[int64]json.RawMessage{}
+	for stream.Next() {
+		event := stream.Current()
+		switch typed := event.AsAny().(type) {
+		case anthropic.ContentBlockStartEvent:
+			if typed.ContentBlock.Type == "tool_use" && typed.ContentBlock.Input != nil {
+				if raw, err := json.Marshal(typed.ContentBlock.Input); err == nil {
+					startInputs[typed.Index] = raw
+				}
+			}
+		case anthropic.ContentBlockDeltaEvent:
+			if delta, ok := typed.Delta.AsAny().(anthropic.InputJSONDelta); ok {
+				buffer := toolArguments[typed.Index]
+				if buffer == nil {
+					buffer = &strings.Builder{}
+					toolArguments[typed.Index] = buffer
+				}
+				buffer.WriteString(delta.PartialJSON)
+			}
+		case anthropic.ContentBlockStopEvent:
+			// Accumulate marshaliza el bloque justo al procesar este evento, así
+			// que la reparación tiene que ir antes o el turno muere aquí.
+			repairToolInput(&resp, typed.Index, toolArguments, startInputs)
+		case anthropic.MessageStopEvent:
+			// Un proveedor que no cierre algún bloque dejaría basura que revienta
+			// al marshalizar el mensaje entero.
+			for index := range resp.Content {
+				repairToolInput(&resp, int64(index), toolArguments, startInputs)
+			}
+		}
+		if err := resp.Accumulate(event); err != nil {
+			return ModelResponse{}, err
+		}
+		p.relayDelta(ctx, req.Step, event)
+	}
+	if err := stream.Err(); err != nil {
 		return ModelResponse{}, err
 	}
 	// La respuesta completa vuelve al historial: los bloques de reasoning del
@@ -159,6 +210,73 @@ func (p *AnthropicProvider) Next(ctx context.Context, req ModelRequest) (ModelRe
 		float64(usage.CacheWriteInputTokens)*p.rates.CacheWritePerMillion) / 1_000_000
 
 	return ModelResponse{Continuation: conv, Calls: calls, Text: textBuilder.String(), Thought: thoughtBuilder.String(), Usage: usage}, nil
+}
+
+// repairToolInput deja el `input` de un bloque tool_use como JSON válido antes
+// de que el SDK lo marshalice.
+//
+// Existe por dos comportamientos reales de un endpoint compatible, ninguno de
+// los cuales se notaba con Messages.New porque allí el cuerpo llegaba entero y
+// ya parseado:
+//
+//  1. Una tool sin argumentos no trae `input` ni deltas, y el RawMessage vacío
+//     falla al marshalizar con «unexpected end of JSON input».
+//  2. Si el proveedor manda el input completo en content_block_start Y además
+//     como input_json_delta, el SDK los concatena —solo reemplaza cuando el
+//     valor previo es exactamente `{}`— y produce dos objetos pegados.
+//
+// Los deltas mandan sobre el valor inicial, que es la semántica de Anthropic.
+func repairToolInput(message *anthropic.Message, index int64,
+	buffers map[int64]*strings.Builder, startInputs map[int64]json.RawMessage) {
+	if index < 0 || int(index) >= len(message.Content) {
+		return
+	}
+	block := &message.Content[index]
+	if block.Type != "tool_use" {
+		return
+	}
+	// 1) Los deltas son la fuente correcta según el protocolo.
+	if buffer, exists := buffers[index]; exists && buffer.Len() > 0 {
+		if raw := buffer.String(); json.Valid([]byte(raw)) {
+			block.Input = json.RawMessage(raw)
+			return
+		}
+	}
+	// 2) Si los deltas no forman JSON válido por sí solos, el input del start
+	//    conserva los argumentos de verdad. Recuperarlos importa: caer al objeto
+	//    vacío deja al modelo llamando a la tool sin lo que pidió.
+	if raw, exists := startInputs[index]; exists && json.Valid(raw) {
+		block.Input = raw
+		return
+	}
+	// 3) Último recurso: un objeto vacío mantiene vivo el turno.
+	if len(block.Input) == 0 || !json.Valid(block.Input) {
+		block.Input = json.RawMessage("{}")
+	}
+}
+
+// relayDelta traduce los eventos del stream del proveedor a StreamDelta. Solo
+// salen razonamiento, texto y el nombre de una tool al abrirse su bloque: los
+// input_json_delta se ignoran a propósito, porque llevan los argumentos de la
+// function call y esos nunca cruzan al panel.
+func (p *AnthropicProvider) relayDelta(ctx context.Context, step int, event anthropic.MessageStreamEventUnion) {
+	switch typed := event.AsAny().(type) {
+	case anthropic.ContentBlockStartEvent:
+		if typed.ContentBlock.Type == "tool_use" && typed.ContentBlock.Name != "" {
+			emitDelta(ctx, StreamDelta{Step: step, Kind: "tool", ToolName: typed.ContentBlock.Name})
+		}
+	case anthropic.ContentBlockDeltaEvent:
+		switch delta := typed.Delta.AsAny().(type) {
+		case anthropic.ThinkingDelta:
+			if delta.Thinking != "" {
+				emitDelta(ctx, StreamDelta{Step: step, Kind: "thinking", Content: delta.Thinking})
+			}
+		case anthropic.TextDelta:
+			if delta.Text != "" {
+				emitDelta(ctx, StreamDelta{Step: step, Kind: "text", Content: delta.Text})
+			}
+		}
+	}
 }
 
 func toolParamsFor(defs []FunctionDefinition) []anthropic.ToolUnionParam {
@@ -203,6 +321,12 @@ func initialPrompt(initial *InitialModelContext) string {
 	return sb.String()
 }
 
+// thinkingDisabledOption apaga el razonamiento en una petición concreta. Se usa
+// solo en el paso terminal, que es el único que fuerza una tool por nombre.
+func thinkingDisabledOption() option.RequestOption {
+	return option.WithJSONSet("thinking", map[string]string{"type": "disabled"})
+}
+
 // reasoningRequestOptions configura el razonamiento por proveedor. Cada
 // proveedor compatible entiende el campo a su manera, así que se inyecta por
 // WithJSONSet (precedente: providerRequestOptions en engine/ai).
@@ -211,11 +335,13 @@ func reasoningRequestOptions(provider, effort string) []option.RequestOption {
 	effortLevel := strings.ToLower(strings.TrimSpace(effort))
 	switch provider {
 	case "deepseek":
-		// DeepSeek con razonamiento rechaza el tool_choice forzado con un 400, y
-		// el loop de autoría necesita tool_choice. Se apaga el razonamiento aquí.
-		return []option.RequestOption{
-			option.WithJSONSet("thinking", map[string]string{"type": "disabled"}),
-		}
+		// Aquí estuvo apagado el razonamiento del Copilot entero hasta el
+		// 2026-08-17, por un 400 que solo ocurre al forzar UNA tool por nombre.
+		// Ese caso es exclusivo del paso terminal y ahora se trata allí, así que
+		// los pasos de diseño —donde está el valor de razonar— vuelven a pensar.
+		// DeepSeek razona por defecto y no admite presupuesto, así que no se
+		// inyecta nada: pedirle `budget_tokens` devuelve 400.
+		return nil
 	case "anthropic", "claude":
 		if effortLevel == "" || effortLevel == "none" {
 			return nil
