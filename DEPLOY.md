@@ -5,11 +5,32 @@ frontend y topología verificados el 2026-08-07 desplegando de verdad: el
 procedimiento del frontend estaba sin documentar y hubo que reconstruirlo
 leyendo los scripts del server.
 
-**Último despliegue: 2026-08-15.** Backend `57c0793`, SHA256
-`919dc6389f40b6c74a5f141e06070c68a5ece1f1d2cd42a48304fca874af221f`, verificado
-en disco y en `/proc/96173/exe`; el anterior quedó en
-`/opt/bawto/bawto-backend.pre-bsuid` (para `a0d54d6`). Trae la **identidad por
-BSUID** (migración **030 aplicada**, respaldo previo en
+**Último despliegue: 2026-08-17.** Backend `e7af2f8`, SHA256
+`8c631e9d876ef56ad801042766b8e44b278ef9a033e8118da4843b8dfe57f0f4`, verificado
+en los tres sitios —el binario local, el disco del servidor y
+`/proc/156475/exe`—; el anterior quedó en `/opt/bawto/bawto-backend.pre-e7af2f8`
+(para `57c0793`). Frontend `7caa92d` en la imagen `bawto-frontend:20260817-1`;
+la anterior, `bawto-frontend:20260816-1`, sigue en el server para revertir.
+
+**Sin migraciones**: ninguno de los commits toca `db/migrations/`, así que el
+esquema no cambió y no hizo falta respaldo previo.
+
+Trae tres cosas:
+
+- **El id de una arista lo calcula el servidor** (`engine.NormalizeEdgeIDs`).
+  Antes, un flujo escrito por MCP sin `edges[].id` validaba, se ejecutaba bien y
+  el editor lo dibujaba sin una sola conexión.
+- **El razonamiento del Copilot llega en vivo al panel**: `copilot/provider.go`
+  pasó a `Messages.NewStreaming` y el razonamiento vuelve a estar encendido en
+  los pasos de diseño; solo el paso terminal lo apaga, porque es el único que
+  fuerza una tool por nombre.
+- **Chat de prueba del borrador** (`POST /bots/:botId/flows/:flowId/test/turns`).
+  Ejecuta el grafo abierto en el editor sin publicar ni enviar por WhatsApp. El
+  agente corre de verdad y cuesta créditos; las herramientas se simulan.
+
+Despliegue anterior, 2026-08-15: backend `57c0793`, SHA256
+`919dc6389f40b6c74a5f141e06070c68a5ece1f1d2cd42a48304fca874af221f`, con la
+**identidad por BSUID** (migración **030 aplicada**, respaldo previo en
 `/var/lib/postgresql/backups/sacs_chatbots-pre-030-20260815.dump`) y el arreglo
 de la vista previa de audiencia (`models/flow_audience_preview.go`), que
 reventaba con `cannot scan NULL into *string` al encontrar un contacto con
