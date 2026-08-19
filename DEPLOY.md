@@ -5,7 +5,40 @@ frontend y topología verificados el 2026-08-07 desplegando de verdad: el
 procedimiento del frontend estaba sin documentar y hubo que reconstruirlo
 leyendo los scripts del server.
 
-**Último despliegue: 2026-08-17.** Backend `e7af2f8`, SHA256
+**Último despliegue: 2026-08-18.** Backend `fe118b0`, SHA256
+`296488fa4ed4cfef48b26221f33b908586c875f592e24502469e3a262264c086`, verificado
+en los tres sitios —el binario local, el disco del servidor y
+`/proc/181715/exe`—; el anterior quedó en `/opt/bawto/bawto-backend.pre-fe118b0`
+(para `e7af2f8`). Frontend `93300b5` en la imagen `bawto-frontend:20260818-1`;
+la anterior, `bawto-frontend:20260817-1`, sigue en el server para revertir.
+
+**Sin migraciones**: ningún commit toca `db/migrations/`, así que el esquema no
+cambió y no hizo falta respaldo previo.
+
+Trae la **semilla de creación** (PLAN-SEMILLA-DE-ORGANIZACION-Y-BOT.md, fases 1
+a 5):
+
+- Una organización nueva nace con `negocio` y `perfiles_contacto`; un bot nuevo
+  nace con su flujo `principal` en borrador. Ambas siembras van dentro de la
+  transacción de creación. **Las organizaciones existentes no reciben nada**: la
+  semilla solo corre al crear.
+- El panel estrena el cuestionario posterior a `POST /orgs`, con el paso de
+  conexión a Meudim antes de crear el bot.
+- `CreateFlow` normaliza los ids de arista y `CreateBot` pasa a ser
+  transaccional.
+- Publicar avisa de cada `object` que no existe en la organización. Avisa, no
+  bloquea.
+- **Arreglo con efecto en producción**: `data_query` con `linkCurrentContact` y
+  un contacto sin teléfono —posible desde la 030, y Meta puede omitir `from`— no
+  añadía el JOIN y devolvía la tabla entera; con `limit 1` el bot leía el perfil
+  de un desconocido. La vista previa de audiencia tenía el mismo agujero.
+
+Al desplegar, la instancia local de la PC **no estaba corriendo**, así que el
+webhook lo atiende el backup del servidor: `/webhook/whatsapp` tarda ~3,3 s, que
+es el `proxy_connect_timeout` al primario caído antes de conmutar. Levantar la
+PC con este mismo commit devuelve los ~0,3 s.
+
+Despliegue anterior, 2026-08-17: backend `e7af2f8`, SHA256
 `8c631e9d876ef56ad801042766b8e44b278ef9a033e8118da4843b8dfe57f0f4`, verificado
 en los tres sitios —el binario local, el disco del servidor y
 `/proc/156475/exe`—; el anterior quedó en `/opt/bawto/bawto-backend.pre-e7af2f8`
