@@ -375,3 +375,77 @@ func TestWAACreditosDosEscaneosIncompletosPidenOtraImagen(t *testing.T) {
 		t.Fatalf("respuesta de reintento inesperada: %q", result.Sends[0])
 	}
 }
+
+// Preguntar cómo funciona una capacidad no es preguntar cuánto cuesta. Mientras
+// el orquestador tuvo una sola rama «bawto» que mezclaba capacidades y precios,
+// «¿cómo funciona la automatización de cobranza?» aterrizaba en el especialista
+// de recargas, que solo sabe vender créditos y contestaba con la conversión de
+// Soles a créditos. Cada intención necesita su rama y su especialista corto.
+func TestWAACreditosSeparaProductoDePrecio(t *testing.T) {
+	flow := loadWAACreditosFlow(t)
+
+	nodes := map[string]*Node{}
+	for i := range flow.Nodes {
+		nodes[flow.Nodes[i].ID] = &flow.Nodes[i]
+	}
+	orchestrator := nodes["n_agente"]
+	product := nodes["n_bawto_capabilities"]
+	credits := nodes["n_bawto_specialist"]
+	if orchestrator == nil || product == nil || credits == nil {
+		t.Fatal("faltan el orquestador, el especialista de producto o el de créditos")
+	}
+
+	branches := strings.Join(orchestrator.Outputs, ",")
+	for _, want := range []string{"capacidades", "creditos"} {
+		if !strings.Contains(branches, want) {
+			t.Errorf("el orquestador debe declarar la rama %q: %v", want, orchestrator.Outputs)
+		}
+	}
+	for _, out := range orchestrator.Outputs {
+		if out == "bawto" {
+			t.Errorf("la rama «bawto» mezclaba producto y precio; debe estar dividida: %v", orchestrator.Outputs)
+		}
+	}
+
+	edges := map[string]string{}
+	for _, edge := range flow.Edges {
+		edges[edge.Source+"."+edge.SourceHandle] = edge.Target
+	}
+	if got := edges["n_agente.capacidades"]; got != "n_bawto_capabilities" {
+		t.Errorf("una pregunta de producto debe ir al especialista de producto, va a %q", got)
+	}
+	if got := edges["n_agente.creditos"]; got != "n_bawto_specialist" {
+		t.Errorf("una pregunta de precio debe ir al especialista de créditos, va a %q", got)
+	}
+	if got := edges["n_bawto_capabilities.conversar"]; got != "n_espera" {
+		t.Errorf("n_bawto_capabilities.conversar = %q", got)
+	}
+	if got := edges["n_bawto_capabilities.asesor"]; got != "n_derivar" {
+		t.Errorf("n_bawto_capabilities.asesor = %q", got)
+	}
+
+	if product.Kind != "agent" || product.AgentRole != "specialist" {
+		t.Errorf("n_bawto_capabilities debe ser un especialista: kind=%q role=%q", product.Kind, product.AgentRole)
+	}
+	if product.Silent {
+		t.Errorf("el especialista de producto existe para explicar; no puede ser silencioso")
+	}
+	// La tarifa vive en un solo sitio. Si se copia aquí, vuelve el problema por
+	// el otro lado: el que pregunta qué hace el bot recibe la conversión.
+	lowerProduct := strings.ToLower(product.Instruction)
+	for _, price := range []string{"s/", "conversión fija", "paquetes sugeridos", "cr.)"} {
+		if strings.Contains(lowerProduct, price) {
+			t.Errorf("el especialista de producto no debe cotizar (%q): %q", price, product.Instruction)
+		}
+	}
+	// Y tiene que saber contar la capacidad por la que preguntó el cliente.
+	for _, capability := range []string{"cobranza", "comprobante"} {
+		if !strings.Contains(lowerProduct, capability) {
+			t.Errorf("el especialista de producto debe explicar %q: %q", capability, product.Instruction)
+		}
+	}
+
+	if !strings.Contains(credits.Instruction, "S/ 5 = 100 créditos") {
+		t.Errorf("el especialista de créditos sigue siendo el dueño de la tarifa: %q", credits.Instruction)
+	}
+}
