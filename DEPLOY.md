@@ -5,7 +5,42 @@ frontend y topología verificados el 2026-08-07 desplegando de verdad: el
 procedimiento del frontend estaba sin documentar y hubo que reconstruirlo
 leyendo los scripts del server.
 
-**Último despliegue: 2026-08-18.** Backend `fe118b0`, SHA256
+**Último despliegue: 2026-08-19.** Backend `46f522c`, SHA256
+`ea9874185e9931ff15a03b9ed73b9c5724e4d9488e53d6bf2d754ea4138382e1`, verificado
+en los tres sitios —el binario local, el disco del servidor y
+`/proc/218033/exe`—; el anterior quedó en `/opt/bawto/bawto-backend.pre-46f522c`
+(para `fe118b0`). Frontend `69e8633` en la imagen `bawto-frontend:20260819-1`;
+la anterior, `bawto-frontend:20260818-1`, sigue en el server para revertir.
+
+**Con migración**: la `031` (`external_connections.provisioned_id`) se aplicó
+**antes** de desplegar, y a propósito: es aditiva y nullable, así que el binario
+viejo convivía con ella sin enterarse. Ese orden es el que permite desplegar sin
+ventana de incompatibilidad.
+
+Trae la **tienda nativa** (PLAN-TIENDA-NATIVA-DESDE-BAWTO.md, contrato en
+GUIA-CONEXION-MEUD.md):
+
+- «Créame una tienda» funciona: el asistente la abre en Meudim, guarda su `sk_`
+  cifrada como conexión `meudim` y sigue al bot, que nace con su rama comercial
+  dibujada. También está en Organización › Conexiones externas.
+- «Dar acceso» añade una cuenta de Meudim como administradora de esa tienda,
+  solo sobre las que creamos nosotros (`provisioned_id`).
+- **La línea de arranque a comprobar es una tercera**, junto a las dos de IA:
+  «aprovisionamiento de tiendas MEUD habilitado». Salió en este despliegue, con
+  `url=http://127.0.0.1:8865/internal/provision`.
+
+`MEUD_PROVISION_KEY` se añadió a `/opt/bawto/.env` **antes** del binario, con
+respaldo del anterior en `/opt/bawto/.env.pre-meudprov`. Se verificó contra el
+listener real sin crear ninguna tienda: sin clave responde 401, con la clave
+responde 400 pidiendo la `Idempotency-Key`.
+
+Igual que el 2026-08-18, la instancia local de la PC **no estaba corriendo** y
+el webhook lo atiende el backup del servidor: `/webhook/whatsapp` tarda ~3,6 s,
+que es el `proxy_connect_timeout` al primario caído antes de conmutar. Es lo
+esperado mientras la PC siga apagada, y este despliegue no cambia el camino del
+webhook.
+
+Despliegue anterior, 2026-08-18: backend `fe118b0`, SHA256
 `296488fa4ed4cfef48b26221f33b908586c875f592e24502469e3a262264c086`, verificado
 en los tres sitios —el binario local, el disco del servidor y
 `/proc/181715/exe`—; el anterior quedó en `/opt/bawto/bawto-backend.pre-fe118b0`
@@ -33,10 +68,7 @@ a 5):
   añadía el JOIN y devolvía la tabla entera; con `limit 1` el bot leía el perfil
   de un desconocido. La vista previa de audiencia tenía el mismo agujero.
 
-Al desplegar, la instancia local de la PC **no estaba corriendo**, así que el
-webhook lo atiende el backup del servidor: `/webhook/whatsapp` tarda ~3,3 s, que
-es el `proxy_connect_timeout` al primario caído antes de conmutar. Levantar la
-PC con este mismo commit devuelve los ~0,3 s.
+Al desplegar, la instancia local de la PC tampoco estaba corriendo.
 
 Despliegue anterior, 2026-08-17: backend `e7af2f8`, SHA256
 `8c631e9d876ef56ad801042766b8e44b278ef9a033e8118da4843b8dfe57f0f4`, verificado
