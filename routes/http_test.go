@@ -213,6 +213,11 @@ func TestRutasDeConexionesExternasRegistradas(t *testing.T) {
 		http.MethodPost + " /orgs/:orgId/connections",
 		http.MethodPost + " /orgs/:orgId/connections/:key/test",
 		http.MethodDelete + " /orgs/:orgId/connections/:key",
+		// Aprovisionar la tienda no es guardar una conexión más: la credencial de
+		// máquina que la crea no puede salir al navegador, así que el panel solo
+		// puede llegar a MEUD por aquí. Que la ruta exista es parte de eso.
+		http.MethodPost + " /orgs/:orgId/store",
+		http.MethodPost + " /orgs/:orgId/store/admins",
 	}
 	for _, ruta := range esperadas {
 		if !paths[ruta] {

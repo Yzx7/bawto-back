@@ -138,3 +138,73 @@ func TestSaveExternalConnectionConservaLaCredencialAlActualizar(t *testing.T) {
 		t.Fatal("la conexión sobrevivió al borrado")
 	}
 }
+
+// `provisioned_id` es lo que distingue «esta tienda la abrimos nosotros» de
+// «alguien pegó una clave», y de esa distinción depende que la credencial de
+// aprovisionamiento —que vale para TODAS las tiendas de MEUD— no se pueda usar
+// sobre una tienda ajena cuya `sk_` alguien consiguió.
+//
+// Las tres transiciones que importan: se guarda al aprovisionar, sobrevive a un
+// cambio de etiqueta, y se pierde cuando se rota la credencial. La última es la
+// menos obvia y la que más protege: una clave nueva puede apuntar a otra tienda,
+// y conservar el id anterior nos dejaría administrando la que ya no es.
+func TestProvisionedIDSigueALaCredencialYNoALaEtiqueta(t *testing.T) {
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		t.Skip("DATABASE_URL no seteada; se omite el test de integración")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	uid := randConnHex("provu_")
+	if _, err := pool.Exec(ctx, `INSERT INTO "user"(id,name,email,"emailVerified") VALUES ($1,$2,$3,false)`,
+		uid, "Prov Owner", uid+"@test.local"); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	defer pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, uid)
+
+	org, err := CreateOrganization(ctx, pool, uid, "Prov Org", nil, nil)
+	if err != nil {
+		t.Fatalf("CreateOrganization: %v", err)
+	}
+	defer DeleteOrganization(context.Background(), pool, org.ID)
+
+	storeID := "42"
+	creada, err := SaveExternalConnection(ctx, pool, ExternalConnectionInput{
+		OrgID: org.ID, Key: "meudim", Driver: "meudim", Label: "Tienda",
+		BaseURL: "https://api.meud.im", CredentialEnc: []byte("sk-cifrada"),
+		ProvisionedID: &storeID,
+	})
+	if err != nil {
+		t.Fatalf("aprovisionamiento: %v", err)
+	}
+	if creada.ProvisionedID == nil || *creada.ProvisionedID != "42" {
+		t.Fatalf("no se guardó la tienda creada: %v", creada.ProvisionedID)
+	}
+
+	renombrada, err := SaveExternalConnection(ctx, pool, ExternalConnectionInput{
+		OrgID: org.ID, Key: "meudim", Driver: "meudim", Label: "Tienda de Rosa",
+		BaseURL: "https://api.meud.im",
+	})
+	if err != nil {
+		t.Fatalf("renombrado: %v", err)
+	}
+	if renombrada.ProvisionedID == nil || *renombrada.ProvisionedID != "42" {
+		t.Fatalf("renombrar perdió la tienda: %v", renombrada.ProvisionedID)
+	}
+
+	rotada, err := SaveExternalConnection(ctx, pool, ExternalConnectionInput{
+		OrgID: org.ID, Key: "meudim", Driver: "meudim", Label: "Tienda de Rosa",
+		BaseURL: "https://api.meud.im", CredentialEnc: []byte("otra-sk-cifrada"),
+	})
+	if err != nil {
+		t.Fatalf("rotación: %v", err)
+	}
+	if rotada.ProvisionedID != nil {
+		t.Fatalf("la clave nueva conservó la tienda anterior: %v", *rotada.ProvisionedID)
+	}
+}

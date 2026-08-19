@@ -65,6 +65,20 @@ type Config struct {
 	CopilotAIMaxSteps        int           // COPILOT_AI_MAX_STEPS
 	CopilotAITimeout         time.Duration // COPILOT_AI_TIMEOUT_SECONDS
 
+	// Aprovisionamiento de tiendas en MEUD (GUIA-CONEXION-MEUD.md).
+	//
+	// Su listener está atado a `127.0.0.1:8865` del VPS: no lo alcanzan ni
+	// internet ni la VPN. La consecuencia práctica es que **solo el backend del
+	// servidor puede aprovisionar**, no la PC que atiende el webhook — y eso
+	// basta, porque el panel siempre habla con el servidor.
+	//
+	// Sin `MEUD_PROVISION_KEY` el backend arranca igual y el asistente explica
+	// que la creación automática no está disponible. Es el mismo patrón que
+	// MINIMAX_M3_API_KEY y DATASET_API_ALLOWED_HOSTS, con la misma trampa:
+	// desplegar el commit no enciende la función, la variable sí.
+	MeudProvisionURL string // MEUD_PROVISION_URL
+	MeudProvisionKey string // MEUD_PROVISION_KEY (64 hex; nunca se versiona)
+
 	// CORS: orígenes permitidos, separados por coma.
 	CorsOrigins string // CORS_ORIGINS
 
@@ -111,6 +125,7 @@ func Load() (*Config, error) {
 	v.SetDefault("AI_PROVIDER", "deepseek")
 	v.SetDefault("MINIMAX_M3_BASE_URL", "https://api.minimax.io/anthropic")
 	v.SetDefault("MINIMAX_M3_MODEL", "MiniMax-M3")
+	v.SetDefault("MEUD_PROVISION_URL", "http://127.0.0.1:8865/internal/provision")
 	v.SetDefault("COPILOT_ENABLED", false)
 	v.SetDefault("COPILOT_AI_REASONING_EFFORT", "high")
 	v.SetDefault("COPILOT_AI_MAX_STEPS", 8)
@@ -160,6 +175,8 @@ func Load() (*Config, error) {
 		CopilotAIReasoningEffort:  strings.TrimSpace(v.GetString("COPILOT_AI_REASONING_EFFORT")),
 		CopilotAIMaxSteps:         v.GetInt("COPILOT_AI_MAX_STEPS"),
 		CopilotAITimeout:          time.Duration(v.GetInt("COPILOT_AI_TIMEOUT_SECONDS")) * time.Second,
+		MeudProvisionURL:          strings.TrimSpace(v.GetString("MEUD_PROVISION_URL")),
+		MeudProvisionKey:          strings.TrimSpace(v.GetString("MEUD_PROVISION_KEY")),
 		CorsOrigins:               v.GetString("CORS_ORIGINS"),
 
 		SchedulerEnabled:          v.GetBool("SCHEDULER_ENABLED"),
@@ -215,6 +232,28 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// MeudProvisionReadiness explica si Bawto puede pedirle a MEUD que abra una
+// tienda. Su ausencia nunca impide arrancar: deja el asistente con «Créame una
+// tienda» apagado y todo lo demás intacto, incluida la conexión manual pegando
+// una `sk_`.
+//
+// Existe como método y no como comprobación suelta en el controlador porque el
+// arranque la usa para decirlo en el log. Este proyecto ya perdió tiempo con dos
+// capacidades desplegadas e inertes por una variable ausente —el agente visual y
+// `dataset_query`—, y en los dos casos lo que faltaba era justo esa línea.
+func (cfg *Config) MeudProvisionReadiness() (bool, string) {
+	if cfg == nil {
+		return false, "sin configuración"
+	}
+	if strings.TrimSpace(cfg.MeudProvisionKey) == "" {
+		return false, "falta MEUD_PROVISION_KEY"
+	}
+	if strings.TrimSpace(cfg.MeudProvisionURL) == "" {
+		return false, "falta MEUD_PROVISION_URL"
+	}
+	return true, ""
 }
 
 // CopilotReadiness explica si el agente de autoría puede aceptar turnos. Una

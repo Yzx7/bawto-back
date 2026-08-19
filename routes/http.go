@@ -59,6 +59,11 @@ func RegisterHTTP(app *fiber.App, e *env.Env) {
 	org.Post("/:orgId/connections", con.SaveOrgConnection)
 	org.Post("/:orgId/connections/:key/test", con.TestOrgConnection)
 	org.Delete("/:orgId/connections/:key", con.DeleteOrgConnection)
+	// La tienda es un caso aparte de las conexiones y no un `key` más: aquí no se
+	// guarda una credencial que alguien pegó, se le pide a MEUD que la emita con
+	// una clave de máquina que nunca puede salir al navegador.
+	org.Post("/:orgId/store", con.ProvisionOrgStore)
+	org.Post("/:orgId/store/admins", con.GrantOrgStoreAdmin)
 	org.Get("/:orgId/contacts", con.ListOrgContacts)
 	org.Post("/:orgId/contacts", con.SaveOrgContact)
 	org.Put("/:orgId/contacts/:contactId", con.SaveOrgContact)

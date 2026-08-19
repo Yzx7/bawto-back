@@ -206,6 +206,16 @@ Si falta «IA visual habilitada», `MINIMAX_M3_API_KEY` no está en el `.env` de
 server: el bot arranca sano, responde su mensaje de reserva y el agente visual no
 funciona sin un solo error.
 
+Desde el 2026-08-19 hay una tercera línea con la misma lógica, la del
+aprovisionamiento de tiendas:
+
+```bash
+journalctl -u bawto-backend --since '-3 min' --no-pager | grep 'aprovisionamiento de tiendas'
+```
+
+Si dice «deshabilitado», falta `MEUD_PROVISION_KEY`: el panel sigue conectando
+tiendas a mano y solo «Créame una tienda» responde 503.
+
 **Si el cambio toca el camino del webhook, reiniciar también la PC.** Es el
 primario (§Topología), así que desplegar solo el server deja las dos instancias
 con código distinto y el comportamiento depende de quién atienda cada mensaje.
@@ -367,8 +377,25 @@ real es el flag. Revertir el esquema exigiría restaurar el respaldo.
 | `DATABASE_URL` | host `127.0.0.1` (Postgres local) | host `10.12.12.1` (vía WireGuard) |
 | `JWKS_URL` | `http://127.0.0.1:3010/api/auth/jwks` | frontend dev en `localhost:3000` |
 | `CORS_ORIGINS` | `https://bawto.sistemuino.com` | origen local de desarrollo |
+| `MEUD_PROVISION_KEY` | la del `.env` de MEUD; **funciona** | la misma, pero **inerte** (ver abajo) |
 
 El resto (claves de cifrado, secretos de Meta, IA) es idéntico.
+
+**El aprovisionamiento de tiendas solo funciona desde el server.** MEUD lo sirve
+en un listener atado a `127.0.0.1:8865` que no publica nginx: no lo alcanzan ni
+internet ni la VPN, solo procesos del propio VPS. La clave está también en el
+`.env` de la PC por paridad de configuración —y para que nadie la eche en falta
+al leer el código—, pero desde ahí la llamada muere en `ECONNREFUSED`. No es un
+problema: el panel siempre habla con el backend del server.
+
+Dos consecuencias que conviene tener presentes:
+
+- Si algún día `bawto-backend` se contenedoriza con red *bridge*, deja de
+  funcionar: dentro del contenedor `127.0.0.1` es el contenedor. Habría que
+  arrancarlo con `--network host`, como ya hace `bawto-frontend`.
+- La clave vale para **todas** las tiendas de todos los clientes. Merece el trato
+  del token de Meta: `chmod 600`, nunca en un repo, nunca hacia el navegador.
+  El respaldo previo del `.env` quedó en `/opt/bawto/.env.pre-meudprov`.
 
 > Nota: `SERVER_PORT` acepta forma `host:puerto` desde el fix de
 > `config/config.go` (commit `fa19769`); binarios anteriores solo aceptaban

@@ -154,6 +154,16 @@ func Build(ctx context.Context) (*Runtime, error) {
 		logs.General.Info("Copilot de autoría deshabilitado", "razón", reason)
 	}
 
+	// Aprovisionamiento de tiendas MEUD: se dice en el log porque su ausencia no
+	// rompe nada visible. Sin la clave, el asistente sigue conectando tiendas a
+	// mano y solo la creación automática queda apagada — exactamente la clase de
+	// silencio que ya costó dos hallazgos tardíos aquí.
+	if ready, reason := cfg.MeudProvisionReadiness(); ready {
+		logs.General.Info("aprovisionamiento de tiendas MEUD habilitado", "url", cfg.MeudProvisionURL)
+	} else {
+		logs.General.Info("aprovisionamiento de tiendas MEUD deshabilitado", "razón", reason)
+	}
+
 	// Eventos de chat en vivo: viajan por LISTEN/NOTIFY, así que funcionan igual
 	// con varias instancias del backend.
 	hub := events.NewHub(pool, logs.General)

@@ -18,14 +18,19 @@ import (
 // canal. `json:"-"` no es decorativo — sin él, cualquier endpoint que devuelva
 // la fila publicaría la clave de la tienda.
 type ExternalConnection struct {
-	ID            string     `db:"id"            json:"id"`
-	OrgID         string     `db:"org_id"        json:"orgId"`
-	Key           string     `db:"key"           json:"key"`
-	Driver        string     `db:"driver"        json:"driver"`
-	Label         string     `db:"label"         json:"label"`
-	BaseURL       string     `db:"base_url"      json:"baseUrl"`
-	CredentialEnc []byte     `db:"credential"    json:"-"`
-	Status        string     `db:"status"        json:"status"`
+	ID            string `db:"id"            json:"id"`
+	OrgID         string `db:"org_id"        json:"orgId"`
+	Key           string `db:"key"           json:"key"`
+	Driver        string `db:"driver"        json:"driver"`
+	Label         string `db:"label"         json:"label"`
+	BaseURL       string `db:"base_url"      json:"baseUrl"`
+	CredentialEnc []byte `db:"credential"    json:"-"`
+	Status        string `db:"status"        json:"status"`
+	// ProvisionedID es el id del recurso que **Bawto creó** en el sistema
+	// externo. Vacío cuando la credencial la pegó una persona, y esa diferencia
+	// no es informativa: la clave de aprovisionamiento vale para todas las
+	// tiendas, así que solo se opera sobre las que abrimos nosotros.
+	ProvisionedID *string    `db:"provisioned_id" json:"provisionedId,omitempty"`
 	LastOKAt      *time.Time `db:"last_ok_at"    json:"lastOkAt,omitempty"`
 	LastError     *string    `db:"last_error"    json:"lastError,omitempty"`
 	CreatedAt     time.Time  `db:"created_at"    json:"createdAt"`
@@ -36,7 +41,7 @@ type ExternalConnection struct {
 func (c ExternalConnection) Active() bool { return c.Status == "active" }
 
 const externalConnectionCols = `id::text AS id, org_id::text AS org_id, key, driver, label,
-	base_url, credential, status, last_ok_at, last_error, created_at, updated_at`
+	base_url, credential, status, provisioned_id, last_ok_at, last_error, created_at, updated_at`
 
 // ExternalConnectionInput es el alta o la actualización de una conexión.
 type ExternalConnectionInput struct {
@@ -49,6 +54,11 @@ type ExternalConnectionInput struct {
 	// Es lo que permite renombrar una conexión sin volver a pedir la clave.
 	CredentialEnc []byte
 	Status        string
+	// ProvisionedID solo lo rellena el aprovisionamiento. Viaja junto a la
+	// credencial y no en una segunda sentencia porque son el mismo hecho: una
+	// tienda creada cuya `sk_` no se puede volver a pedir. Guardar una sin la
+	// otra deja una tienda inalcanzable o un id que apunta a otra clave.
+	ProvisionedID *string
 }
 
 // SaveExternalConnection crea o actualiza la conexión de una organización.
@@ -89,18 +99,24 @@ func SaveExternalConnection(ctx context.Context, pool *pgxpool.Pool, input Exter
 			input.OrgID, key, strings.TrimSpace(input.Driver), label,
 			strings.TrimSpace(input.BaseURL), status)
 	} else {
+		// `provisioned_id` sigue a la credencial también al sobrescribir: si
+		// alguien pega a mano la clave de otra tienda, conservar el id anterior
+		// dejaría a Bawto administrando una tienda que ya no es a la que apunta
+		// esta conexión. Renombrar no pasa por aquí —va por la rama sin
+		// credencial—, así que un cambio de etiqueta no lo pierde.
 		rows, err = pool.Query(ctx,
-			`INSERT INTO external_connections (org_id, key, driver, label, base_url, credential, status)
-			 VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)
+			`INSERT INTO external_connections (org_id, key, driver, label, base_url, credential, status, provisioned_id)
+			 VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8)
 			 ON CONFLICT (org_id, key) DO UPDATE SET
-			     driver     = EXCLUDED.driver,
-			     label      = EXCLUDED.label,
-			     base_url   = EXCLUDED.base_url,
-			     credential = EXCLUDED.credential,
-			     status     = EXCLUDED.status
+			     driver         = EXCLUDED.driver,
+			     label          = EXCLUDED.label,
+			     base_url       = EXCLUDED.base_url,
+			     credential     = EXCLUDED.credential,
+			     status         = EXCLUDED.status,
+			     provisioned_id = EXCLUDED.provisioned_id
 			 RETURNING `+externalConnectionCols,
 			input.OrgID, key, strings.TrimSpace(input.Driver), label,
-			strings.TrimSpace(input.BaseURL), input.CredentialEnc, status)
+			strings.TrimSpace(input.BaseURL), input.CredentialEnc, status, input.ProvisionedID)
 	}
 	if err != nil {
 		return nil, err

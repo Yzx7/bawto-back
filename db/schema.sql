@@ -847,6 +847,9 @@ CREATE TABLE IF NOT EXISTS external_connections (
     base_url    TEXT        NOT NULL,
     credential  BYTEA       NOT NULL,
     status      TEXT        NOT NULL DEFAULT 'active',
+    -- Id del recurso que creó Bawto en el sistema externo (migración 031);
+    -- NULL cuando la credencial la pegó una persona.
+    provisioned_id TEXT,
     last_ok_at  TIMESTAMPTZ,
     last_error  TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
