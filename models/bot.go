@@ -58,12 +58,31 @@ func GetBot(ctx context.Context, pool *pgxpool.Pool, botID string) (*Bot, error)
 	return &b, nil
 }
 
-// CreateBot crea un bot en una organización (sin canal conectado aún).
+// CreateBot crea un bot en una organización (sin canal conectado aún) junto a su
+// flujo inicial.
+//
+// Va en transacción porque la semilla escribe dos filas en dos tablas: si el
+// flujo fallara después de un INSERT suelto quedaría un bot mudo, sin flujo y sin
+// forma de saber que le falta uno. O están los dos, o no está ninguno.
 func CreateBot(ctx context.Context, pool *pgxpool.Pool, orgID, name, channel string) (*Bot, error) {
 	if channel == "" {
 		channel = "wsp"
 	}
-	rows, err := pool.Query(ctx,
+	// La decisión de qué grafo sembrar son dos hechos de la base (§4 del plan) y
+	// se leen antes de abrir la transacción: son consultas, no escrituras, y
+	// mantenerlas fuera evita alargar la transacción que bloquea la fila del bot.
+	draft, err := seedFlowDraft(ctx, pool, orgID)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	rows, err := tx.Query(ctx,
 		`INSERT INTO bots (org_id, name, channel) VALUES ($1::uuid, $2, $3)
 		 RETURNING `+botCols, orgID, name, channel)
 	if err != nil {
@@ -71,6 +90,12 @@ func CreateBot(ctx context.Context, pool *pgxpool.Pool, orgID, name, channel str
 	}
 	b, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[Bot])
 	if err != nil {
+		return nil, err
+	}
+	if err := seedBotFlowTx(ctx, tx, b.ID, draft); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return &b, nil

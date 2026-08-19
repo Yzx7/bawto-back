@@ -1,0 +1,189 @@
+{
+  "id": "principal",
+  "name": "Atención principal",
+  "trigger": {
+    "pos": { "x": 0, "y": 0 },
+    "type": "message",
+    "match": "any"
+  },
+  "nodes": [
+    {
+      "id": "n_entry_router",
+      "pos": { "x": 300, "y": 0 },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "conversation",
+          "label": "Texto o interacción",
+          "expression": "input.contentType in (text, interactive)"
+        },
+        {
+          "id": "image",
+          "label": "Imagen",
+          "expression": "input.contentType == image"
+        }
+      ]
+    },
+    {
+      "id": "n_read_business",
+      "pos": { "x": 660, "y": -160 },
+      "kind": "tool",
+      "toolRef": "data_query",
+      "saveAs": "negocio",
+      "args": {
+        "object": "negocio",
+        "fields": "nombre,rubro,que_ofrece,tono,restricciones,horario,automatiza",
+        "where.1.field": "activo",
+        "where.1.op": "eq",
+        "where.1.value": "true",
+        "limit": "1"
+      }
+    },
+    {
+      "id": "n_business_router",
+      "pos": { "x": 1020, "y": -160 },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "con_negocio",
+          "label": "Mi negocio está lleno",
+          "expression": "negocio.found == true && !empty(negocio.first.data.nombre)"
+        }
+      ]
+    },
+    {
+      "id": "n_read_profile",
+      "pos": { "x": 1380, "y": -280 },
+      "kind": "tool",
+      "toolRef": "data_query",
+      "saveAs": "perfil",
+      "args": {
+        "object": "perfiles_contacto",
+        "fields": "contexto_personal,activo,prioridad",
+        "where.1.field": "activo",
+        "where.1.op": "eq",
+        "where.1.value": "true",
+        "orderBy": "prioridad",
+        "orderDir": "desc",
+        "limit": "1",
+        "linkCurrentContact": "true"
+      }
+    },
+    {
+      "id": "n_profile_router",
+      "pos": { "x": 1740, "y": -280 },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "con_perfil",
+          "label": "El contacto tiene contexto propio",
+          "expression": "perfil.found == true && !empty(perfil.first.data.contexto_personal)"
+        }
+      ]
+    },
+    {
+      "id": "n_set_negocio_perfil",
+      "pos": { "x": 2100, "y": -400 },
+      "kind": "action",
+      "action": "set",
+      "params": {
+        "contexto_organizacion": "\n\nCONTEXTO AUTORIZADO POR LA ORGANIZACION\nNegocio: {negocio.first.data.nombre}\nRubro: {negocio.first.data.rubro}\nQué ofrece: {negocio.first.data.que_ofrece}\nTono con el que debe hablar: {negocio.first.data.tono}\nLo que no debe prometer ni decir: {negocio.first.data.restricciones}\nHorario: {negocio.first.data.horario}\nQué se automatiza en este bot: {negocio.first.data.automatiza}\nContexto particular de este cliente: {perfil.first.data.contexto_personal}\nFIN DEL CONTEXTO AUTORIZADO"
+      }
+    },
+    {
+      "id": "n_set_negocio",
+      "pos": { "x": 2100, "y": -160 },
+      "kind": "action",
+      "action": "set",
+      "params": {
+        "contexto_organizacion": "\n\nCONTEXTO AUTORIZADO POR LA ORGANIZACION\nNegocio: {negocio.first.data.nombre}\nRubro: {negocio.first.data.rubro}\nQué ofrece: {negocio.first.data.que_ofrece}\nTono con el que debe hablar: {negocio.first.data.tono}\nLo que no debe prometer ni decir: {negocio.first.data.restricciones}\nHorario: {negocio.first.data.horario}\nQué se automatiza en este bot: {negocio.first.data.automatiza}\nFIN DEL CONTEXTO AUTORIZADO"
+      }
+    },
+    {
+      "id": "n_sin_contexto",
+      "pos": { "x": 2100, "y": 80 },
+      "kind": "action",
+      "action": "set",
+      "params": {
+        "contexto_organizacion": ""
+      }
+    },
+    {
+      "id": "n_agente",
+      "pos": { "x": 2460, "y": -160 },
+      "kind": "agent",
+      "agentRole": "orchestrator",
+      "contextMode": "recent",
+      "silent": false,
+      "replyOn": ["aclarar"],
+      "outputs": ["consulta", "aclarar", "asesor"],
+      "instruction": "Eres el orquestador conversacional de este negocio. Tu trabajo es comprender qué necesita la persona y entregarla a quien corresponde. No ejecutas herramientas, no das precios y no resuelves todavía el tema.\n\nLee el mensaje actual y el historial reciente. Elige exactamente una rama:\n\n- consulta: pregunta algo que el negocio puede responder con lo que sabe de sí mismo: qué hace, qué ofrece, cómo funciona, horarios, condiciones o cómo contactarlo.\n- asesor: pide explícitamente hablar con una persona, está molesto, reclama, o plantea algo delicado que no debería resolver un bot.\n- aclarar: todavía falta contexto para elegir con seguridad.\n\nCuando elijas aclarar, responde con una sola pregunta breve, natural y concreta que reduzca la ambigüedad. Apóyate en lo que ya dijo, no repitas preguntas ya contestadas y no muestres un menú genérico si existe una pista. Puedes aclarar en varios turnos, pero cada pregunta debe aportar información nueva.\n\nCuando el tema ya esté definido, elige su rama de inmediato: tu texto no se envía en esas ramas porque quien continúa responde en el mismo turno. Ante duda real, pregunta; no adivines.\n{contexto_organizacion}"
+    },
+    {
+      "id": "n_especialista",
+      "pos": { "x": 2820, "y": -380 },
+      "kind": "agent",
+      "agentRole": "specialist",
+      "contextMode": "recent",
+      "silent": false,
+      "outputs": ["conversar", "asesor"],
+      "instruction": "Eres quien atiende a los clientes de este negocio por WhatsApp. El orquestador ya decidió que la persona hace una consulta.\n\nResponde únicamente con lo que diga el contexto autorizado que aparece al final. No inventes precios, plazos, promociones, direcciones, horarios ni servicios: si el dato no está en ese contexto, dilo con naturalidad y ofrece pasar con una persona. Respeta al pie de la letra lo que el negocio pidió no prometer.\n\nElige conversar para responder, orientar o pedir el dato que falte.\nElige asesor cuando pidan hablar con una persona, presenten un reclamo, pidan una cotización a medida o planteen algo que el contexto no resuelve.\n\nResponde en español neutro, cordial y directo; como máximo cinco líneas, una sola pregunta por turno y sin emojis salvo que el cliente los use primero. No pidas contraseñas, PIN, CVV, códigos de seguridad, tokens ni claves privadas.\n{contexto_organizacion}"
+    },
+    {
+      "id": "n_espera",
+      "pos": { "x": 3180, "y": -160 },
+      "kind": "wait",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_imagen_recibida",
+      "pos": { "x": 660, "y": 140 },
+      "kind": "send",
+      "body": "Recibí tu imagen. Todavía no puedo revisarla automáticamente, así que la va a ver una persona del equipo y te responde por aquí."
+    },
+    {
+      "id": "n_formato_no_soportado",
+      "pos": { "x": 660, "y": 320 },
+      "kind": "send",
+      "body": "Recibí tu mensaje, pero todavía no puedo procesar ese formato. Escríbeme el detalle en texto y seguimos."
+    },
+    {
+      "id": "n_derivar",
+      "pos": { "x": 3180, "y": 200 },
+      "kind": "action",
+      "action": "handoff"
+    },
+    {
+      "id": "n_fin",
+      "pos": { "x": 3540, "y": 200 },
+      "kind": "action",
+      "action": "end"
+    }
+  ],
+  "edges": [
+    { "source": "trigger", "target": "n_entry_router" },
+    { "source": "n_entry_router", "sourceHandle": "conversation", "target": "n_read_business" },
+    { "source": "n_entry_router", "sourceHandle": "image", "target": "n_imagen_recibida" },
+    { "source": "n_entry_router", "sourceHandle": "default", "target": "n_formato_no_soportado" },
+    { "source": "n_read_business", "sourceHandle": "ok", "target": "n_business_router" },
+    { "source": "n_read_business", "sourceHandle": "error", "target": "n_sin_contexto" },
+    { "source": "n_business_router", "sourceHandle": "con_negocio", "target": "n_read_profile" },
+    { "source": "n_business_router", "sourceHandle": "default", "target": "n_sin_contexto" },
+    { "source": "n_read_profile", "sourceHandle": "ok", "target": "n_profile_router" },
+    { "source": "n_read_profile", "sourceHandle": "error", "target": "n_set_negocio" },
+    { "source": "n_profile_router", "sourceHandle": "con_perfil", "target": "n_set_negocio_perfil" },
+    { "source": "n_profile_router", "sourceHandle": "default", "target": "n_set_negocio" },
+    { "source": "n_set_negocio_perfil", "target": "n_agente" },
+    { "source": "n_set_negocio", "target": "n_agente" },
+    { "source": "n_sin_contexto", "target": "n_agente" },
+    { "source": "n_agente", "sourceHandle": "consulta", "target": "n_especialista" },
+    { "source": "n_agente", "sourceHandle": "aclarar", "target": "n_espera" },
+    { "source": "n_agente", "sourceHandle": "asesor", "target": "n_derivar" },
+    { "source": "n_especialista", "sourceHandle": "conversar", "target": "n_espera" },
+    { "source": "n_especialista", "sourceHandle": "asesor", "target": "n_derivar" },
+    { "source": "n_espera", "target": "n_entry_router", "role": "loopback" },
+    { "source": "n_imagen_recibida", "target": "n_derivar" },
+    { "source": "n_formato_no_soportado", "target": "n_espera" },
+    { "source": "n_derivar", "target": "n_fin" }
+  ]
+}

@@ -22,7 +22,13 @@ type Organization struct {
 
 const orgCols = `id::text AS id, name, ruc, cel, activation_code, created_by, created_at, updated_at`
 
-// CreateOrganization crea la org y su membership owner en una transacción.
+// CreateOrganization crea la org, su membership owner y sus tablas por defecto
+// en una transacción.
+//
+// La semilla va dentro y no después: las tablas y el grafo del bot son una sola
+// pieza —cada `object` que el flujo nombra tiene que existir el día que la
+// organización nace, porque nadie va a revisarlo antes—, así que una organización
+// a la que le falte una tabla es peor que ninguna organización.
 func CreateOrganization(ctx context.Context, pool *pgxpool.Pool, userID, name string, ruc, cel *string) (*Organization, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -45,6 +51,9 @@ func CreateOrganization(ctx context.Context, pool *pgxpool.Pool, userID, name st
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO memberships (user_id, org_id, role) VALUES ($1, $2::uuid, 'owner')`,
 		userID, org.ID); err != nil {
+		return nil, err
+	}
+	if err := seedOrganizationTx(ctx, tx, org.ID); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {

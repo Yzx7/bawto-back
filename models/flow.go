@@ -318,8 +318,19 @@ type NewFlow struct {
 	UserID      string
 }
 
+// flowWriter es lo que createFlowTx necesita de PostgreSQL. Existe para que la
+// semilla del bot (models/seed.go) inserte su flujo dentro de la **misma**
+// transacción que crea el bot: o están los dos, o no está ninguno.
+type flowWriter interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
 // CreateFlow crea un flujo en estado draft.
 func CreateFlow(ctx context.Context, p *pgxpool.Pool, botID string, in NewFlow) (*Flow, error) {
+	return createFlowTx(ctx, p, botID, in)
+}
+
+func createFlowTx(ctx context.Context, q flowWriter, botID string, in NewFlow) (*Flow, error) {
 	if !ValidFlowKey(in.Key) {
 		return nil, ErrFlowInvalidKey
 	}
@@ -329,7 +340,17 @@ func CreateFlow(ctx context.Context, p *pgxpool.Pool, botID string, in NewFlow) 
 	if in.Priority == 0 {
 		in.Priority = 100
 	}
-	rows, err := p.Query(ctx,
+	// El motor enruta por source/sourceHandle/target y nunca lee edges[].id, pero
+	// React Flow lo exige para dibujar: un flujo que nace **con** aristas —el que
+	// siembra CreateBot— se abriría en el editor sin una sola conexión y el autor
+	// creería que está roto. updateFlowDraftTx ya lo rellena en cada escritura
+	// posterior del borrador; esta inserción es la única que se lo saltaba.
+	normalized, err := engine.NormalizeEdgeIDs(in.Draft)
+	if err != nil {
+		return nil, err
+	}
+	in.Draft = normalized
+	rows, err := q.Query(ctx,
 		`INSERT INTO flows (bot_id, key, name, trigger_type, priority, is_fallback, draft, created_by, updated_by)
 		 VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, NULLIF($8,''), NULLIF($8,''))
 		 RETURNING `+flowCols,
@@ -800,7 +821,14 @@ func validateLockedFlowForPublish(
 	if err != nil {
 		return nil, "", nil, &FlowValidationError{Problem: err.Error()}
 	}
-	return definition, checksum, templateValidation.Warnings, nil
+	// Las tablas se resuelven en ejecución, así que un `object` que ya no existe
+	// publica limpio y falla delante de un cliente. Avisa, no bloquea: la tabla es
+	// del dueño y puede estar renombrándola o creándola en otra pestaña.
+	objectWarnings, err := missingFlowObjectWarningsForBot(ctx, tx, botID, definition)
+	if err != nil {
+		return nil, "", nil, &FlowValidationError{Problem: err.Error()}
+	}
+	return definition, checksum, append(templateValidation.Warnings, objectWarnings...), nil
 }
 
 // ListFlowVersions devuelve el historial, de la más reciente a la más vieja.

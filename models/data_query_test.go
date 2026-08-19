@@ -253,14 +253,14 @@ func TestQueryDataRecordsPorContactoVinculado(t *testing.T) {
 	pool, ctx := flowTestPool(t)
 	fx := seedQueryFixture(t, ctx, pool)
 
-	object, err := CreateDataObjectByOrg(ctx, pool, fx.bot.OrgID, "perfiles_contacto", "Perfil", "Perfiles")
-	if err != nil {
+	// `perfiles_contacto` la trae la organización al nacer, así que crearla aquí
+	// chocaría contra el UNIQUE (org_id, key): se usa la sembrada y se le añade el
+	// campo que necesita esta prueba.
+	object := objetoSembrado(t, ctx, pool, fx.bot.OrgID, "perfiles_contacto")
+	if _, err := UpsertDataFieldByOrg(ctx, pool, fx.bot.OrgID, object.ID, "segmento_key", "Segmento", "text", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = UpsertDataFieldByOrg(ctx, pool, fx.bot.OrgID, object.ID, "segmento_key", "Segmento", "text", false); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = MutateDataRecord(ctx, pool, DataMutationInput{
+	if _, err := MutateDataRecord(ctx, pool, DataMutationInput{
 		OrgID: fx.bot.OrgID, ObjectKey: "perfiles_contacto", Operation: "create",
 		Values: map[string]any{"segmento_key": "ventas_b2b"}, IdempotencyKey: randID("perfil_"),
 		CurrentContactPhone: fx.contact.PhoneNormalized, LinkCurrentContact: true,
@@ -272,7 +272,7 @@ func TestQueryDataRecordsPorContactoVinculado(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = MutateDataRecord(ctx, pool, DataMutationInput{
+	if _, err := MutateDataRecord(ctx, pool, DataMutationInput{
 		OrgID: fx.bot.OrgID, ObjectKey: "perfiles_contacto", Operation: "create",
 		Values: map[string]any{"segmento_key": "retail"}, IdempotencyKey: randID("perfil_"),
 		CurrentContactPhone: otro.PhoneNormalized, LinkCurrentContact: true,
@@ -300,6 +300,39 @@ func TestQueryDataRecordsPorContactoVinculado(t *testing.T) {
 	}
 	if sinPerfil.Found {
 		t.Fatalf("un contacto sin perfil no puede recibir el de otro: %+v", sinPerfil.First)
+	}
+}
+
+// Desde la migración 030 un contacto puede identificarse solo por BSUID, y Meta
+// puede omitir `from`: el runtime pide filtrar por el contacto actual sin tener
+// teléfono con el que hacerlo. El JOIN entonces no se añadía y la consulta
+// devolvía la tabla entera, así que con `limit 1` el bot leía el perfil de un
+// desconocido y lo trataba como el de quien escribía.
+func TestQueryDataRecordsSinTelefonoNoDevuelveLaTablaEntera(t *testing.T) {
+	pool, ctx := flowTestPool(t)
+	fx := seedQueryFixture(t, ctx, pool)
+
+	object := objetoSembrado(t, ctx, pool, fx.bot.OrgID, "perfiles_contacto")
+	if _, err := UpsertDataFieldByOrg(ctx, pool, fx.bot.OrgID, object.ID, "segmento_key", "Segmento", "text", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MutateDataRecord(ctx, pool, DataMutationInput{
+		OrgID: fx.bot.OrgID, ObjectKey: "perfiles_contacto", Operation: "create",
+		Values: map[string]any{"segmento_key": "ventas_b2b"}, IdempotencyKey: randID("perfil_"),
+		CurrentContactPhone: fx.contact.PhoneNormalized, LinkCurrentContact: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := QueryDataRecords(ctx, pool, DataQueryInput{
+		OrgID: fx.bot.OrgID, ObjectKey: "perfiles_contacto",
+		LinkCurrentContact: true, LinkedContactPhone: "",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Found || result.Count != 0 {
+		t.Fatalf("sin teléfono no hay a quién vincular, y devolvió %d registros: %+v", result.Count, result)
 	}
 }
 

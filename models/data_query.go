@@ -48,6 +48,13 @@ type DataQueryInput struct {
 	// Text busca en todo el registro, como el buscador del panel. Es lo que usa el
 	// modelo cuando no conoce el nombre de un campo.
 	Text string
+	// LinkCurrentContact pide restringir a los registros vinculados al contacto
+	// actual. Es un campo aparte del teléfono porque desde la migración 030 un
+	// contacto puede no tener ninguno —se identifica por BSUID— y Meta puede
+	// omitir `from`: sin este booleano, «pidió filtrar y no hay con qué» y «no
+	// pidió filtrar» llegaban aquí indistinguibles, y el segundo significa
+	// devolver la tabla entera.
+	LinkCurrentContact bool
 	// LinkedContactPhone restringe a los registros vinculados a ese contacto. El
 	// teléfono lo pone el runtime desde el mensaje entrante, nunca el grafo.
 	LinkedContactPhone string
@@ -140,16 +147,23 @@ func QueryDataRecords(ctx context.Context, pool *pgxpool.Pool, input DataQueryIn
 
 	query := `SELECT r.id::text AS id, r.data FROM data_records r`
 	args := []any{objectID}
-	if phone := NormalizePhone(input.LinkedContactPhone); phone != "" {
+	if input.LinkCurrentContact || strings.TrimSpace(input.LinkedContactPhone) != "" {
+		phone := NormalizePhone(input.LinkedContactPhone)
+		if phone == "" {
+			// Se pidió filtrar por el contacto actual y no hay con qué: el teléfono
+			// no es normalizable, o directamente no existe porque el contacto se
+			// identifica solo por BSUID. Sin el JOIN la consulta devolvería la tabla
+			// entera, y con `limit 1` eso entrega el registro de otra persona —el
+			// perfil de un desconocido— como si fuera el suyo. El resultado honesto
+			// es vacío, que además el grafo ya sabe distinguir de un fallo: cero
+			// coincidencias sale por `ok` con `found=false`.
+			return &DataQueryResult{Records: []DataQueryRecord{}}, nil
+		}
 		args = append(args, input.OrgID, phone)
 		query += ` JOIN data_record_contacts rc ON rc.record_id = r.id
 			JOIN contacts c ON c.id = rc.contact_id
 				AND c.org_id = $` + strconv.Itoa(len(args)-1) + `::uuid
 				AND c.phone_normalized = $` + strconv.Itoa(len(args))
-	} else if strings.TrimSpace(input.LinkedContactPhone) != "" {
-		// Un teléfono presente pero no normalizable devolvería la tabla entera si
-		// se ignorara el filtro en silencio. Preferimos el resultado vacío.
-		return &DataQueryResult{Records: []DataQueryRecord{}}, nil
 	}
 	query += ` WHERE r.object_id = $1::uuid`
 

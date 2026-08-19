@@ -1,0 +1,27 @@
+[
+  {
+    "key": "negocio",
+    "name": "Negocio",
+    "pluralName": "Mi negocio",
+    "fields": [
+      { "key": "nombre", "label": "Nombre", "type": "text", "required": true },
+      { "key": "rubro", "label": "Rubro", "type": "text", "required": false },
+      { "key": "que_ofrece", "label": "Qué ofrece", "type": "text", "required": false },
+      { "key": "automatiza", "label": "Qué automatiza", "type": "text", "required": false },
+      { "key": "tono", "label": "Tono", "type": "text", "required": false },
+      { "key": "restricciones", "label": "Restricciones", "type": "text", "required": false },
+      { "key": "horario", "label": "Horario", "type": "text", "required": false },
+      { "key": "activo", "label": "Activo", "type": "boolean", "required": true }
+    ]
+  },
+  {
+    "key": "perfiles_contacto",
+    "name": "Perfil de contacto",
+    "pluralName": "Perfiles de contacto",
+    "fields": [
+      { "key": "contexto_personal", "label": "Contexto personal", "type": "text", "required": false },
+      { "key": "activo", "label": "Activo", "type": "boolean", "required": false },
+      { "key": "prioridad", "label": "Prioridad", "type": "number", "required": false }
+    ]
+  }
+]

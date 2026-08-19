@@ -73,6 +73,7 @@ func (con *Controller) execDataQuery(ctx context.Context, bot *models.BotChannel
 		Limit:     limit,
 	}
 	if linkCurrentContact {
+		input.LinkCurrentContact = true
 		input.LinkedContactPhone = currentPhone
 	}
 	result, err := models.QueryDataRecords(ctx, con.Env.Postgres, input)

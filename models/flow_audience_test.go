@@ -469,12 +469,9 @@ func TestFallbackNoAdmiteAudiencia(t *testing.T) {
 	pool, ctx := flowTestPool(t)
 	bot, _ := audienciaDePrueba(t, ctx, pool, "aud5_")
 
-	flow, err := CreateFlow(ctx, pool, bot.ID, NewFlow{
-		Key: "reserva", Name: "Reserva", TriggerType: "message", IsFallback: true, UserID: "tester",
-	})
-	if err != nil {
-		t.Fatalf("CreateFlow: %v", err)
-	}
+	// El flujo de reserva ya no hay que fabricarlo: el bot nace con `principal`,
+	// que es su fallback, y solo un `message` vivo puede serlo.
+	flow := flujoSembrado(t, ctx, pool, bot.ID)
 	if _, err := SetFlowAudience(ctx, pool, bot.ID, flow.ID, json.RawMessage(condicionPiloto), "tester"); err == nil {
 		t.Fatal("el flujo de reserva no puede restringirse por audiencia")
 	}

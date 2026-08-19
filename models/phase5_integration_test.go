@@ -122,7 +122,7 @@ func TestPhase5DuplicarFlujo(t *testing.T) {
 	original := grafoValido("f_dup", "Atención", "hola")
 	flow, err := CreateFlow(ctx, pool, bot.ID, NewFlow{
 		Key: "atencion", Name: "Atención", TriggerType: "message",
-		IsFallback: true, Draft: original, UserID: "tester",
+		Draft: original, UserID: "tester",
 	})
 	if err != nil {
 		t.Fatalf("CreateFlow: %v", err)
@@ -150,7 +150,14 @@ func TestPhase5DuplicarFlujo(t *testing.T) {
 	if copia.Status != "draft" || copia.PublishedVersionID != nil {
 		t.Fatalf("la copia debe nacer en borrador: %+v", copia)
 	}
-	if copia.IsFallback {
+	// El fallback del bot es su flujo `principal` sembrado, así que es el único
+	// que puede probar de verdad que duplicar no lo hereda.
+	sembrado := flujoSembrado(t, ctx, pool, bot.ID)
+	copiaDelSembrado, err := DuplicateFlow(ctx, pool, bot.ID, sembrado.ID, "tester")
+	if err != nil || copiaDelSembrado == nil {
+		t.Fatalf("DuplicateFlow(principal): %v", err)
+	}
+	if copia.IsFallback || copiaDelSembrado.IsFallback {
 		t.Fatal("la copia no debe heredar is_fallback: solo un message vivo puede serlo")
 	}
 	if !containsBody(t, copia.Draft, "hola") {

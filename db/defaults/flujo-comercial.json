@@ -1,0 +1,226 @@
+{
+  "extiendeAgente": {
+    "id": "n_agente",
+    "outputs": ["productos"],
+    "instruction": "\n\nEste bot además vende por la tienda conectada, así que tiene una rama más:\n\n- productos: quiere comprar, cotizar, o saber el precio, el stock o las características de algo que el negocio vende. Úsala también para «¿tienen X?» y «¿cuánto cuesta X?», y cuando hable de un pedido suyo o de un pago que ya hizo. Si lo que pide es orientación general sobre el negocio, usa consulta."
+  },
+  "nodes": [
+    {
+      "id": "n_products_specialist",
+      "pos": { "x": 2820, "y": 560 },
+      "kind": "agent",
+      "agentRole": "specialist",
+      "contextMode": "recent",
+      "silent": false,
+      "saveAs": "compra",
+      "outputs": ["conversar", "asesor", "comprar"],
+      "tools": [
+        {
+          "ref": "catalog_search",
+          "config": { "connection": "meudim", "maxLimit": "5" }
+        },
+        {
+          "ref": "catalog_product",
+          "config": { "connection": "meudim" }
+        }
+      ],
+      "instruction": "Eres el especialista de productos de este negocio. El orquestador ya decidió que la persona pregunta por algo que se vende.\n\nConsulta el catálogo con tus herramientas antes de responder. Nunca afirmes un producto, un precio ni una disponibilidad que no venga de una consulta de este turno: no tienes catálogo memorizado y los precios cambian. Si una herramienta te dice que no pudo consultar, dilo tal cual y ofrece pasar con una persona; no concluyas que el producto no existe.\n\nRecomienda como mucho tres opciones. Nombra siempre el precio con su moneda y si hay stock. Si la búsqueda no devuelve nada, dilo con claridad y vuelve a intentarlo con otras palabras del producto, no con la frase completa del cliente.\n\nElige conversar para recomendar, comparar o pedir el dato que falte.\nElige asesor cuando pidan una persona, una cotización especial, un envío que el catálogo no cubre o algo que no resuelves.\nElige comprar SOLO cuando tengas los tres datos confirmados por el cliente: el id del producto tal como lo devolvió la búsqueda, cuántas unidades quiere y su correo electrónico. Pide lo que falte en la rama conversar, de a un dato por vez. El correo es obligatorio para registrar el pedido en la tienda; pídelo sin rodeos y explica para qué es.\n\nNo inventes plazos de entrega, descuentos ni formas de pago. Las instrucciones de pago se envían automáticamente después de registrar el pedido, así que no las redactes tú ni prometas una cuenta concreta.\n\nResponde en español neutro, cordial y directo; como máximo cinco líneas, una sola pregunta por turno y sin emojis salvo que el cliente los use primero. No pidas contraseñas, PIN, CVV, códigos de seguridad, tokens ni claves privadas.\n{contexto_organizacion}",
+      "outputFields": [
+        {
+          "key": "productId",
+          "type": "string",
+          "description": "Id del producto, exactamente como lo devolvió la búsqueda. Vacío hasta que el cliente confirme cuál quiere."
+        },
+        {
+          "key": "cantidad",
+          "type": "number",
+          "description": "Unidades confirmadas por el cliente. Vacío hasta que lo diga."
+        },
+        {
+          "key": "correo",
+          "type": "string",
+          "description": "Correo electrónico del comprador, tal como lo escribió. Vacío hasta que lo dé."
+        }
+      ]
+    },
+    {
+      "id": "n_order_ready_router",
+      "pos": { "x": 3180, "y": 560 },
+      "kind": "router",
+      "cases": [
+        {
+          "id": "listo",
+          "label": "Producto, cantidad y correo",
+          "expression": "compra.productId && compra.cantidad && compra.correo"
+        }
+      ]
+    },
+    {
+      "id": "n_create_order",
+      "pos": { "x": 3540, "y": 480 },
+      "kind": "tool",
+      "toolRef": "order_create",
+      "saveAs": "pedido",
+      "args": {
+        "connection": "meudim",
+        "customerEmail": "{compra.correo}",
+        "customerName": "{contact_name}",
+        "customerPhone": "{contact_phone}",
+        "notes": "Pedido tomado por WhatsApp.",
+        "idempotencyKey": "message:{input.id}",
+        "item.1.productId": "{compra.productId}",
+        "item.1.quantity": "{compra.cantidad}"
+      }
+    },
+    {
+      "id": "n_order_failed",
+      "pos": { "x": 3540, "y": 760 },
+      "kind": "send",
+      "body": "No pude registrar el pedido: {pedido.error}\n\nDime si quieres ajustar la cantidad o ver otra opción."
+    },
+    {
+      "id": "n_payment_intent",
+      "pos": { "x": 3900, "y": 480 },
+      "kind": "tool",
+      "toolRef": "payment_intent_create",
+      "saveAs": "cobro",
+      "args": {
+        "connection": "meudim",
+        "orderId": "{pedido.orderId}"
+      }
+    },
+    {
+      "id": "n_send_order_payment",
+      "pos": { "x": 4260, "y": 480 },
+      "kind": "send",
+      "body": "Listo. Tu pedido {pedido.orderNumber} quedó registrado: {pedido.summary}.\n\n{cobro.message}"
+    },
+    {
+      "id": "n_receipt_wait",
+      "pos": { "x": 4620, "y": 480 },
+      "kind": "wait",
+      "timeoutHours": 24
+    },
+    {
+      "id": "n_receipt",
+      "pos": { "x": 4980, "y": 480 },
+      "kind": "agent",
+      "agentRole": "specialist",
+      "contextMode": "none",
+      "silent": true,
+      "saveAs": "receipt",
+      "accepts": ["text", "interactive", "image"],
+      "outputs": ["valid", "needs_review", "unreadable", "not_receipt"],
+      "instruction": "Analiza únicamente la imagen actual como posible comprobante del pago del pedido {pedido.orderNumber}, por {cobro.currency} {cobro.amount}. No uses el historial para completar datos que no aparezcan en la captura.\n\nElige valid solo si la imagen muestra una operación exitosa y se distinguen con claridad el importe, la fecha/hora y el número o código de operación. Elige needs_review si parece un comprobante exitoso pero falta algún dato, hay ambigüedad o la confianza no es suficiente. Elige unreadable si la captura no puede leerse. Elige not_receipt si no hay imagen o la imagen no es un comprobante de pago.\n\nExtrae únicamente datos visibles y no inventes. provider debe ser exactamente uno de estos valores canónicos en minúsculas: yape, plin, bcp, interbank, transfer u other. amount es el importe transferido sin comisión; currency usa ISO 4217; occurredAt usa RFC3339 con la zona visible o, si no aparece, la zona de Perú (-05:00); operationCode conserva los ceros iniciales; payerName es el nombre visible del pagador; recipient es el destinatario visible; confidence va de 0 a 1.",
+      "outputFields": [
+        {
+          "key": "provider",
+          "type": "string",
+          "description": "Canal canónico: yape, plin, bcp, interbank, transfer u other."
+        },
+        {
+          "key": "amount",
+          "type": "number",
+          "description": "Importe transferido visible, sin comisión."
+        },
+        {
+          "key": "currency",
+          "type": "string",
+          "description": "Moneda visible en código ISO 4217, por ejemplo PEN."
+        },
+        {
+          "key": "occurredAt",
+          "type": "datetime",
+          "description": "Fecha y hora visibles de la operación en RFC3339."
+        },
+        {
+          "key": "operationCode",
+          "type": "string",
+          "description": "Número o código de operación visible, conservando los ceros iniciales."
+        },
+        {
+          "key": "payerName",
+          "type": "string",
+          "description": "Nombre visible del pagador o titular de la cuenta de origen."
+        },
+        {
+          "key": "recipient",
+          "type": "string",
+          "description": "Nombre del destinatario visible en el comprobante."
+        },
+        {
+          "key": "confidence",
+          "type": "number",
+          "description": "Confianza global de la extracción entre 0 y 1."
+        }
+      ]
+    },
+    {
+      "id": "n_payment_submit",
+      "pos": { "x": 5340, "y": 400 },
+      "kind": "tool",
+      "toolRef": "payment_submit",
+      "saveAs": "declaracion",
+      "args": {
+        "connection": "meudim",
+        "paymentId": "{cobro.paymentId}",
+        "reference": "{receipt.operationCode}",
+        "declaredAmount": "{receipt.amount}",
+        "declaredAt": "{receipt.occurredAt}",
+        "channel": "{receipt.provider}",
+        "payerName": "{receipt.payerName}",
+        "recipient": "{receipt.recipient}"
+      }
+    },
+    {
+      "id": "n_receipt_retry",
+      "pos": { "x": 5340, "y": 720 },
+      "kind": "send",
+      "body": "Todavía no tengo el comprobante de ese pago. Envíame una captura completa y nítida, donde se vean el importe, la fecha y el número de operación."
+    },
+    {
+      "id": "n_amount_ok",
+      "pos": { "x": 5700, "y": 400 },
+      "kind": "condition",
+      "expression": "empty(declaracion.amountMatches) || declaracion.amountMatches == true"
+    },
+    {
+      "id": "n_payment_done",
+      "pos": { "x": 6060, "y": 320 },
+      "kind": "send",
+      "body": "Recibí tu comprobante por {receipt.amount} y registré la operación {receipt.operationCode} en el pedido {pedido.orderNumber}. Queda pendiente de verificación; te confirmamos apenas se valide."
+    },
+    {
+      "id": "n_amount_mismatch",
+      "pos": { "x": 6060, "y": 560 },
+      "kind": "send",
+      "body": "Registré el comprobante por {receipt.amount}, pero la tienda marcó que no coincide con el total de {cobro.currency} {cobro.amount} del pedido {pedido.orderNumber}. Te paso con una persona para revisarlo."
+    }
+  ],
+  "edges": [
+    { "source": "n_agente", "sourceHandle": "productos", "target": "n_products_specialist" },
+    { "source": "n_products_specialist", "sourceHandle": "conversar", "target": "n_espera" },
+    { "source": "n_products_specialist", "sourceHandle": "asesor", "target": "n_derivar" },
+    { "source": "n_products_specialist", "sourceHandle": "comprar", "target": "n_order_ready_router" },
+    { "source": "n_order_ready_router", "sourceHandle": "listo", "target": "n_create_order" },
+    { "source": "n_order_ready_router", "sourceHandle": "default", "target": "n_espera" },
+    { "source": "n_create_order", "sourceHandle": "ok", "target": "n_payment_intent" },
+    { "source": "n_create_order", "sourceHandle": "error", "target": "n_order_failed" },
+    { "source": "n_order_failed", "target": "n_espera" },
+    { "source": "n_payment_intent", "sourceHandle": "ok", "target": "n_send_order_payment" },
+    { "source": "n_payment_intent", "sourceHandle": "error", "target": "n_derivar" },
+    { "source": "n_send_order_payment", "target": "n_receipt_wait" },
+    { "source": "n_receipt_wait", "target": "n_receipt" },
+    { "source": "n_receipt", "sourceHandle": "valid", "target": "n_payment_submit" },
+    { "source": "n_receipt", "sourceHandle": "needs_review", "target": "n_payment_submit" },
+    { "source": "n_receipt", "sourceHandle": "unreadable", "target": "n_receipt_retry" },
+    { "source": "n_receipt", "sourceHandle": "not_receipt", "target": "n_receipt_retry" },
+    { "source": "n_payment_submit", "sourceHandle": "ok", "target": "n_amount_ok" },
+    { "source": "n_payment_submit", "sourceHandle": "error", "target": "n_derivar" },
+    { "source": "n_receipt_retry", "target": "n_receipt_wait", "role": "loopback" },
+    { "source": "n_amount_ok", "sourceHandle": "true", "target": "n_payment_done" },
+    { "source": "n_amount_ok", "sourceHandle": "false", "target": "n_amount_mismatch" },
+    { "source": "n_payment_done", "target": "n_fin" },
+    { "source": "n_amount_mismatch", "target": "n_derivar" }
+  ]
+}

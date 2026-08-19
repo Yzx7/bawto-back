@@ -97,8 +97,13 @@ func ContactMatchesAudience(ctx context.Context, p *pgxpool.Pool, orgID, phone s
 	}
 
 	input := DataQueryInput{
-		OrgID:              orgID,
-		ObjectKey:          condition["object"],
+		OrgID:     orgID,
+		ObjectKey: condition["object"],
+		// El predicado pregunta por las filas **de este contacto**. Sin decirlo
+		// explícitamente, un contacto sin teléfono evaluaría la condición contra la
+		// tabla entera y quedaría dentro de la audiencia porque cumple otra
+		// persona.
+		LinkCurrentContact: true,
 		LinkedContactPhone: phone,
 		Where:              rules,
 		// El predicado solo responde sí o no: basta con saber si existe una fila.

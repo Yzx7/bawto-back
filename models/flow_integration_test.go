@@ -233,11 +233,12 @@ func TestFlowArchivarLiberaLaKey(t *testing.T) {
 	if list, err := PublishedMessageFlows(ctx, pool, bot.ID); err != nil || len(list) != 0 {
 		t.Fatalf("un flujo archivado no debe resolverse: err=%v list=%+v", err, list)
 	}
-	// Y no aparece en la lista operativa, pero sí en el historial.
-	if list, err := ListFlows(ctx, pool, bot.ID, false); err != nil || len(list) != 0 {
+	// Y no aparece en la lista operativa, pero sí en el historial. El otro flujo
+	// de los recuentos es el `principal` que el bot trae al nacer.
+	if list, err := ListFlows(ctx, pool, bot.ID, false); err != nil || len(list) != 1 {
 		t.Fatalf("ListFlows(vivos): err=%v len=%d", err, len(list))
 	}
-	if list, err := ListFlows(ctx, pool, bot.ID, true); err != nil || len(list) != 1 {
+	if list, err := ListFlows(ctx, pool, bot.ID, true); err != nil || len(list) != 2 {
 		t.Fatalf("ListFlows(con archivados): err=%v len=%d", err, len(list))
 	}
 
@@ -276,8 +277,17 @@ func TestFlowAislamientoEntreOrganizaciones(t *testing.T) {
 	if got, err := GetFlow(ctx, pool, botB.ID, flowA.ID); err != nil || got != nil {
 		t.Fatalf("GetFlow cruzado devolvió %v (err=%v)", got, err)
 	}
-	if list, err := ListFlows(ctx, pool, botB.ID, true); err != nil || len(list) != 0 {
-		t.Fatalf("ListFlows del bot B: err=%v len=%d", err, len(list))
+	// El bot B tiene el suyo propio desde que nació, así que lo que prueba el
+	// aislamiento no es que su lista esté vacía sino que el flujo de A no está en
+	// ella.
+	listaB, err := ListFlows(ctx, pool, botB.ID, true)
+	if err != nil {
+		t.Fatalf("ListFlows del bot B: %v", err)
+	}
+	for _, f := range listaB {
+		if f.ID == flowA.ID {
+			t.Fatalf("el bot B ve el flujo de la organización A: %+v", f)
+		}
 	}
 	if v, err := GetFlowVersion(ctx, pool, botB.ID, flowA.ID, pub.Version.ID); err != nil || v != nil {
 		t.Fatalf("GetFlowVersion cruzado devolvió %v (err=%v)", v, err)

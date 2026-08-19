@@ -169,6 +169,10 @@ func TestWhatsAppFlowEngineIntegration(t *testing.T) {
 	org, _ := models.CreateOrganization(ctx, pool, uid, "FE Org", nil, nil)
 	defer models.DeleteOrganization(ctx, pool, org.ID)
 	bot, _ := models.CreateBot(ctx, pool, org.ID, "FE Bot", "wsp")
+	// El bot nace con su flujo `principal`, que ocupa el hueco del índice único
+	// parcial del fallback. Esta prueba necesita que el fallback sea el suyo, y
+	// archivar el sembrado libera tanto la clave como ese hueco.
+	archivarFlujoSembrado(t, ctx, pool, bot.ID)
 	enc, _ := cph.Encrypt("TKN")
 	_ = models.UpdateBotChannel(ctx, pool, bot.ID, "wsp", "PNIDF", "", enc)
 
@@ -259,6 +263,10 @@ func TestWebhookVariosFlujosMessageEligeYReanuda(t *testing.T) {
 	org, _ := models.CreateOrganization(ctx, pool, uid, "Disp Org", nil, nil)
 	defer models.DeleteOrganization(ctx, pool, org.ID)
 	bot, _ := models.CreateBot(ctx, pool, org.ID, "Disp Bot", "wsp")
+	// El bot nace con su flujo `principal`, que ocupa el hueco del índice único
+	// parcial del fallback. Esta prueba necesita que el fallback sea el suyo, y
+	// archivar el sembrado libera tanto la clave como ese hueco.
+	archivarFlujoSembrado(t, ctx, pool, bot.ID)
 	enc, _ := cph.Encrypt("TKN")
 	_ = models.UpdateBotChannel(ctx, pool, bot.ID, "wsp", "PNIDD", "", enc)
 
@@ -314,6 +322,24 @@ func TestWebhookVariosFlujosMessageEligeYReanuda(t *testing.T) {
 	for i := range want {
 		if sent[i] != want[i] {
 			t.Fatalf("mensaje %d = %q, esperado %q (secuencia %v)", i+1, sent[i], want[i], sent)
+		}
+	}
+}
+
+// archivarFlujoSembrado retira el flujo con el que nace todo bot. Solo lo usan
+// las pruebas que necesitan publicar su propio fallback.
+func archivarFlujoSembrado(t *testing.T, ctx context.Context, pool *pgxpool.Pool, botID string) {
+	t.Helper()
+	flows, err := models.ListFlows(ctx, pool, botID, false)
+	if err != nil {
+		t.Fatalf("ListFlows: %v", err)
+	}
+	for _, flow := range flows {
+		if flow.Key != "principal" {
+			continue
+		}
+		if _, err := models.ArchiveFlow(ctx, pool, botID, flow.ID, ""); err != nil {
+			t.Fatalf("ArchiveFlow(principal): %v", err)
 		}
 	}
 }
