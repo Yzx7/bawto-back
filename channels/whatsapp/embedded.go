@@ -52,11 +52,18 @@ func httpClient(hc *http.Client) *http.Client {
 
 // ExchangeCode intercambia el `code` del Embedded Signup por un access token largo
 // (GET /{version}/oauth/access_token con App ID + App Secret).
-func ExchangeCode(ctx context.Context, apiBase, version, appID, appSecret, code string, hc *http.Client) (string, error) {
+//
+// redirectURI debe ser **idéntico** al que se uso en el dialogo OAuth, o Meta
+// responde 400 con el subcode 36008. Va vacio solo cuando el code no nacio de
+// una redireccion propia.
+func ExchangeCode(ctx context.Context, apiBase, version, appID, appSecret, code, redirectURI string, hc *http.Client) (string, error) {
 	q := url.Values{}
 	q.Set("client_id", appID)
 	q.Set("client_secret", appSecret)
 	q.Set("code", code)
+	if redirectURI != "" {
+		q.Set("redirect_uri", redirectURI)
+	}
 	u := fmt.Sprintf("%s/%s/oauth/access_token?%s", strings.TrimRight(apiBase, "/"), version, q.Encode())
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)

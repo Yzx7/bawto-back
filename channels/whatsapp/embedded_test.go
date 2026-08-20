@@ -49,7 +49,8 @@ func TestExchangeCode(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tok, err := ExchangeCode(context.Background(), srv.URL, "v21.0", "APPID", "SECRET", "CODE123", srv.Client())
+	tok, err := ExchangeCode(context.Background(), srv.URL, "v21.0", "APPID", "SECRET", "CODE123",
+		"https://bawto.sistemuino.com/oauth/whatsapp", srv.Client())
 	if err != nil {
 		t.Fatalf("ExchangeCode: %v", err)
 	}
@@ -59,10 +60,33 @@ func TestExchangeCode(t *testing.T) {
 	if gotPath != "/v21.0/oauth/access_token" {
 		t.Fatalf("path incorrecto: %q", gotPath)
 	}
-	for _, s := range []string{"client_id=APPID", "client_secret=SECRET", "code=CODE123"} {
+	// Sin el redirect_uri, y con uno distinto al del dialogo, Meta responde 400
+	// con el subcode 36008: "make sure your redirect_uri is identical".
+	for _, s := range []string{
+		"client_id=APPID", "client_secret=SECRET", "code=CODE123",
+		"redirect_uri=https%3A%2F%2Fbawto.sistemuino.com%2Foauth%2Fwhatsapp",
+	} {
 		if !strings.Contains(gotQuery, s) {
 			t.Fatalf("query sin %s: %s", s, gotQuery)
 		}
+	}
+}
+
+// El code de un popup no nace de una redireccion nuestra: ahi Meta rechaza el
+// parametro en vez de exigirlo, asi que vacio significa ausente, no cadena vacia.
+func TestExchangeCodeOmiteElRedirectURIVacio(t *testing.T) {
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte(`{"access_token":"EAALONGTOKEN"}`))
+	}))
+	defer srv.Close()
+
+	if _, err := ExchangeCode(context.Background(), srv.URL, "v21.0", "APPID", "SECRET", "CODE123", "", srv.Client()); err != nil {
+		t.Fatalf("ExchangeCode: %v", err)
+	}
+	if strings.Contains(gotQuery, "redirect_uri") {
+		t.Fatalf("query con redirect_uri vacio: %s", gotQuery)
 	}
 }
 

@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"net/url"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -9,6 +10,12 @@ import (
 	"github.com/Yzx7/sacs-chatbots/models"
 	"github.com/Yzx7/sacs-chatbots/types"
 )
+
+// Ruta del panel que recibe la vuelta del Embedded Signup. Espejo de
+// WA_REDIRECT_PATH en frontend/components/dashboard/embedded-signup.tsx; si una
+// cambia, la otra tambien, porque Meta exige que el redirect_uri del intercambio
+// sea identico al del dialogo.
+const embeddedRedirectPath = "/oauth/whatsapp"
 
 // botWithRole carga el bot y exige que el usuario tenga uno de `roles` en la org
 // dueña del bot. Reutiliza requireOrgRole. Devuelve el bot o un *fiber.Error.
@@ -240,6 +247,7 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 		BusinessID    string `json:"businessId"`
 		Mode          string `json:"mode"`
 		Pin           string `json:"pin"`
+		RedirectURI   string `json:"redirectUri"`
 	}
 	if err := c.BodyParser(&b); err != nil {
 		return con.fail(c, fiber.StatusBadRequest, "input inválido")
@@ -250,6 +258,16 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 	b.BusinessID = strings.TrimSpace(b.BusinessID)
 	b.Mode = strings.TrimSpace(b.Mode)
 	b.Pin = strings.TrimSpace(b.Pin)
+	b.RedirectURI = strings.TrimSpace(b.RedirectURI)
+	// Solo se acepta la ruta de vuelta del propio panel. El valor no redirige a
+	// nadie aqui —solo tiene que coincidir con el del dialogo—, pero el panel
+	// vive en varios dominios y no hay una lista fija que comparar.
+	if b.RedirectURI != "" {
+		u, err := url.Parse(b.RedirectURI)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.Path != embeddedRedirectPath {
+			return con.fail(c, fiber.StatusBadRequest, "redirectUri invalido")
+		}
+	}
 	// Solo el code es obligatorio: los ids llegan al panel por postMessage y en un
 	// navegador movil no llegan nunca. Si faltan se deducen del token mas abajo,
 	// porque descartarlos aqui tira una conexion que en Meta ya quedo hecha.
@@ -264,7 +282,7 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 	}
 
 	token, err := whatsapp.ExchangeCode(c.Context(), cfg.WhatsAppAPIBase, cfg.WhatsAppAPIVersion,
-		cfg.FacebookAppID, cfg.WhatsAppAppSecret, b.Code, nil)
+		cfg.FacebookAppID, cfg.WhatsAppAppSecret, b.Code, b.RedirectURI, nil)
 	if err != nil {
 		con.Env.Logger.Error("embedded exchange", "err", err.Error())
 		return con.fail(c, fiber.StatusBadGateway, "no se pudo intercambiar el código con Meta")
