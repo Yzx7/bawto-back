@@ -51,6 +51,10 @@ func TestRutasDeLaInterfazOperativaRegistradas(t *testing.T) {
 		// Comparte prefijo con GET /bots/:botId/channel: si alguien registrara
 		// `/channel/:algo` antes, esta dejaría de existir sin avisar.
 		http.MethodGet + " /bots/:botId/channel/health",
+		// Liberar el número es lo que permite moverlo entre bots: sin esta ruta,
+		// el primer bot que lo toma se lo queda y el Embedded Signup del segundo
+		// no tiene salida.
+		http.MethodDelete + " /bots/:botId/channel",
 		// La audiencia es endpoint propio a propósito: si acabara siendo un campo
 		// del PATCH de metadatos, un `member` podría quitarse la restricción y
 		// publicar sin ella. Que la ruta exista es parte del control de acceso.

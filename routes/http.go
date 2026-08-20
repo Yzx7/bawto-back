@@ -149,6 +149,7 @@ func RegisterHTTP(app *fiber.App, e *env.Env) {
 	bots.Get("/:botId/channel/health", con.GetBotChannelHealth)
 	bots.Put("/:botId/channel", con.ConnectBotChannel)
 	bots.Post("/:botId/channel/embedded", con.ConnectBotChannelEmbedded)
+	bots.Delete("/:botId/channel", con.DisconnectBotChannel)
 	bots.Post("/:botId/channel/register", con.RegisterBotChannel)
 	bots.Get("/:botId/templates", con.ListBotTemplates)
 	bots.Post("/:botId/templates/sync", con.SyncBotTemplates)

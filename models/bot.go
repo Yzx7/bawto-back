@@ -189,3 +189,25 @@ func GetBotByChannel(ctx context.Context, pool *pgxpool.Pool, channel, channelID
 	}
 	return &b, nil
 }
+
+// DisconnectBotChannel libera el número de un bot: borra el canal, la cuenta y
+// el token cifrado. El bot, sus flujos y su historial de chats no se tocan.
+//
+// Existe porque un phone_number_id solo puede pertenecer a un bot —dos filas
+// rompen el enrutado del webhook, que exige exactamente una—, así que sin una
+// forma de soltarlo un número queda preso del primer bot que lo tomó.
+//
+// No desinstala la app en Meta: eso lo decide el dueño desde su portfolio, y
+// hacerlo aquí cortaría también los webhooks de cuenta que aún queremos.
+func DisconnectBotChannel(ctx context.Context, pool *pgxpool.Pool, botID string) (bool, error) {
+	tag, err := pool.Exec(ctx,
+		`UPDATE bots SET
+		     channel_id = NULL, phone = NULL, token_enc = NULL,
+		     waba_id = NULL, business_id = NULL,
+		     templates_synced_at = NULL, channel_connected_at = NULL
+		 WHERE id = $1::uuid AND COALESCE(channel_id,'') <> ''`, botID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}

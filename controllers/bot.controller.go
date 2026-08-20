@@ -597,3 +597,26 @@ func (con *Controller) RegisterBotChannel(c *fiber.Ctx) error {
 	}
 	return con.ok(c, "numero registrado en Cloud API", nil)
 }
+
+// DELETE /bots/:botId/channel libera el número del bot.
+//
+// Solo owner y admin, igual que conectarlo. Es la operación que faltaba para
+// mover un número entre bots: hasta ahora el primero que lo tomaba se lo
+// quedaba, y el Embedded Signup del segundo moría con "ya está conectado a otro
+// bot" sin ninguna salida desde el panel.
+func (con *Controller) DisconnectBotChannel(c *fiber.Ctx) error {
+	bot, err := con.botWithRole(c, c.Params("botId"), "owner", "admin")
+	if err != nil {
+		return con.failErr(c, err)
+	}
+	had, err := models.DisconnectBotChannel(c.Context(), con.Env.Postgres, bot.ID)
+	if err != nil {
+		con.Env.Logger.Error("desconectar canal", "bot", bot.ID, "err", err.Error())
+		return con.fail(c, fiber.StatusInternalServerError, "no se pudo desconectar el canal")
+	}
+	if !had {
+		return con.fail(c, fiber.StatusConflict, "este bot no tiene ningun numero conectado")
+	}
+	con.Env.Logger.Info("canal desconectado", "bot", bot.ID)
+	return con.ok(c, "numero liberado; el bot conserva sus flujos y su historial", nil)
+}
