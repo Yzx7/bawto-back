@@ -1,8 +1,12 @@
 package controllers
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -16,6 +20,62 @@ import (
 // cambia, la otra tambien, porque Meta exige que el redirect_uri del intercambio
 // sea identico al del dialogo.
 const embeddedRedirectPath = "/oauth/whatsapp"
+
+// Cuanto vive el sobre de seleccion. Es el tiempo de elegir un numero en una
+// lista, no el de completar un flujo entero.
+const embeddedSelectionTTL = 10 * time.Minute
+
+// embeddedSelection viaja al navegador **cifrada**: lleva el access token del
+// cliente, que no debe salir en claro ni siquiera hacia su propio panel.
+type embeddedSelection struct {
+	Token string `json:"t"`
+	BotID string `json:"b"`
+	Exp   int64  `json:"e"`
+}
+
+// sealEmbeddedSelection guarda el token ya intercambiado en un sobre que solo
+// este servidor puede abrir. Evita tener que inventar estado de sesion para un
+// paso que dura segundos, y evita repetir el intercambio: el code de Meta es de
+// un solo uso.
+func (con *Controller) sealEmbeddedSelection(token, botID string) (string, error) {
+	payload, err := json.Marshal(embeddedSelection{
+		Token: token,
+		BotID: botID,
+		Exp:   time.Now().Add(embeddedSelectionTTL).Unix(),
+	})
+	if err != nil {
+		return "", err
+	}
+	enc, err := con.Env.Cipher.Encrypt(string(payload))
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(enc), nil
+}
+
+// openEmbeddedSelection abre el sobre y comprueba que sigue siendo valido para
+// **este** bot: un sobre de otro bot no debe poder conectar este.
+func (con *Controller) openEmbeddedSelection(sealed, botID string) (string, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(sealed)
+	if err != nil {
+		return "", errors.New("seleccion invalida")
+	}
+	plain, err := con.Env.Cipher.Decrypt(raw)
+	if err != nil {
+		return "", errors.New("seleccion invalida")
+	}
+	var sel embeddedSelection
+	if err := json.Unmarshal([]byte(plain), &sel); err != nil {
+		return "", errors.New("seleccion invalida")
+	}
+	if sel.BotID != botID {
+		return "", errors.New("seleccion invalida")
+	}
+	if time.Now().Unix() > sel.Exp {
+		return "", errors.New("la seleccion caduco; repite la conexion")
+	}
+	return sel.Token, nil
+}
 
 // botWithRole carga el bot y exige que el usuario tenga uno de `roles` en la org
 // dueña del bot. Reutiliza requireOrgRole. Devuelve el bot o un *fiber.Error.
@@ -248,6 +308,9 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 		Mode          string `json:"mode"`
 		Pin           string `json:"pin"`
 		RedirectURI   string `json:"redirectUri"`
+		// Segunda vuelta: el cliente elige cuenta y numero, y devuelve el
+		// sobre cifrado que le dimos con el token ya intercambiado.
+		SelectionToken string `json:"selectionToken"`
 	}
 	if err := c.BodyParser(&b); err != nil {
 		return con.fail(c, fiber.StatusBadRequest, "input inválido")
@@ -259,6 +322,7 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 	b.Mode = strings.TrimSpace(b.Mode)
 	b.Pin = strings.TrimSpace(b.Pin)
 	b.RedirectURI = strings.TrimSpace(b.RedirectURI)
+	b.SelectionToken = strings.TrimSpace(b.SelectionToken)
 	// Solo se acepta la ruta de vuelta del propio panel. El valor no redirige a
 	// nadie aqui —solo tiene que coincidir con el del dialogo—, pero el panel
 	// vive en varios dominios y no hay una lista fija que comparar.
@@ -271,7 +335,7 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 	// Solo el code es obligatorio: los ids llegan al panel por postMessage y en un
 	// navegador movil no llegan nunca. Si faltan se deducen del token mas abajo,
 	// porque descartarlos aqui tira una conexion que en Meta ya quedo hecha.
-	if b.Code == "" {
+	if b.Code == "" && b.SelectionToken == "" {
 		return con.fail(c, fiber.StatusBadRequest, "code es obligatorio")
 	}
 	if b.Mode != "cloud" && b.Mode != "coexistence" {
@@ -281,48 +345,108 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 		return con.fail(c, fiber.StatusBadRequest, "el PIN debe tener 6 digitos")
 	}
 
-	token, err := whatsapp.ExchangeCode(c.Context(), cfg.WhatsAppAPIBase, cfg.WhatsAppAPIVersion,
-		cfg.FacebookAppID, cfg.WhatsAppAppSecret, b.Code, b.RedirectURI, nil)
-	if err != nil {
-		con.Env.Logger.Error("embedded exchange", "err", err.Error())
-		return con.fail(c, fiber.StatusBadGateway, "no se pudo intercambiar el código con Meta")
+	// El token sale del code la primera vez; en la segunda vuelta viene dentro
+	// del sobre cifrado, porque el code de Meta es de un solo uso y ya se gasto.
+	var token string
+	if b.SelectionToken != "" {
+		token, err = con.openEmbeddedSelection(b.SelectionToken, bot.ID)
+		if err != nil {
+			return con.fail(c, fiber.StatusBadRequest, err.Error())
+		}
+	} else {
+		token, err = whatsapp.ExchangeCode(c.Context(), cfg.WhatsAppAPIBase, cfg.WhatsAppAPIVersion,
+			cfg.FacebookAppID, cfg.WhatsAppAppSecret, b.Code, b.RedirectURI, nil)
+		if err != nil {
+			con.Env.Logger.Error("embedded exchange", "err", err.Error())
+			return con.fail(c, fiber.StatusBadGateway, "no se pudo intercambiar el código con Meta")
+		}
 	}
 
 	// Descubrimiento: el token de ES sabe a que WABA pertenece y que numeros
 	// tiene. Solo se consulta lo que el panel no pudo entregar.
 	displayPhone := ""
-	if b.WabaID == "" {
-		wabas, err := whatsapp.DiscoverWABAs(c.Context(), cfg.WhatsAppAPIBase, cfg.WhatsAppAPIVersion,
-			cfg.FacebookAppID, cfg.WhatsAppAppSecret, token, nil)
-		if err != nil {
-			con.Env.Logger.Error("embedded discover wabas", "err", err.Error())
-			return con.fail(c, fiber.StatusBadGateway, "no se pudo identificar la cuenta de WhatsApp con Meta")
+	if b.WabaID == "" || b.PhoneNumberID == "" {
+		wabas := []string{b.WabaID}
+		if b.WabaID == "" {
+			wabas, err = whatsapp.DiscoverWABAs(c.Context(), cfg.WhatsAppAPIBase, cfg.WhatsAppAPIVersion,
+				cfg.FacebookAppID, cfg.WhatsAppAppSecret, token, nil)
+			if err != nil {
+				con.Env.Logger.Error("embedded discover wabas", "err", err.Error())
+				return con.fail(c, fiber.StatusBadGateway, "no se pudo identificar la cuenta de WhatsApp con Meta")
+			}
 		}
-		switch len(wabas) {
-		case 0:
+		if len(wabas) == 0 {
 			return con.fail(c, fiber.StatusBadRequest, "el flujo termino sin una cuenta de WhatsApp; reintenta y agrega el numero")
-		case 1:
-			b.WabaID = wabas[0]
-		default:
-			// Con varias no se puede adivinar cual quiso el cliente, y elegir mal
-			// conectaria el bot al numero equivocado.
-			return con.fail(c, fiber.StatusConflict, "el token da acceso a varias cuentas de WhatsApp; repite la conexion desde una computadora")
+		}
+
+		accounts := make([]fiber.Map, 0, len(wabas))
+		total := 0
+		var onlyWaba, onlyPhone, onlyDisplay string
+		for _, waba := range wabas {
+			numbers, err := whatsapp.ListPhoneNumbers(c.Context(), cfg.WhatsAppAPIBase, cfg.WhatsAppAPIVersion, waba, token, nil)
+			if err != nil {
+				con.Env.Logger.Error("embedded list phone numbers", "waba", waba, "err", err.Error())
+				return con.fail(c, fiber.StatusBadGateway, "no se pudieron leer los numeros de la cuenta de WhatsApp")
+			}
+			items := make([]fiber.Map, 0, len(numbers))
+			for _, n := range numbers {
+				// Un numero ya tomado se ofrece marcado, no se esconde: saber que
+				// existe y por que no sirve evita repetir el flujo entero.
+				takenBy := ""
+				if owner, err := models.GetBotByChannel(c.Context(), con.Env.Postgres, "wsp", n.ID); err == nil && owner != nil && owner.ID != bot.ID {
+					takenBy = owner.ID
+				}
+				items = append(items, fiber.Map{
+					"id":                 n.ID,
+					"displayPhoneNumber": n.DisplayPhoneNumber,
+					"verifiedName":       n.VerifiedName,
+					"takenByBotId":       takenBy,
+				})
+				if takenBy == "" {
+					total++
+					onlyWaba, onlyPhone, onlyDisplay = waba, n.ID, n.DisplayPhoneNumber
+				}
+			}
+			accounts = append(accounts, fiber.Map{"wabaId": waba, "numbers": items})
+		}
+
+		// Con una sola opcion libre no hay nada que preguntar.
+		if total == 1 {
+			b.WabaID, b.PhoneNumberID, displayPhone = onlyWaba, onlyPhone, onlyDisplay
+		} else {
+			if total == 0 {
+				return con.fail(c, fiber.StatusConflict, "no hay ningun numero libre en esas cuentas de WhatsApp")
+			}
+			// Elegir por el cliente conectaria el bot al numero equivocado. El
+			// sobre lleva el token ya intercambiado para que la eleccion no
+			// dependa de un code gastado.
+			sealed, err := con.sealEmbeddedSelection(token, bot.ID)
+			if err != nil {
+				return con.fail(c, fiber.StatusInternalServerError, "no se pudo preparar la seleccion")
+			}
+			// Que cuentas ve el token no es evidente desde fuera: depende del
+			// portfolio de la cuenta de Meta que hizo el signup, no de la
+			// organizacion de Bawto. Sin esto, un "hay varias" no dice cuales.
+			con.Env.Logger.Info("embedded seleccion pendiente",
+				"bot", bot.ID, "wabas", strings.Join(wabas, ","), "libres", total)
+			return con.ok(c, "elige el numero de WhatsApp", fiber.Map{
+				"needsSelection": true,
+				"selectionToken": sealed,
+				"accounts":       accounts,
+			})
 		}
 	}
-	if b.PhoneNumberID == "" {
-		numbers, err := whatsapp.ListPhoneNumbers(c.Context(), cfg.WhatsAppAPIBase, cfg.WhatsAppAPIVersion, b.WabaID, token, nil)
-		if err != nil {
-			con.Env.Logger.Error("embedded list phone numbers", "err", err.Error())
-			return con.fail(c, fiber.StatusBadGateway, "no se pudieron leer los numeros de la cuenta de WhatsApp")
-		}
-		switch len(numbers) {
-		case 0:
-			return con.fail(c, fiber.StatusBadRequest, "la cuenta de WhatsApp no tiene numeros; reintenta y agrega el numero")
-		case 1:
-			b.PhoneNumberID = numbers[0].ID
-			displayPhone = numbers[0].DisplayPhoneNumber
-		default:
-			return con.fail(c, fiber.StatusConflict, "la cuenta tiene varios numeros; repite la conexion desde una computadora para elegir cual")
+
+	// Tras una eleccion manual el numero visible no se conoce; se busca para no
+	// dejar bots.phone vacio, que es lo que ve el usuario en el panel.
+	if displayPhone == "" && b.WabaID != "" {
+		if numbers, err := whatsapp.ListPhoneNumbers(c.Context(), cfg.WhatsAppAPIBase, cfg.WhatsAppAPIVersion, b.WabaID, token, nil); err == nil {
+			for _, n := range numbers {
+				if n.ID == b.PhoneNumberID {
+					displayPhone = n.DisplayPhoneNumber
+					break
+				}
+			}
 		}
 	}
 
