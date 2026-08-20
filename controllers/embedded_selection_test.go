@@ -73,3 +73,49 @@ func TestSobreDeSeleccionCaduca(t *testing.T) {
 		t.Fatal("un sobre caducado deberia rechazarse")
 	}
 }
+
+// El webhook desempata, pero no manda: la lista del token es la que autoriza.
+func TestPreferRecentlyLinked(t *testing.T) {
+	token := []string{"WABA_A", "WABA_B", "WABA_C"}
+
+	t.Run("se queda con la recien vinculada", func(t *testing.T) {
+		got := preferRecentlyLinked(token, []string{"WABA_B"})
+		if len(got) != 1 || got[0] != "WABA_B" {
+			t.Fatalf("esperaba solo WABA_B, got %v", got)
+		}
+	})
+
+	t.Run("conserva el orden del webhook", func(t *testing.T) {
+		got := preferRecentlyLinked(token, []string{"WABA_C", "WABA_A"})
+		if len(got) != 2 || got[0] != "WABA_C" || got[1] != "WABA_A" {
+			t.Fatalf("esperaba [WABA_C WABA_A], got %v", got)
+		}
+	})
+
+	// Lo que el token no alcanza no puede entrar por el webhook: seria conectar
+	// el bot a una cuenta que el cliente no autorizo en este flujo.
+	t.Run("nunca añade una cuenta ajena al token", func(t *testing.T) {
+		got := preferRecentlyLinked(token, []string{"WABA_INTRUSA"})
+		if len(got) != len(token) {
+			t.Fatalf("esperaba la lista del token intacta, got %v", got)
+		}
+		for _, waba := range got {
+			if waba == "WABA_INTRUSA" {
+				t.Fatal("se colo una cuenta que el token no autoriza")
+			}
+		}
+	})
+
+	t.Run("sin webhooks devuelve la lista del token", func(t *testing.T) {
+		if got := preferRecentlyLinked(token, nil); len(got) != len(token) {
+			t.Fatalf("esperaba la lista intacta, got %v", got)
+		}
+	})
+
+	t.Run("con una sola cuenta no hay nada que desempatar", func(t *testing.T) {
+		one := []string{"WABA_A"}
+		if got := preferRecentlyLinked(one, []string{"WABA_B"}); len(got) != 1 || got[0] != "WABA_A" {
+			t.Fatalf("esperaba [WABA_A], got %v", got)
+		}
+	})
+}

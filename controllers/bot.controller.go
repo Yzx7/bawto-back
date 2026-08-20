@@ -25,6 +25,38 @@ const embeddedRedirectPath = "/oauth/whatsapp"
 // lista, no el de completar un flujo entero.
 const embeddedSelectionTTL = 10 * time.Minute
 
+// Ventana para creer que un PARTNER_ADDED pertenece a este signup. Generosa
+// porque el cliente puede demorarse dentro del dialogo de Meta, y no importa
+// que lo sea: solo desempata entre cuentas que el token ya autoriza.
+const embeddedLinkWindow = 30 * time.Minute
+
+// preferRecentlyLinked se queda con las cuentas del token que Meta acaba de
+// vincular, conservando el orden del webhook —la mas reciente primero—.
+//
+// Si el cruce queda vacio devuelve la lista original: el webhook es una pista
+// para no preguntar de mas, no una autoridad. Nunca añade una cuenta que el
+// token no alcance, porque eso conectaria el bot a algo que el cliente no
+// autorizo en este flujo.
+func preferRecentlyLinked(fromToken, recentlyLinked []string) []string {
+	if len(fromToken) < 2 || len(recentlyLinked) == 0 {
+		return fromToken
+	}
+	allowed := make(map[string]bool, len(fromToken))
+	for _, waba := range fromToken {
+		allowed[waba] = true
+	}
+	var out []string
+	for _, waba := range recentlyLinked {
+		if allowed[waba] {
+			out = append(out, waba)
+		}
+	}
+	if len(out) == 0 {
+		return fromToken
+	}
+	return out
+}
+
 // embeddedSelection viaja al navegador **cifrada**: lleva el access token del
 // cliente, que no debe salir en claro ni siquiera hacia su propio panel.
 type embeddedSelection struct {
@@ -377,6 +409,19 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 		}
 		if len(wabas) == 0 {
 			return con.fail(c, fiber.StatusBadRequest, "el flujo termino sin una cuenta de WhatsApp; reintenta y agrega el numero")
+		}
+		// El token dice a que cuentas alcanza el permiso, pero no a cual acaba de
+		// entrar el cliente. Eso lo sabe el webhook, que llega al servidor y no
+		// depende de que el navegador pueda devolver nada.
+		if len(wabas) > 1 {
+			linked, err := models.RecentlyLinkedWABAs(c.Context(), con.Env.Postgres, embeddedLinkWindow)
+			if err != nil {
+				con.Env.Logger.Error("embedded wabas recientes", "err", err.Error())
+			} else if narrowed := preferRecentlyLinked(wabas, linked); len(narrowed) < len(wabas) {
+				con.Env.Logger.Info("embedded waba por webhook",
+					"bot", bot.ID, "token", strings.Join(wabas, ","), "elegidas", strings.Join(narrowed, ","))
+				wabas = narrowed
+			}
 		}
 
 		accounts := make([]fiber.Map, 0, len(wabas))

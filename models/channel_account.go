@@ -189,3 +189,45 @@ func ListChannelAccountEvents(
 	}
 	return pgx.CollectRows(rows, pgx.RowToStructByName[ChannelAccountEvent])
 }
+
+// RecentlyLinkedWABAs devuelve las WABA que Meta acaba de vincular a nuestra
+// app, de la mas reciente a la mas antigua y sin repetir.
+//
+// Existe porque el Embedded Signup entrega el waba_id "a la ventana que abrio el
+// flujo", y desde el navegador de un movil esa ventana no puede recibirlo. El
+// webhook si lo trae, y llega al servidor: PARTNER_ADDED y PARTNER_APP_INSTALLED
+// nombran la cuenta recien conectada en payload.waba_info.waba_id, que **no** es
+// la columna waba_id —esa identifica a quien emite el evento, y en estos dos
+// suele ser el portfolio, no la cuenta vinculada—.
+//
+// Sirve para desempatar, nunca para autorizar: la lista del token manda, y esto
+// solo elige dentro de ella.
+func RecentlyLinkedWABAs(ctx context.Context, pool *pgxpool.Pool, window time.Duration) ([]string, error) {
+	rows, err := pool.Query(ctx,
+		`SELECT payload->'waba_info'->>'waba_id' AS waba
+		   FROM channel_account_events
+		  WHERE field = 'account_update'
+		    AND payload->>'event' IN ('PARTNER_ADDED', 'PARTNER_APP_INSTALLED')
+		    AND payload->'waba_info'->>'waba_id' IS NOT NULL
+		    AND occurred_at > NOW() - $1::interval
+		  ORDER BY occurred_at DESC`,
+		window.String())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	seen := map[string]bool{}
+	var out []string
+	for rows.Next() {
+		var waba string
+		if err := rows.Scan(&waba); err != nil {
+			return nil, err
+		}
+		if waba != "" && !seen[waba] {
+			seen[waba] = true
+			out = append(out, waba)
+		}
+	}
+	return out, rows.Err()
+}
