@@ -250,8 +250,11 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 	b.BusinessID = strings.TrimSpace(b.BusinessID)
 	b.Mode = strings.TrimSpace(b.Mode)
 	b.Pin = strings.TrimSpace(b.Pin)
-	if b.Code == "" || b.PhoneNumberID == "" || b.WabaID == "" {
-		return con.fail(c, fiber.StatusBadRequest, "code, phoneNumberId y wabaId son obligatorios")
+	// Solo el code es obligatorio: los ids llegan al panel por postMessage y en un
+	// navegador movil no llegan nunca. Si faltan se deducen del token mas abajo,
+	// porque descartarlos aqui tira una conexion que en Meta ya quedo hecha.
+	if b.Code == "" {
+		return con.fail(c, fiber.StatusBadRequest, "code es obligatorio")
 	}
 	if b.Mode != "cloud" && b.Mode != "coexistence" {
 		return con.fail(c, fiber.StatusBadRequest, "modo de conexion invalido")
@@ -265,6 +268,50 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 	if err != nil {
 		con.Env.Logger.Error("embedded exchange", "err", err.Error())
 		return con.fail(c, fiber.StatusBadGateway, "no se pudo intercambiar el código con Meta")
+	}
+
+	// Descubrimiento: el token de ES sabe a que WABA pertenece y que numeros
+	// tiene. Solo se consulta lo que el panel no pudo entregar.
+	displayPhone := ""
+	if b.WabaID == "" {
+		wabas, err := whatsapp.DiscoverWABAs(c.Context(), cfg.WhatsAppAPIBase, cfg.WhatsAppAPIVersion,
+			cfg.FacebookAppID, cfg.WhatsAppAppSecret, token, nil)
+		if err != nil {
+			con.Env.Logger.Error("embedded discover wabas", "err", err.Error())
+			return con.fail(c, fiber.StatusBadGateway, "no se pudo identificar la cuenta de WhatsApp con Meta")
+		}
+		switch len(wabas) {
+		case 0:
+			return con.fail(c, fiber.StatusBadRequest, "el flujo termino sin una cuenta de WhatsApp; reintenta y agrega el numero")
+		case 1:
+			b.WabaID = wabas[0]
+		default:
+			// Con varias no se puede adivinar cual quiso el cliente, y elegir mal
+			// conectaria el bot al numero equivocado.
+			return con.fail(c, fiber.StatusConflict, "el token da acceso a varias cuentas de WhatsApp; repite la conexion desde una computadora")
+		}
+	}
+	if b.PhoneNumberID == "" {
+		numbers, err := whatsapp.ListPhoneNumbers(c.Context(), cfg.WhatsAppAPIBase, cfg.WhatsAppAPIVersion, b.WabaID, token, nil)
+		if err != nil {
+			con.Env.Logger.Error("embedded list phone numbers", "err", err.Error())
+			return con.fail(c, fiber.StatusBadGateway, "no se pudieron leer los numeros de la cuenta de WhatsApp")
+		}
+		switch len(numbers) {
+		case 0:
+			return con.fail(c, fiber.StatusBadRequest, "la cuenta de WhatsApp no tiene numeros; reintenta y agrega el numero")
+		case 1:
+			b.PhoneNumberID = numbers[0].ID
+			displayPhone = numbers[0].DisplayPhoneNumber
+		default:
+			return con.fail(c, fiber.StatusConflict, "la cuenta tiene varios numeros; repite la conexion desde una computadora para elegir cual")
+		}
+	}
+
+	// Dos bots con el mismo phone_number_id rompen el webhook: GetBotByChannel
+	// exige exactamente una fila y falla al enrutar el mensaje entrante.
+	if owner, err := models.GetBotByChannel(c.Context(), con.Env.Postgres, "wsp", b.PhoneNumberID); err == nil && owner != nil && owner.ID != bot.ID {
+		return con.fail(c, fiber.StatusConflict, "ese numero ya esta conectado a otro bot; desconectalo alli antes de usarlo aqui")
 	}
 
 	if b.Mode == "cloud" {
@@ -284,7 +331,7 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 		return con.fail(c, fiber.StatusInternalServerError, "no se pudo cifrar el token")
 	}
 	if err := models.UpdateBotChannelEmbedded(
-		c.Context(), con.Env.Postgres, bot.ID, "wsp", b.PhoneNumberID, "",
+		c.Context(), con.Env.Postgres, bot.ID, "wsp", b.PhoneNumberID, displayPhone,
 		b.WabaID, b.BusinessID, enc,
 	); err != nil {
 		return con.fail(c, fiber.StatusInternalServerError, "no se pudo conectar el canal (¿phone_number_id ya usado?)")

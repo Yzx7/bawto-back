@@ -87,3 +87,60 @@ func TestSubscribeWABA(t *testing.T) {
 		t.Fatalf("método incorrecto: %q", gotMethod)
 	}
 }
+
+// El caso real que motivo DiscoverWABAs: una conexion hecha desde el navegador
+// del movil llega al backend sin waba_id, porque el postMessage del popup no
+// alcanza al panel. El token sí sabe a que cuenta pertenece.
+func TestDiscoverWABAsLeeSoloElScopeDeManagement(t *testing.T) {
+	var gotPath, gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte(`{"data":{"granular_scopes":[
+		  {"scope":"whatsapp_business_messaging","target_ids":["999NUMERO"]},
+		  {"scope":"whatsapp_business_management","target_ids":["1721895455603060","1721895455603060"]}
+		]}}`))
+	}))
+	defer srv.Close()
+
+	wabas, err := DiscoverWABAs(context.Background(), srv.URL, "v21.0", "APPID", "SECRET", "TKN", srv.Client())
+	if err != nil {
+		t.Fatalf("DiscoverWABAs: %v", err)
+	}
+	if len(wabas) != 1 || wabas[0] != "1721895455603060" {
+		t.Fatalf("wabas inesperadas: %v", wabas)
+	}
+	if gotPath != "/v21.0/debug_token" {
+		t.Fatalf("path incorrecto: %q", gotPath)
+	}
+	// El app token va como client_id|secret; sin el, Meta no revela los scopes.
+	for _, part := range []string{"input_token=TKN", "access_token=APPID%7CSECRET"} {
+		if !strings.Contains(gotQuery, part) {
+			t.Fatalf("query sin %s: %s", part, gotQuery)
+		}
+	}
+}
+
+func TestListPhoneNumbers(t *testing.T) {
+	var gotPath, gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"data":[{"id":"1302561912931418","display_phone_number":"+51 999 888 777","verified_name":"Tienda"}]}`))
+	}))
+	defer srv.Close()
+
+	nums, err := ListPhoneNumbers(context.Background(), srv.URL, "v21.0", "WABA1", "TKN", srv.Client())
+	if err != nil {
+		t.Fatalf("ListPhoneNumbers: %v", err)
+	}
+	if len(nums) != 1 || nums[0].ID != "1302561912931418" || nums[0].DisplayPhoneNumber != "+51 999 888 777" {
+		t.Fatalf("numeros inesperados: %+v", nums)
+	}
+	if gotPath != "/v21.0/WABA1/phone_numbers" {
+		t.Fatalf("path incorrecto: %q", gotPath)
+	}
+	if gotAuth != "Bearer TKN" {
+		t.Fatalf("auth incorrecto: %q", gotAuth)
+	}
+}
