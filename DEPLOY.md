@@ -5,12 +5,28 @@ frontend y topología verificados el 2026-08-07 desplegando de verdad: el
 procedimiento del frontend estaba sin documentar y hubo que reconstruirlo
 leyendo los scripts del server.
 
-**Último despliegue: 2026-08-19.** Backend `46f522c`, SHA256
-`ea9874185e9931ff15a03b9ed73b9c5724e4d9488e53d6bf2d754ea4138382e1`, verificado
+**Último despliegue: 2026-08-19 (2).** Backend `520a982`, SHA256
+`d1aaa35dca20aa238e11e4495507525f3410e8259ce5022a297405fcfd3a3417`, verificado
 en los tres sitios —el binario local, el disco del servidor y
-`/proc/218033/exe`—; el anterior quedó en `/opt/bawto/bawto-backend.pre-46f522c`
-(para `fe118b0`). Frontend `69e8633` en la imagen `bawto-frontend:20260819-1`;
-la anterior, `bawto-frontend:20260818-1`, sigue en el server para revertir.
+`/proc/221538/exe`—; el anterior quedó en `/opt/bawto/bawto-backend.pre-46f522c`
+(para `46f522c`). Frontend `e869144` en la imagen `bawto-frontend:20260819-2`;
+la anterior, `bawto-frontend:20260819-1`, sigue en el server para revertir.
+
+Sin migración. Arregla el **Embedded Signup desde el móvil**: el popup de Meta
+entrega `phone_number_id` y `waba_id` por `postMessage`, que en el navegador de
+un móvil no llega nunca, así que el panel descartaba un `code` válido —caduca en
+30 s— y el backend no recibía ni una petición pese a que en Meta la conexión
+quedaba hecha (`PARTNER_ADDED`, `PARTNER_APP_INSTALLED` en
+`channel_account_events`). Ahora solo el `code` es obligatorio y el backend
+deduce cuenta y número del token (`debug_token` → `granular_scopes`,
+`/{waba}/phone_numbers`). Con varias cuentas o varios números responde 409 en vez
+de adivinar, y rechaza un número que ya pertenece a otro bot: dos filas con el
+mismo `channel_id` rompen el webhook, porque `GetBotByChannel` exige exactamente
+una.
+
+**Despliegue anterior del día**, backend `46f522c`, SHA256
+`ea9874185e9931ff15a03b9ed73b9c5724e4d9488e53d6bf2d754ea4138382e1`
+(`/proc/218033/exe`), frontend `69e8633` en `bawto-frontend:20260819-1`:
 
 **Con migración**: la `031` (`external_connections.provisioned_id`) se aplicó
 **antes** de desplegar, y a propósito: es aditiva y nullable, así que el binario
