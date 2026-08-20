@@ -5,7 +5,23 @@ frontend y topología verificados el 2026-08-07 desplegando de verdad: el
 procedimiento del frontend estaba sin documentar y hubo que reconstruirlo
 leyendo los scripts del server.
 
-**Último despliegue: 2026-08-19 (8).** Solo backend: `42b5079`, SHA256
+**Último despliegue: 2026-08-19 (9).** Backend `63c996a`, SHA256
+`4dd0ded91f4757d6257eeeba82abe0d34bbaf5458566514fd67182559fbb08d2`, verificado
+en `/proc/231003/exe`; el anterior quedó en `/opt/bawto/bawto-backend.pre-42b5079`.
+Frontend `90812a0` en `bawto-frontend:20260819-8`.
+
+**Ya se puede desconectar un número.** `DELETE /bots/:botId/channel` borra canal,
+cuenta y token cifrado; el bot, sus flujos y su historial no se tocan. Faltaba
+por completo: un `phone_number_id` solo puede pertenecer a un bot —dos filas
+rompen el enrutado del webhook, que exige exactamente una—, así que el primero
+que lo tomaba se lo quedaba y el Embedded Signup de cualquier otro moría con «ya
+está conectado a otro bot» sin salida desde el panel. No desinstala la app en
+Meta a propósito: eso lo decide el dueño desde su portfolio, y hacerlo aquí
+cortaría los webhooks de cuenta que seguimos queriendo. La ruta entra en la lista
+de `routes/http_test.go`, que es donde se comprueba de verdad (por HTTP `/bots/*`
+responde 401 exista o no).
+
+**Despliegue anterior: 2026-08-19 (8).** Solo backend: `42b5079`, SHA256
 `78703c5ad4a48c645b6437e5590f5f38d7e2a45b371e59444a71f93d40a582dd`, verificado
 en `/proc/230081/exe`; el anterior quedó en `/opt/bawto/bawto-backend.pre-a1c45e2`.
 El frontend no cambia: sigue en `bawto-frontend:20260819-7`.
