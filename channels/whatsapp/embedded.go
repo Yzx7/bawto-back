@@ -205,3 +205,75 @@ func ListPhoneNumbers(ctx context.Context, apiBase, version, wabaID, token strin
 	}
 	return r.Data, nil
 }
+
+// PhoneNumberStatus dice si un numero quedo listo para Cloud API. En Coexistence
+// el numero sigue viviendo en la app movil, asi que su presencia en la WABA no
+// basta: hay que preguntar por estos dos campos.
+type PhoneNumberStatus struct {
+	IsOnBizApp   bool   `json:"is_on_biz_app"`
+	PlatformType string `json:"platform_type"`
+}
+
+// GetPhoneNumberStatus consulta is_on_biz_app y platform_type de un numero.
+func GetPhoneNumberStatus(ctx context.Context, apiBase, version, phoneNumberID, token string, hc *http.Client) (PhoneNumberStatus, error) {
+	var out PhoneNumberStatus
+	u := fmt.Sprintf("%s/%s/%s?fields=is_on_biz_app,platform_type",
+		strings.TrimRight(apiBase, "/"), version, phoneNumberID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return out, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := httpClient(hc).Do(req)
+	if err != nil {
+		return out, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return out, fmt.Errorf("phone status %d: %s", resp.StatusCode, string(body))
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// Tipos de sincronizacion de Coexistence. Son los dos que documenta Meta.
+const (
+	SyncContacts = "smb_app_state_sync"
+	SyncHistory  = "history"
+)
+
+// StartSMBAppDataSync pide a Meta que empiece a mandar los contactos o el
+// historial de la app movil del cliente.
+//
+// Coexistence da **24 horas** desde el onboarding para pedirlo; pasadas, el
+// cliente tiene que desconectarse y repetir el flujo entero. Y solo se puede
+// pedir una vez por tipo, asi que un reintento a ciegas no es inofensivo.
+func StartSMBAppDataSync(ctx context.Context, apiBase, version, phoneNumberID, token, syncType string, hc *http.Client) error {
+	payload, err := json.Marshal(map[string]string{
+		"messaging_product": "whatsapp",
+		"sync_type":         syncType,
+	})
+	if err != nil {
+		return err
+	}
+	u := fmt.Sprintf("%s/%s/%s/smb_app_data", strings.TrimRight(apiBase, "/"), version, phoneNumberID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient(hc).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("smb_app_data %s %d: %s", syncType, resp.StatusCode, string(body))
+	}
+	return nil
+}

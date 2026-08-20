@@ -341,9 +341,9 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 	if b.Mode != "cloud" && b.Mode != "coexistence" {
 		return con.fail(c, fiber.StatusBadRequest, "modo de conexion invalido")
 	}
-	if b.Mode == "cloud" && (len(b.Pin) != 6 || strings.Trim(b.Pin, "0123456789") != "") {
-		return con.fail(c, fiber.StatusBadRequest, "el PIN debe tener 6 digitos")
-	}
+	// El PIN se exige justo antes de registrar el numero, no aqui: el code de
+	// Meta vive 30 segundos y rechazar la peticion por un PIN ausente lo tira
+	// sin haberlo intercambiado siquiera.
 
 	// El token sale del code la primera vez; en la segunda vuelta viene dentro
 	// del sobre cifrado, porque el code de Meta es de un solo uso y ya se gasto.
@@ -380,7 +380,7 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 		}
 
 		accounts := make([]fiber.Map, 0, len(wabas))
-		total := 0
+		total, seen := 0, 0
 		var onlyWaba, onlyPhone, onlyDisplay string
 		for _, waba := range wabas {
 			numbers, err := whatsapp.ListPhoneNumbers(c.Context(), cfg.WhatsAppAPIBase, cfg.WhatsAppAPIVersion, waba, token, nil)
@@ -388,6 +388,7 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 				con.Env.Logger.Error("embedded list phone numbers", "waba", waba, "err", err.Error())
 				return con.fail(c, fiber.StatusBadGateway, "no se pudieron leer los numeros de la cuenta de WhatsApp")
 			}
+			seen += len(numbers)
 			items := make([]fiber.Map, 0, len(numbers))
 			for _, n := range numbers {
 				// Un numero ya tomado se ofrece marcado, no se esconde: saber que
@@ -415,7 +416,15 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 			b.WabaID, b.PhoneNumberID, displayPhone = onlyWaba, onlyPhone, onlyDisplay
 		} else {
 			if total == 0 {
-				return con.fail(c, fiber.StatusConflict, "no hay ningun numero libre en esas cuentas de WhatsApp")
+				// "Sin numeros" y "todos ocupados" son problemas distintos y se
+				// arreglan de forma distinta; darles el mismo mensaje mando al
+				// dueño a buscar donde no era.
+				if seen == 0 {
+					con.Env.Logger.Info("embedded sin numeros", "bot", bot.ID, "wabas", strings.Join(wabas, ","))
+					return con.fail(c, fiber.StatusConflict,
+						"la cuenta de WhatsApp todavia no expone ningun numero; en Coexistence puede tardar unos segundos tras terminar en Meta, reintenta")
+				}
+				return con.fail(c, fiber.StatusConflict, "todos los numeros de esas cuentas ya estan conectados a otro bot")
 			}
 			// Elegir por el cliente conectaria el bot al numero equivocado. El
 			// sobre lleva el token ya intercambiado para que la eleccion no
@@ -457,6 +466,9 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 	}
 
 	if b.Mode == "cloud" {
+		if len(b.Pin) != 6 || strings.Trim(b.Pin, "0123456789") != "" {
+			return con.fail(c, fiber.StatusBadRequest, "el PIN debe tener 6 digitos")
+		}
 		if err := whatsapp.RegisterPhone(c.Context(), cfg.WhatsAppAPIBase, cfg.WhatsAppAPIVersion, b.PhoneNumberID, token, b.Pin, nil); err != nil {
 			con.Env.Logger.Error("embedded register phone", "err", err.Error())
 			return con.fail(c, fiber.StatusBadGateway, "Meta no pudo registrar el numero; revisa el PIN y los permisos")
@@ -477,6 +489,30 @@ func (con *Controller) ConnectBotChannelEmbedded(c *fiber.Ctx) error {
 		b.WabaID, b.BusinessID, enc,
 	); err != nil {
 		return con.fail(c, fiber.StatusInternalServerError, "no se pudo conectar el canal (¿phone_number_id ya usado?)")
+	}
+
+	// Coexistence: pedir contactos e historial de la app movil. Meta da 24 h
+	// desde el onboarding y **solo admite una peticion por tipo**; pasado el
+	// plazo el cliente tiene que desconectarse y repetir el flujo entero. Va
+	// despues de guardar a proposito: si esto falla el canal ya quedo conectado
+	// y se puede reintentar, mientras que perder el token no se arregla.
+	warning := ""
+	if b.Mode == "coexistence" {
+		for _, syncType := range []string{whatsapp.SyncContacts, whatsapp.SyncHistory} {
+			if err := whatsapp.StartSMBAppDataSync(c.Context(), cfg.WhatsAppAPIBase, cfg.WhatsAppAPIVersion,
+				b.PhoneNumberID, token, syncType, nil); err != nil {
+				con.Env.Logger.Error("embedded smb sync", "bot", bot.ID, "tipo", syncType, "err", err.Error())
+				warning = "el canal quedo conectado, pero no se pudo iniciar la sincronizacion con la app movil; hay 24 h para reintentarlo"
+			}
+		}
+		if status, err := whatsapp.GetPhoneNumberStatus(c.Context(), cfg.WhatsAppAPIBase, cfg.WhatsAppAPIVersion,
+			b.PhoneNumberID, token, nil); err == nil {
+			con.Env.Logger.Info("embedded coexistence", "bot", bot.ID,
+				"is_on_biz_app", status.IsOnBizApp, "platform_type", status.PlatformType)
+		}
+	}
+	if warning != "" {
+		return con.ok(c, warning, fiber.Map{"syncWarning": true})
 	}
 	return con.ok(c, "canal conectado por Embedded Signup", nil)
 }
