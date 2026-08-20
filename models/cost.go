@@ -310,6 +310,7 @@ func loadWhatsAppCost(ctx context.Context, pool *pgxpool.Pool, report *CostRepor
 		    FROM provider_status_events e
 		    JOIN messages m ON m.wa_id=e.provider_message_id
 		    JOIN chats c ON c.id=m.chat_id
+		    JOIN contacts ct ON ct.id=c.contact_id
 		    JOIN bots b ON b.id=c.bot_id
 		    WHERE e.status IN ('delivered','read','played')
 		      AND e.occurred_at >= $1 AND e.occurred_at < $2
