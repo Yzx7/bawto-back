@@ -5,7 +5,31 @@ frontend y topología verificados el 2026-08-07 desplegando de verdad: el
 procedimiento del frontend estaba sin documentar y hubo que reconstruirlo
 leyendo los scripts del server.
 
-**Último despliegue: 2026-08-19 (2).** Backend `520a982`, SHA256
+**Último despliegue: 2026-08-19 (3).** Solo frontend: `aa20706` en la imagen
+`bawto-frontend:20260819-3`; la anterior, `bawto-frontend:20260819-2`, sigue en
+el server para revertir. El backend no cambia: sigue en `520a982`.
+
+Sustituye el popup del Embedded Signup por una **redirección**. El deploy (2)
+arregló que el backend dedujera los ids del token, pero no bastó: un segundo
+intento desde el móvil volvió a completarse en Meta (`PARTNER_ADDED` a las
+19:58) sin que llegara **ninguna** petición al backend. El `code` tampoco
+llegaba, porque en el navegador de un móvil la ventana de Meta no puede
+responderle a la que la abrió —termina mostrando «ya está, puedes cerrar la
+pestaña»—. Ahora el panel navega su propia pestaña al diálogo OAuth y Meta
+devuelve el `code` a `/oauth/whatsapp`.
+
+> **Configuración en Meta, obligatoria:** la URL de vuelta tiene que estar en
+> *Valid OAuth Redirect URIs* de la app (`developers.facebook.com` → Facebook
+> Login → Settings), **una por dominio del panel**, porque el `redirect_uri` se
+> construye con el origen desde el que salió el usuario y la sesión se resuelve
+> por dominio:
+>
+> - `https://bawto.sistemuino.com/oauth/whatsapp`
+> - `https://fludix.yurirodrix.top/oauth/whatsapp`
+>
+> Sin ese registro Meta corta con «URL Blocked» antes de pedir credenciales.
+
+**Despliegue anterior: 2026-08-19 (2).** Backend `520a982`, SHA256
 `d1aaa35dca20aa238e11e4495507525f3410e8259ce5022a297405fcfd3a3417`, verificado
 en los tres sitios —el binario local, el disco del servidor y
 `/proc/221538/exe`—; el anterior quedó en `/opt/bawto/bawto-backend.pre-46f522c`
