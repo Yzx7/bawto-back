@@ -336,7 +336,52 @@ curl -I http://127.0.0.1:3010/signin  # health local del frontend
 nginx -t && systemctl reload nginx    # tras tocar bawto.conf
 ```
 
-## Cómo actualizar el binario (redeploy)
+## Despliegue automático desde GitHub (desde 2026-08-20)
+
+**Un push a `main` despliega.** Cada repo tiene su
+`.github/workflows/deploy.yml`: verifica, construye y despliega por SSH contra
+el VPS. Lo de abajo sigue valiendo para desplegar a mano, y es lo que hay que
+usar cuando GitHub no está disponible o hace falta desplegar algo sin commitear
+—aunque eso último choca con la regla de que producción no vaya por delante del
+repo—.
+
+| | Frontend | Backend |
+|---|---|---|
+| Verifica | `tsc`, `eslint`, `next build` | `go build`, `go vet`, `go test` |
+| Construye | el **servidor**, con `docker build` | el **runner**, cruza-compilando |
+| Script | `/opt/bawto-frontend/deploy.sh <etiqueta>` | `/opt/bawto/deploy-backend.sh <etiqueta>` |
+| Etiqueta | `AAAAMMDD-<run_number>` | los 7 primeros del SHA |
+| Revierte solo | sí, a la imagen anterior | sí, al binario `.pre-<etiqueta>` |
+| Comprueba al final | que el contenedor corre la imagen nueva | SHA256 de `/proc/<pid>/exe` |
+
+Los scripts del servidor están **parametrizados**: `deploy.sh` es el antiguo
+`deploy-<fecha>-<n>.sh` con la línea `release=` tomada del primer argumento, y ya
+no hace falta generar uno por release con `sed`. `deploy-backend.sh` es nuevo y
+añade lo que el redeploy manual nunca tuvo: **respaldo y vuelta atrás
+automática** si el binario nuevo no responde.
+
+**Secrets en los dos repos** (Settings → Secrets and variables → Actions):
+
+| Secret | Qué lleva |
+|---|---|
+| `DEPLOY_SSH_KEY` | la privada de `~/.ssh/bawto-deploy`, dedicada al CI |
+| `DEPLOY_HOST` | la IP pública del VPS (no la de la VPN: el runner no la alcanza) |
+| `DEPLOY_KNOWN_HOSTS` | la línea de `ssh-keyscan -t ed25519` del VPS |
+
+La clave del CI es **distinta de la personal**, entra en `authorized_keys` con
+`no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty`, y se revoca
+borrando esa línea sin tocar el acceso propio. Aun así es una clave de `root`
+sin passphrase en manos de GitHub: quien pueda escribir en `main` puede ejecutar
+en el servidor.
+
+**Lo que este pipeline no cubre:** las pruebas de integración de `controllers` y
+`models` se **saltan solas** sin `DATABASE_URL`, y el runner no llega a la base
+porque vive tras la VPN. Correrlas en local antes de subir sigue siendo parte del
+trabajo —§5 del CLAUDE.md avisa de que una prueba que se salta sola puede llevar
+meses rota sin que nadie lo note—. Tampoco hay comprobación de `gofmt`: el repo
+ya tiene archivos sin formatear de antes y el paso fallaría siempre.
+
+## Cómo actualizar el binario (redeploy manual)
 
 Desde la PC (PowerShell, en `backend/`):
 
