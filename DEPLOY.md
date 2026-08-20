@@ -5,7 +5,19 @@ frontend y topología verificados el 2026-08-07 desplegando de verdad: el
 procedimiento del frontend estaba sin documentar y hubo que reconstruirlo
 leyendo los scripts del server.
 
-**Último despliegue: 2026-08-19 (3).** Solo frontend: `aa20706` en la imagen
+**Último despliegue: 2026-08-19 (4).** Solo frontend: `e153bc0` en la imagen
+`bawto-frontend:20260819-4`. El backend no cambia: sigue en `520a982`.
+
+El contexto de la conexión pasa de `sessionStorage` a `localStorage`. Con la
+redirección ya funcionando —el `code` y el `state` volvían correctos— el panel
+seguía diciendo «No encontramos la conexión que iniciaste»: `sessionStorage` es
+**por pestaña**, y desde el móvil la vuelta de Meta no siempre aterriza en la
+misma. `localStorage` es por origen y sobrevive a ese salto; caduca a los 15 min.
+Además el `state` transporta el bot y el modo, así que la vuelta puede retomar la
+conexión aunque no encuentre nada guardado, pidiendo un clic de confirmación que
+sustituye a la comprobación del nonce.
+
+**Despliegue anterior: 2026-08-19 (3).** Solo frontend: `aa20706` en la imagen
 `bawto-frontend:20260819-3`; la anterior, `bawto-frontend:20260819-2`, sigue en
 el server para revertir. El backend no cambia: sigue en `520a982`.
 
