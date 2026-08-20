@@ -5,7 +5,24 @@ frontend y topología verificados el 2026-08-07 desplegando de verdad: el
 procedimiento del frontend estaba sin documentar y hubo que reconstruirlo
 leyendo los scripts del server.
 
-**Último despliegue: 2026-08-19 (5).** Backend `8bacc1c`, SHA256
+**Último despliegue: 2026-08-19 (6).** Backend `e19a679`, SHA256
+`b06dedb6f98babcd44250fa1f06a183e5738fafb99543939b58530b47baf7c65`, verificado
+en `/proc/227462/exe`; el anterior quedó en `/opt/bawto/bawto-backend.pre-8bacc1c`.
+Frontend `da377d8` en `bawto-frontend:20260819-6`.
+
+**Cuando el token alcanza varios números, ahora se pregunta.** El 409 anterior
+—«repite la conexión desde una computadora»— era un callejón sin salida: lo que
+alcanza el token depende del portfolio de la cuenta de **Meta** que hizo el
+signup, no del dispositivo ni de la organización de Bawto, así que desde una
+computadora habría pasado lo mismo. La respuesta es 200 con las cuentas y sus
+números, y elige una persona. El access token vuelve al navegador dentro de un
+sobre cifrado con el `Cipher` del servidor, atado al bot y con 10 min de vida:
+hace falta porque el `code` de Meta es de un solo uso y ya se gastó en el primer
+intercambio. Un número que ya pertenece a otro bot se ofrece **marcado**, no
+escondido. Y se registra qué WABA vio el token, que antes no quedaba en ninguna
+parte.
+
+**Despliegue anterior: 2026-08-19 (5).** Backend `8bacc1c`, SHA256
 `ac1c501ea1b0569e07ca249b885e7d7bdada79f4443fc2219de3b91f56242eca`, verificado
 en los tres sitios —binario local, disco del servidor y `/proc/226017/exe`—; el
 anterior quedó en `/opt/bawto/bawto-backend.pre-520a982`. Frontend `ce93172` en
