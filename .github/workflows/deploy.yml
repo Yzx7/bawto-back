@@ -1,0 +1,74 @@
+name: Desplegar
+
+# Cada push a main compila, verifica y despliega. El script del servidor
+# restaura el binario anterior si el nuevo no responde.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# El servicio es uno solo: dos despliegues a la vez se pisarían.
+concurrency:
+  group: desplegar-backend
+  cancel-in-progress: false
+
+jobs:
+  desplegar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - run: go build ./...
+      - run: go vet ./...
+
+      # Sin DATABASE_URL las pruebas de integración se saltan solas. Es una
+      # limitación conocida de este pipeline, no un descuido: la base vive
+      # detrás de la VPN y el runner no la alcanza. Las de integración siguen
+      # siendo cosa de correrlas en local antes de subir.
+      - run: go test ./...
+
+      - name: Compilar para el servidor
+        run: |
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+            go build -trimpath -ldflags '-s -w' -o /tmp/bawto-backend .
+          sha256sum /tmp/bawto-backend
+
+      - name: Preparar el acceso al servidor
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      # Se sube como .new porque Linux no deja sobrescribir un binario en
+      # ejecución; el script para el servicio antes de moverlo.
+      - name: Subir el binario
+        run: |
+          scp -P 22 /tmp/bawto-backend \
+            root@${{ secrets.DEPLOY_HOST }}:/opt/bawto/bawto-backend.new
+
+      - name: Desplegar
+        run: |
+          ssh -p 22 root@${{ secrets.DEPLOY_HOST }} \
+            "/opt/bawto/deploy-backend.sh '$(echo ${{ github.sha }} | cut -c1-7)'"
+
+      # Un health check en 200 dice que algo responde, no qué código corre. El
+      # SHA del proceso vivo es el único que no se puede fingir.
+      - name: Comprobar que corre el binario nuevo
+        run: |
+          local_sha="$(sha256sum /tmp/bawto-backend | cut -d' ' -f1)"
+          remoto="$(ssh -p 22 root@${{ secrets.DEPLOY_HOST }} \
+            'sha256sum /proc/$(systemctl show -p MainPID --value bawto-backend)/exe | cut -d" " -f1')"
+          echo "local:  $local_sha"
+          echo "remoto: $remoto"
+          if [[ "$local_sha" != "$remoto" ]]; then
+            echo "el proceso no corre el binario que acabamos de compilar" >&2
+            exit 1
+          fi
