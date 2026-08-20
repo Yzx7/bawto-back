@@ -5,6 +5,10 @@ name: Desplegar
 on:
   push:
     branches: [main]
+    # Un cambio de documentación no altera el binario: reconstruir y reiniciar
+    # el servicio por editar un .md es puro tiempo y un respaldo de más.
+    paths-ignore:
+      - "**.md"
   workflow_dispatch:
 
 # El servicio es uno solo: dos despliegues a la vez se pisarían.

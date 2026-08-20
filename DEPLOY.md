@@ -5,7 +5,33 @@ frontend y topología verificados el 2026-08-07 desplegando de verdad: el
 procedimiento del frontend estaba sin documentar y hubo que reconstruirlo
 leyendo los scripts del server.
 
-**Último despliegue: 2026-08-19 (9).** Backend `63c996a`, SHA256
+**Último despliegue: 2026-08-20, el primero automático.** Backend `6d06ea2`
+(SHA256 `1c50040e…`, `/proc/235906/exe`, respaldo en
+`/opt/bawto/bawto-backend.pre-6d06ea2`) y frontend `b93e5b7` en
+`bawto-frontend:20260820-2`. Los dos por GitHub Actions, sin `scp` a mano.
+
+**El primer intento del frontend falló y revirtió solo**, que era justo lo que
+había que comprobar: `FRONTEND_ROLLED_BACK image=bawto-frontend:20260819-8` y el
+panel siguió sirviendo sin un minuto de caída. La causa fue **Next 16.3.1**: el
+contenedor construye bien pero muere al arrancar con `MODULE_NOT_FOUND` buscando
+`@swc/helpers/esm/_interop_require_default.js`. El paquete sí trae ese archivo,
+pero el file tracing del `output: standalone` copia solo su carpeta `cjs/`, y
+16.3.1 lo pide donde 16.2.10 no lo hacía —comprobado abriendo las dos imágenes:
+ninguna tiene `esm/`, y solo la de 16.2.10 arranca—. Se volvió a 16.2.10, que es
+la versión que ya atendía producción; la actualización había entrado de rebote al
+regenerarse el lockfile. **Subir a 16.3.1 exige resolver antes ese tracing**,
+probablemente con `outputFileTracingIncludes`.
+
+Dos cosas que este episodio dejó claras y conviene no olvidar:
+
+- **Que la imagen se construya no dice que arranque.** El `docker build` pasó las
+  tres veces; lo que fallaba era `node server.js`. La prueba útil es levantar el
+  contenedor en un puerto libre (`-e PORT=3011`) y mirar sus logs.
+- **`next build` en local no reproduce el contenedor**, porque local no usa el
+  `standalone` ni su `node_modules` recortado. Es la misma advertencia que ya
+  estaba más abajo en este documento, ahora con un caso concreto.
+
+**Despliegue anterior: 2026-08-19 (9).** Backend `63c996a`, SHA256
 `4dd0ded91f4757d6257eeeba82abe0d34bbaf5458566514fd67182559fbb08d2`, verificado
 en `/proc/231003/exe`; el anterior quedó en `/opt/bawto/bawto-backend.pre-42b5079`.
 Frontend `90812a0` en `bawto-frontend:20260819-8`.
