@@ -5,7 +5,32 @@ frontend y topología verificados el 2026-08-07 desplegando de verdad: el
 procedimiento del frontend estaba sin documentar y hubo que reconstruirlo
 leyendo los scripts del server.
 
-**Último despliegue: 2026-08-19 (6).** Backend `e19a679`, SHA256
+**Último despliegue: 2026-08-19 (7).** Backend `a1c45e2`, SHA256
+`6f28c03322fe5453204e435a1e724747e04f8832be7490160c65590eda53a324`, verificado
+en `/proc/228888/exe`; el anterior quedó en `/opt/bawto/bawto-backend.pre-e19a679`.
+Frontend `bbff7d3` en `bawto-frontend:20260819-7`.
+
+Tras leer la documentación de Meta, tres correcciones:
+
+- **El `code` vive 30 segundos.** El PIN se validaba *antes* de canjearlo, y la
+  pantalla de confirmación del panel lo gastaba esperando un toque: quedaron dos
+  intentos muertos con subcode 36007 (`This authorization code has expired`).
+  Ahora se canjea nada más aterrizar y el PIN se exige justo antes de
+  `RegisterPhone`. La pantalla de confirmación se eliminó entera.
+- **Coexistence hay que sincronizarlo.** `POST /{phone_number_id}/smb_app_data`
+  con `sync_type` `smb_app_state_sync` y `history`. Meta da **24 h** desde el
+  onboarding y **solo admite una petición por tipo**; pasado el plazo el cliente
+  debe desconectarse y repetir el flujo. Va después de guardar el canal: si esto
+  falla se reintenta, perder el token no. Se registra `is_on_biz_app` y
+  `platform_type`, que es como Meta dice que se comprueba el número.
+- **«Sin números» ≠ «todos ocupados».** Daban el mismo mensaje y se arreglan
+  distinto: uno es esperar y reintentar —en Coexistence el número tarda en
+  aparecer—, el otro es liberarlo en el otro bot.
+
+Los campos `history`, `smb_app_state_sync` y `smb_message_echoes` ya están
+suscritos en la app de Meta.
+
+**Despliegue anterior: 2026-08-19 (6).** Backend `e19a679`, SHA256
 `b06dedb6f98babcd44250fa1f06a183e5738fafb99543939b58530b47baf7c65`, verificado
 en `/proc/227462/exe`; el anterior quedó en `/opt/bawto/bawto-backend.pre-8bacc1c`.
 Frontend `da377d8` en `bawto-frontend:20260819-6`.
