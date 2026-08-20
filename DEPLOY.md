@@ -5,7 +5,22 @@ frontend y topología verificados el 2026-08-07 desplegando de verdad: el
 procedimiento del frontend estaba sin documentar y hubo que reconstruirlo
 leyendo los scripts del server.
 
-**Último despliegue: 2026-08-19 (7).** Backend `a1c45e2`, SHA256
+**Último despliegue: 2026-08-19 (8).** Solo backend: `42b5079`, SHA256
+`78703c5ad4a48c645b6437e5590f5f38d7e2a45b371e59444a71f93d40a582dd`, verificado
+en `/proc/230081/exe`; el anterior quedó en `/opt/bawto/bawto-backend.pre-a1c45e2`.
+El frontend no cambia: sigue en `bawto-frontend:20260819-7`.
+
+**La WABA se desempata con el webhook.** El Embedded Signup entrega el `waba_id`
+«a la ventana que abrió el flujo», y desde un móvil esa ventana no existe; el
+webhook sí lo trae y llega al servidor. Se lee de
+`payload->'waba_info'->>'waba_id'` de los `PARTNER_ADDED` /
+`PARTNER_APP_INSTALLED` recientes — **no** de la columna `waba_id`, que en esos
+dos eventos identifica al portfolio emisor y no a la cuenta conectada. Se usa
+solo para elegir dentro de lo que el token ya autoriza, en una ventana de 30 min;
+nunca para añadir una cuenta ajena al token, y si el cruce queda vacío se
+pregunta como antes (`TestPreferRecentlyLinked`).
+
+**Despliegue anterior: 2026-08-19 (7).** Backend `a1c45e2`, SHA256
 `6f28c03322fe5453204e435a1e724747e04f8832be7490160c65590eda53a324`, verificado
 en `/proc/228888/exe`; el anterior quedó en `/opt/bawto/bawto-backend.pre-e19a679`.
 Frontend `bbff7d3` en `bawto-frontend:20260819-7`.
