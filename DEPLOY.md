@@ -5,7 +5,21 @@ frontend y topología verificados el 2026-08-07 desplegando de verdad: el
 procedimiento del frontend estaba sin documentar y hubo que reconstruirlo
 leyendo los scripts del server.
 
-**Último despliegue: 2026-08-19 (4).** Solo frontend: `e153bc0` en la imagen
+**Último despliegue: 2026-08-19 (5).** Backend `8bacc1c`, SHA256
+`ac1c501ea1b0569e07ca249b885e7d7bdada79f4443fc2219de3b91f56242eca`, verificado
+en los tres sitios —binario local, disco del servidor y `/proc/226017/exe`—; el
+anterior quedó en `/opt/bawto/bawto-backend.pre-520a982`. Frontend `ce93172` en
+`bawto-frontend:20260819-5`.
+
+El intercambio del `code` ahora manda el **`redirect_uri`**. Meta respondía 400
+con subcode 36008 —«make sure your redirect_uri is identical to the one you used
+in the OAuth dialog request»—: con el popup del SDK el parámetro no hacía falta,
+pero un flujo por redirección obliga a repetirlo al canjear. El panel lo envía,
+porque vive en varios dominios y no hay lista fija que comparar; el backend solo
+acepta `https` con la ruta de vuelta (`embeddedRedirectPath`, espejo de
+`WA_REDIRECT_PATH` en el frontend: si una cambia, la otra también).
+
+**Despliegue anterior: 2026-08-19 (4).** Solo frontend: `e153bc0` en la imagen
 `bawto-frontend:20260819-4`. El backend no cambia: sigue en `520a982`.
 
 El contexto de la conexión pasa de `sessionStorage` a `localStorage`. Con la
