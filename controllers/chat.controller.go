@@ -49,7 +49,11 @@ func (con *Controller) ListBotChats(c *fiber.Ctx) error {
 		}
 	}
 	limit, _ := strconv.Atoi(c.Query("limit"))
-	chats, err := models.ListChats(c.Context(), con.Env.Postgres, bot.ID, strings.TrimSpace(c.Query("q")), before, limit)
+	mode := strings.TrimSpace(c.Query("mode"))
+	if mode != "" && mode != "bot" && mode != "manual" {
+		return con.fail(c, fiber.StatusBadRequest, `mode debe ser "bot" o "manual"`)
+	}
+	chats, err := models.ListChats(c.Context(), con.Env.Postgres, bot.ID, strings.TrimSpace(c.Query("q")), mode, before, limit)
 	if err != nil {
 		con.Env.Logger.Error("list chats", "bot", bot.ID, "err", err.Error())
 		return con.fail(c, fiber.StatusInternalServerError, "no se pudieron listar los chats")
@@ -157,7 +161,7 @@ func (con *Controller) ResetChatFlowState(c *fiber.Ctx) error {
 	if fresh == nil {
 		fresh = meta
 	}
-	con.publishChat(c.Context(), "mode", fresh.BotID, fresh.ID, chatView(fresh))
+	con.publishChat(c.Context(), "mode", fresh.BotID, fresh.ID, chatModeView(fresh))
 	return con.ok(c, "conversación reiniciada", chatView(fresh))
 }
 
@@ -190,7 +194,7 @@ func (con *Controller) SetChatMode(c *fiber.Ctx) error {
 	if fresh == nil {
 		fresh = meta
 	}
-	con.publishChat(c.Context(), "mode", fresh.BotID, fresh.ID, chatView(fresh))
+	con.publishChat(c.Context(), "mode", fresh.BotID, fresh.ID, chatModeView(fresh))
 	return con.ok(c, "modo actualizado", chatView(fresh))
 }
 
@@ -285,6 +289,29 @@ func (con *Controller) StreamBotEvents(c *fiber.Ctx) error {
 // chatView expone el chat al panel añadiendo el estado de la ventana de 24 h.
 func chatView(m *models.ChatMeta) fiber.Map {
 	return fiber.Map{
+		"id":               m.ID,
+		"botId":            m.BotID,
+		"contactId":        m.ContactID,
+		"contact":          m.Contact,
+		"contactPhone":     m.ContactPhone,
+		"contactUserId":    m.ContactUserID,
+		"username":         m.Username,
+		"contactName":      m.ContactName,
+		"contactData":      m.ContactData,
+		"contactStatus":    m.ContactStatus,
+		"contactCreatedAt": m.ContactCreatedAt,
+		"contactUpdatedAt": m.ContactUpdatedAt,
+		"mode":             m.Mode,
+		"handoffUntil":     m.HandoffUntil,
+		"lastInboundAt":    m.LastInboundAt,
+		"windowOpen":       m.WindowOpen(),
+	}
+}
+
+// chatModeView mantiene pequeño el NOTIFY. Los campos CRM pueden superar el
+// límite de PostgreSQL y convertir el evento de modo en un payload vacío.
+func chatModeView(m *models.ChatMeta) fiber.Map {
+	return fiber.Map{
 		"id":            m.ID,
 		"botId":         m.BotID,
 		"contact":       m.Contact,
@@ -323,7 +350,7 @@ func (con *Controller) publishMode(ctx context.Context, botID, chatID string) {
 	if err != nil || meta == nil {
 		return
 	}
-	con.publishChat(ctx, "mode", botID, chatID, chatView(meta))
+	con.publishChat(ctx, "mode", botID, chatID, chatModeView(meta))
 }
 
 // publishInbound anuncia un mensaje entrante recién guardado por el webhook.

@@ -51,19 +51,25 @@ type Message struct {
 
 // ChatMeta reúne lo necesario para autorizar y para decidir si se puede escribir.
 type ChatMeta struct {
-	ID    string `db:"id" json:"id"`
-	BotID string `db:"bot_id" json:"botId"`
-	OrgID string `db:"org_id" json:"orgId"`
+	ID        string `db:"id" json:"id"`
+	BotID     string `db:"bot_id" json:"botId"`
+	OrgID     string `db:"org_id" json:"orgId"`
+	ContactID string `db:"contact_id" json:"contactId"`
 	// Contact es la identidad mostrable; ContactPhone y ContactUserID son las
 	// dos formas reales de dirigirse a esa persona. Enviar necesita las dos
 	// separadas: un BSUID puesto en `to` no da error, manda a otro sitio.
-	Contact       string     `db:"contact" json:"contact"`
-	ContactPhone  string     `db:"contact_phone" json:"contactPhone"`
-	ContactUserID string     `db:"contact_user_id" json:"contactUserId"`
-	ContactName   *string    `db:"contact_name" json:"contactName,omitempty"`
-	Mode          string     `db:"mode" json:"mode"`
-	HandoffUntil  *time.Time `db:"handoff_until" json:"handoffUntil,omitempty"`
-	LastInboundAt *time.Time `db:"last_inbound_at" json:"lastInboundAt,omitempty"`
+	Contact          string          `db:"contact" json:"contact"`
+	ContactPhone     string          `db:"contact_phone" json:"contactPhone"`
+	ContactUserID    string          `db:"contact_user_id" json:"contactUserId"`
+	Username         string          `db:"username" json:"username"`
+	ContactName      *string         `db:"contact_name" json:"contactName,omitempty"`
+	ContactData      json.RawMessage `db:"contact_data" json:"contactData"`
+	ContactStatus    string          `db:"contact_status" json:"contactStatus"`
+	ContactCreatedAt time.Time       `db:"contact_created_at" json:"contactCreatedAt"`
+	ContactUpdatedAt time.Time       `db:"contact_updated_at" json:"contactUpdatedAt"`
+	Mode             string          `db:"mode" json:"mode"`
+	HandoffUntil     *time.Time      `db:"handoff_until" json:"handoffUntil,omitempty"`
+	LastInboundAt    *time.Time      `db:"last_inbound_at" json:"lastInboundAt,omitempty"`
 }
 
 // WindowOpen dice si aún se puede enviar texto libre (ventana de 24 h de WhatsApp).
@@ -74,7 +80,7 @@ func (m *ChatMeta) WindowOpen() bool {
 // ListChats devuelve las conversaciones de un bot, más recientes primero.
 // `before` pagina por `updated_at` (cero = primera página) y `q` filtra por
 // número o nombre del contacto.
-func ListChats(ctx context.Context, pool *pgxpool.Pool, botID, q string, before *time.Time, limit int) ([]ChatSummary, error) {
+func ListChats(ctx context.Context, pool *pgxpool.Pool, botID, q, mode string, before *time.Time, limit int) ([]ChatSummary, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 30
 	}
@@ -98,9 +104,10 @@ func ListChats(ctx context.Context, pool *pgxpool.Pool, botID, q string, before 
 		        OR COALESCE(ct.channel_user_id,'') ILIKE '%'||$2||'%'
 		        OR COALESCE(ct.username,'') ILIKE '%'||$2||'%'
 		        OR COALESCE(ct.name,'') ILIKE '%'||$2||'%')
-		   AND ($3::timestamptz IS NULL OR c.updated_at < $3)
+		   AND ($3 = '' OR c.mode = $3)
+		   AND ($4::timestamptz IS NULL OR c.updated_at < $4)
 		 ORDER BY c.updated_at DESC
-		 LIMIT $4`, botID, q, before, limit)
+		 LIMIT $5`, botID, q, mode, before, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -139,10 +146,14 @@ func ListMessages(ctx context.Context, pool *pgxpool.Pool, chatID string, before
 func GetChatMeta(ctx context.Context, pool *pgxpool.Pool, chatID string) (*ChatMeta, error) {
 	rows, err := pool.Query(ctx, `
 		SELECT c.id::text AS id, c.bot_id::text AS bot_id, b.org_id::text AS org_id,
+		       ct.id::text AS contact_id,
 		       COALESCE(NULLIF(ct.phone_normalized,''), ct.channel_user_id, '') AS contact,
 		       COALESCE(ct.phone_normalized,'') AS contact_phone,
 		       COALESCE(ct.channel_user_id,'') AS contact_user_id,
-		       ct.name AS contact_name, c.mode, c.handoff_until,
+		       COALESCE(ct.username,'') AS username, ct.name AS contact_name,
+		       COALESCE(ct.data,'{}'::jsonb) AS contact_data, ct.status AS contact_status,
+		       ct.created_at AS contact_created_at, ct.updated_at AS contact_updated_at,
+		       c.mode, c.handoff_until,
 		       (SELECT MAX(created_at) FROM messages i WHERE i.chat_id = c.id AND NOT i.from_me) AS last_inbound_at
 		  FROM chats c
 		  JOIN bots b ON b.id = c.bot_id
